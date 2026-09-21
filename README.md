@@ -25,7 +25,7 @@ Windows Authentication sử dụng tài khoản Windows đang chạy terminal. D
 
 Mật khẩu khởi tạo lấy từ `SEED_PASSWORD`. Seed chạy lại giữ nguyên mật khẩu, vai trò và trạng thái tài khoản đã có. Không commit `.env`. Các tài khoản mẫu chỉ phục vụ phát triển local, thay bằng tài khoản riêng trước khi triển khai.
 
-Prisma khai báo ba bảng: `roles`, `users`, `auth_sessions`. SQL Server còn có bảng `_prisma_migrations` do Prisma quản lý. Chưa tạo bảng nghiệp vụ nhập hàng vì giai đoạn này thực hiện đăng nhập và đăng ký.
+Prisma có 9 bảng: `roles`, `users`, `auth_sessions`, `inventory_items`, `stock_movements`, `supplier_profiles`, `supplier_products`, `wholesale_orders`, `wholesale_order_items`. SQL Server còn có bảng `_prisma_migrations` do Prisma quản lý. Kho riêng của tiệm và danh mục bán sỉ của vựa là hai nguồn dữ liệu khác nhau.
 
 Email và số điện thoại có unique filtered index trong migration `202609210003_unique_registration_contacts`. Các giá trị khác NULL không được trùng; tài khoản seed/admin vẫn được để trống thông tin liên hệ. Prisma 6 chưa biểu diễn bộ lọc này trong schema, nên cần giữ file migration SQL khi push/pull và dùng `npm run db:migrate`, không thay bằng `db push`. Tham khảo [SQL Server trong Prisma 6](https://docs.prisma.io/docs/orm/v6/overview/databases/sql-server).
 
@@ -48,3 +48,28 @@ Role và trạng thái hoạt động luôn được đọc từ database. Logou
 `npm test` chạy kiểm thử API với SQL Server đã migrate và seed. Test tạo tài khoản có tiền tố ngẫu nhiên, chỉ xóa đúng các tài khoản tạm của lượt chạy đó. Bao gồm đăng ký → lưu SQL → đăng nhập, validation, hai yêu cầu trùng gửi đồng thời, ràng buộc SQL, giới hạn đăng ký, ba role, cookie JWT, logout, khóa tài khoản, CSRF và bảo vệ API users.
 
 Chỉ chạy migration đã review. Không cần `migrate reset` hay xóa database.
+
+## Nhận code kho tạp hóa + chủ vựa
+
+Pull cả FE và BE. Dừng BE trước khi generate trên Windows để tránh khóa DLL Prisma. Giữ `.env` riêng của máy:
+
+```powershell
+npm ci
+npm run db:migrate
+npm run db:generate
+npm run dev
+```
+
+Có 7 migration trong repo. Giữ nguyên tên đầy đủ, kể cả hai migration có chung tiền tố 003 hoặc 004; chúng có tên khác nhau. Đã khôi phục migration `202609210004_supplier_core_flow` từ stash đúng nội dung gốc, không đổi checksum.
+
+Đoạn SQL kho được chia sẻ riêng tương ứng ba migration `202609210003_inventory`, `202609210004_inventory_expiry`, `202609210005_stock_movements`. Máy chưa chạy SQL thủ công chỉ cần `npm run db:migrate`. `migrate resolve --applied` chỉ ghi lịch sử; dùng nó khi đã đối chiếu bảng/cột/index/constraint và SQL của migration thực sự chạy đủ trên database đó. Không dùng để bỏ qua migration chưa thực thi. Database máy hiện tại đã chạy đủ 7 migration bằng Prisma; không cần dán lại SQL hay resolve.
+
+## Chủ vựa đăng hàng → tạp hóa xem nguồn sỉ
+
+- `GET /api/supplier/dashboard`, `GET|PUT /api/supplier/profile`: gian hàng, kho, bán kính và tổng quan. Role SUPPLIER.
+- `GET|POST /api/supplier/products`, `PUT|DELETE /api/supplier/products/:id`: danh mục riêng. POST/PUT nhận `name`, `packaging`, `wholesalePrice`, `stockQty`, `moq`, `isActive`. PUT bắt buộc `expectedUpdatedAt` lấy từ lần đọc sản phẩm để chặn ghi đè tồn kho mới. DELETE chỉ ẩn; PUT `isActive: true` đăng lại.
+- `GET /api/supplier/orders`, `PATCH /api/supplier/orders/:id/status`: chờ duyệt → duyệt → chuẩn bị → vận chuyển → đã giao; từ chối đơn chờ duyệt cần lý do tối đa 255 ký tự. Duyệt và trừ kho trong cùng transaction, chặn duyệt lặp.
+- `GET /api/catalog/products?q=...&supplierId=...&page=1`: role STORE_OWNER, 24 sản phẩm/trang, trả `hasMore`. Tìm theo tên hàng hoặc tên vựa, lọc một vựa. Chỉ hàng `isActive` của tài khoản chủ vựa đang hoạt động được hiển thị. Hết tồn vẫn hiển thị rõ hết hàng.
+- `GET /api/catalog/suppliers`: danh sách vựa có hàng đang hiển thị. Chỉ trả thông tin gian hàng, không công bố email, tài khoản đăng nhập hay mật khẩu.
+
+Đăng bán lưu SQL thật. Đăng bán không tự cộng hàng vào kho tiệm; trang Tìm nguồn sỉ hiện hỗ trợ xem/tìm/lọc, chưa có đặt hàng hoặc tự nhập kho. Test `catalog.test.js` kiểm tra việc công bố, ẩn/đăng lại, sửa giá, cô lập vựa, CSRF, khóa tài khoản, phân trang và duyệt đồng thời. Bộ test chạy tuần tự giữa các file; kiểm thử đồng thời vẫn thực hiện trong từng bài test.

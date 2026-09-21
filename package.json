@@ -9,7 +9,7 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
     "db:seed": "node prisma/seed.js",
-    "test": "node --test"
+    "test": "node --test --test-concurrency=1"
   },
   "keywords": [],
   "author": "",
