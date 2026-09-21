@@ -1,0 +1,47 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlserver"
+  url      = env("DATABASE_URL")
+}
+
+model Role {
+  id    Int    @id @default(autoincrement())
+  code  String @unique @db.VarChar(30)
+  name  String @db.NVarChar(100)
+  users User[]
+  @@map("roles")
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  username     String   @unique @db.VarChar(50)
+  name         String   @db.NVarChar(100)
+  email        String?  @db.VarChar(255)
+  phone        String?  @db.VarChar(20)
+  dateOfBirth  DateTime? @db.Date
+  passwordHash String   @db.VarChar(255)
+  isActive     Boolean  @default(true)
+  roleId       Int
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  role         Role     @relation(fields: [roleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sessions     AuthSession[]
+  @@index([roleId])
+  @@index([email])
+  @@index([phone])
+  @@map("users")
+}
+
+model AuthSession {
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  userId    Int
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("auth_sessions")
+}

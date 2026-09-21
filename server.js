@@ -1,31 +1,25 @@
-const express = require('express');
-const cors = require('cors');
-const dotenv = require('dotenv');
-const connectDB = require('./config/db');
+require('dotenv').config();
+const prisma = require('./config/db');
+const { readConfig } = require('./config/env');
+const { createApp } = require('./app');
 
-// Load env vars
-dotenv.config();
+async function start() {
+  const config = readConfig();
+  await prisma.$connect();
+  const server = createApp(prisma, config).listen(config.port, () => {
+    console.log(`SupplyMind AI API: http://localhost:${config.port}`);
+  });
+  const shutdown = () =>
+    server.close(async () => {
+      await prisma.$disconnect();
+      process.exit(0);
+    });
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}
 
-// Connect to database
-connectDB();
-
-const app = express();
-
-// Middleware
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
-
-// Health Check Route
-app.get('/', (req, res) => {
-  res.send('API is running...');
-});
-
-// Routes
-app.use('/api/users', require('./routes/userRoutes'));
-
-const PORT = process.env.PORT || 5000;
-
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+start().catch(async (error) => {
+  console.error('Không khởi động được API:', error.message);
+  await prisma.$disconnect();
+  process.exit(1);
 });

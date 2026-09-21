@@ -1,7 +1,13 @@
 const express = require('express');
-const router = express.Router();
-const { getUsers, createUser } = require('../controllers/userController');
+const { createUserController } = require('../controllers/userController');
+const { requireRole } = require('../middlewares/authMiddleware');
+const { ROLES } = require('../config/roles');
 
-router.route('/').get(getUsers).post(createUser);
-
-module.exports = router;
+function createUserRoutes(prisma, requireAuth) {
+  const router = express.Router();
+  const controller = createUserController(prisma);
+  router.use(requireAuth, requireRole(ROLES.ADMIN));
+  router.route('/').get(controller.getUsers).post(controller.createUser);
+  return router;
+}
+module.exports = { createUserRoutes };
