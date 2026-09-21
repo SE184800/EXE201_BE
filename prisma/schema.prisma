@@ -19,6 +19,8 @@ model User {
   id           Int      @id @default(autoincrement())
   username     String   @unique @db.VarChar(50)
   name         String   @db.NVarChar(100)
+  // Filtered unique indexes for non-null email/phone are managed in migration
+  // 202609210003_unique_registration_contacts (Prisma 6 cannot express the filter).
   email        String?  @db.VarChar(255)
   phone        String?  @db.VarChar(20)
   dateOfBirth  DateTime? @db.Date
@@ -30,8 +32,6 @@ model User {
   role         Role     @relation(fields: [roleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sessions     AuthSession[]
   @@index([roleId])
-  @@index([email])
-  @@index([phone])
   @@map("users")
 }
 

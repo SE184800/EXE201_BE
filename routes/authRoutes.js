@@ -19,7 +19,16 @@ function createAuthRoutes(authService, requireAuth, config) {
     },
   });
   router.post('/login', loginLimiter, controller.login);
-  router.post('/register', rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: 'draft-8', legacyHeaders: false }), register);
+  router.post('/register', rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 5,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: {
+      success: false,
+      message: 'Bạn đã gửi đăng ký quá nhiều lần. Vui lòng thử lại sau 15 phút.',
+    },
+  }), register);
   router.get('/me', requireAuth, controller.me);
   router.post('/logout', controller.logout);
   return router;

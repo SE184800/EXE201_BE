@@ -1,4 +1,4 @@
-# SG Restock Backend
+# SupplyMind AI Backend
 
 Node.js, Express.js, Prisma ORM, Microsoft SQL Server và JWT Authentication.
 Prisma 6.19.3 được cố định để dùng Windows Integrated Authentication trực tiếp trên máy Windows.
@@ -25,12 +25,14 @@ Windows Authentication sử dụng tài khoản Windows đang chạy terminal. D
 
 Mật khẩu khởi tạo lấy từ `SEED_PASSWORD`. Seed chạy lại giữ nguyên mật khẩu, vai trò và trạng thái tài khoản đã có. Không commit `.env`. Các tài khoản mẫu chỉ phục vụ phát triển local, thay bằng tài khoản riêng trước khi triển khai.
 
-Prisma khai báo ba bảng: `roles`, `users`, `auth_sessions`. SQL Server còn có bảng `_prisma_migrations` do Prisma quản lý. Chưa tạo bảng nghiệp vụ nhập hàng vì giai đoạn này chỉ thực hiện đăng nhập.
+Prisma khai báo ba bảng: `roles`, `users`, `auth_sessions`. SQL Server còn có bảng `_prisma_migrations` do Prisma quản lý. Chưa tạo bảng nghiệp vụ nhập hàng vì giai đoạn này thực hiện đăng nhập và đăng ký.
+
+Email và số điện thoại có unique filtered index trong migration `202609210003_unique_registration_contacts`. Các giá trị khác NULL không được trùng; tài khoản seed/admin vẫn được để trống thông tin liên hệ. Prisma 6 chưa biểu diễn bộ lọc này trong schema, nên cần giữ file migration SQL khi push/pull và dùng `npm run db:migrate`, không thay bằng `db push`. Tham khảo [SQL Server trong Prisma 6](https://docs.prisma.io/docs/orm/v6/overview/databases/sql-server).
 
 ## API
 
 - `POST /api/auth/login`: `{ "username": "...", "password": "..." }`.
-- `POST /api/auth/register`: tạo tài khoản `STORE_OWNER` hoặc `SUPPLIER` với họ tên, username, email, số điện thoại, ngày sinh và mật khẩu.
+- `POST /api/auth/register`: `{ name, username, email, phone, role, dateOfBirth, password, confirmPassword }`. Role chỉ nhận `STORE_OWNER` hoặc `SUPPLIER`; ngày sinh dạng `YYYY-MM-DD`. Trả 201 khi thành công, 400 khi dữ liệu sai, 409 khi trùng tài khoản; lỗi trường nằm trong object `errors`. Giới hạn 5 yêu cầu/15 phút/IP trả 429 bằng JSON tiếng Việt kèm `Retry-After`.
 - `GET /api/auth/me`: thông tin phiên đăng nhập.
 - `POST /api/auth/logout`: thu hồi phiên hiện tại.
 - `GET /api/workspaces/store|supplier|admin`: chỉ đúng role được vào.
@@ -43,6 +45,6 @@ Role và trạng thái hoạt động luôn được đọc từ database. Logou
 
 ## Kiểm tra
 
-`npm test` chạy kiểm thử API với SQL Server đã migrate và seed. Test tạo tài khoản có tiền tố ngẫu nhiên, chỉ xóa đúng các tài khoản tạm của lượt chạy đó. Kiểm tra đủ ba role, cookie JWT, logout, khóa tài khoản, giả mạo token, CSRF, giới hạn đăng nhập và bảo vệ API users.
+`npm test` chạy kiểm thử API với SQL Server đã migrate và seed. Test tạo tài khoản có tiền tố ngẫu nhiên, chỉ xóa đúng các tài khoản tạm của lượt chạy đó. Bao gồm đăng ký → lưu SQL → đăng nhập, validation, hai yêu cầu trùng gửi đồng thời, ràng buộc SQL, giới hạn đăng ký, ba role, cookie JWT, logout, khóa tài khoản, CSRF và bảo vệ API users.
 
 Chỉ chạy migration đã review. Không cần `migrate reset` hay xóa database.

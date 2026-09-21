@@ -30,23 +30,48 @@ function cookieOptions(config) {
 }
 
 function createAuthService(prisma, config) {
+  async function findRegistrationConflict(input) {
+    // Use SQL's collation, including when another registration wins the race.
+    const duplicates = await Promise.all(['username', 'email', 'phone'].map(async (field) => {
+      const user = await prisma.user.findFirst({ where: { [field]: input[field] }, select: { id: true } });
+      return user ? field : null;
+    }));
+    const messages = {
+      username: 'Username đã được sử dụng.',
+      email: 'Email đã được sử dụng.',
+      phone: 'Số điện thoại đã được sử dụng.',
+    };
+    const errors = Object.fromEntries(duplicates.filter(Boolean).map((field) => [field, messages[field]]));
+    if (!Object.keys(errors).length) return null;
+    return Object.assign(new Error(Object.values(errors)[0]), { code: 'DUPLICATE_ACCOUNT_FIELD', errors });
+  }
+
   async function register(input) {
-    const duplicate = await prisma.user.findFirst({
-      where: { OR: [{ username: input.username }, { email: input.email }, { phone: input.phone }] },
-    });
-    if (duplicate) {
-      const error = new Error(duplicate.username === input.username ? 'Username đã được sử dụng.' : duplicate.email === input.email ? 'Email đã được sử dụng.' : 'Số điện thoại đã được sử dụng.');
-      error.code = 'DUPLICATE_ACCOUNT_FIELD';
-      throw error;
-    }
+    const duplicate = await findRegistrationConflict(input);
+    if (duplicate) throw duplicate;
     const role = await prisma.role.findUnique({ where: { code: input.role } });
     if (!role) throw new Error('Vai trò không tồn tại.');
     const passwordHash = await bcrypt.hash(input.password, 12);
-    const user = await prisma.user.create({
-      data: { username: input.username, name: input.name, email: input.email, phone: input.phone, dateOfBirth: input.dateOfBirth, passwordHash, roleId: role.id },
-      include: { role: true },
-    });
-    return publicUser(user);
+    try {
+      const user = await prisma.user.create({
+        data: {
+          username: input.username, name: input.name, email: input.email,
+          phone: input.phone, dateOfBirth: input.dateOfBirth, passwordHash, roleId: role.id,
+        },
+        include: { role: true },
+      });
+      return publicUser(user);
+    } catch (error) {
+      // SQL remains the final guard if two requests pass the pre-check together.
+      if (error.code === 'P2002') {
+        const conflict = await findRegistrationConflict(input);
+        if (conflict) throw conflict;
+        throw Object.assign(new Error('Thông tin tài khoản đã được sử dụng. Vui lòng kiểm tra lại.'), {
+          code: 'DUPLICATE_ACCOUNT_FIELD', errors: {},
+        });
+      }
+      throw error;
+    }
   }
   async function login(username, password) {
     const user = await prisma.user.findUnique({
