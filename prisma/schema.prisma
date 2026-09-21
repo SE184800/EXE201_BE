@@ -31,8 +31,41 @@ model User {
   updatedAt    DateTime @updatedAt
   role         Role     @relation(fields: [roleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sessions     AuthSession[]
+  inventory    InventoryItem[]
   @@index([roleId])
   @@map("users")
+}
+
+model InventoryItem {
+  id           Int      @id @default(autoincrement())
+  ownerId      Int
+  name         String   @db.NVarChar(100)
+  unit         String   @db.NVarChar(20)
+  quantity     Int      @default(0)
+  lowThreshold Int      @default(5)
+  expiryDate   DateTime? @db.Date
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  owner        User     @relation(fields: [ownerId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  movements    StockMovement[]
+  @@unique([ownerId, name])
+  @@map("inventory_items")
+}
+
+model StockMovement {
+  id             String   @id @default(uuid()) @db.VarChar(36)
+  itemId         Int
+  type           String   @db.VarChar(20)
+  quantityChange Int
+  quantityBefore Int
+  quantityAfter  Int
+  productName    String   @db.NVarChar(100)
+  unit           String   @db.NVarChar(20)
+  note           String   @db.NVarChar(250)
+  createdAt      DateTime @default(now())
+  item           InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  @@index([itemId, createdAt])
+  @@map("stock_movements")
 }
 
 model AuthSession {

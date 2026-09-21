@@ -201,6 +201,66 @@ test('API user yêu cầu quyền admin và không lộ mật khẩu', async () 
   assert.equal(created.body.user.passwordHash, undefined);
 });
 
+test('kho SQL lưu dữ liệu thật, chat đọc số mới và cô lập tài khoản', async () => {
+  const owner = await signIn(users[0]);
+  const supplier = await signIn(users[1]);
+  const admin = await signIn(users[2]);
+  const second = await prisma.user.create({ data: { username: `${prefix}_other_store`, name: 'Other store', passwordHash: await bcrypt.hash(password, 12), role: { connect: { code: 'STORE_OWNER' } } } });
+  createdIds.push(second.id);
+  const other = await signIn(second);
+  const item = { name: 'Mì Hảo Hảo', unit: 'gói', quantity: 15, ownerId: second.id, expiryDate: '2027-01-15' };
+  await request(app).get('/api/inventory').expect(401);
+  await request(app).get('/api/inventory').set('Cookie', supplier.cookie).expect(403);
+  await request(app).get('/api/inventory').set('Cookie', admin.cookie).expect(403);
+  await request(app).post('/api/inventory').set('Cookie', owner.cookie).send(item).expect(403);
+  const created = await request(app).post('/api/inventory').set(csrf).set('Cookie', owner.cookie).send(item).expect(201);
+  assert.equal(created.body.item.ownerId, users[0].id);
+  assert.equal(created.body.item.expiryDate.slice(0, 10), '2027-01-15');
+  const id = created.body.item.id;
+  await request(app).post('/api/inventory').set(csrf).set('Cookie', owner.cookie).send(item).expect(409);
+  const hidden = await request(app).get('/api/inventory').set('Cookie', other.cookie).expect(200);
+  assert.equal(hidden.body.items.length, 0);
+  await request(app).put(`/api/inventory/${id}`).set(csrf).set('Cookie', other.cookie).send({ ...item, quantity: 99 }).expect(404);
+  const hiddenChat = await request(app).post('/api/inventory/chat').set(csrf).set('Cookie', other.cookie).send({ message: 'Xem kho' }).expect(200);
+  assert.equal(hiddenChat.body.items.length, 0);
+  await request(app).put(`/api/inventory/${id}`).set(csrf).set('Cookie', owner.cookie).send({ ...item, quantity: -1 }).expect(400);
+  await request(app).put(`/api/inventory/${id}`).set(csrf).set('Cookie', owner.cookie).send({ ...item, quantity: 3 }).expect(200);
+  const reply = await request(app).post('/api/inventory/chat').set(csrf).set('Cookie', owner.cookie).send({ message: 'mi hao hao con bao nhieu' }).expect(200);
+  assert.equal(reply.body.items[0].quantity, 3);
+  assert.match(reply.body.answer, /3 gói/);
+  assert.match(reply.body.answer, /15\/01\/2027/);
+  await request(app).put(`/api/inventory/${id}`).set(csrf).set('Cookie', owner.cookie).send({ ...item, expiryDate: '2026-02-30' }).expect(400);
+  await request(app).put(`/api/inventory/${id}`).set(csrf).set('Cookie', owner.cookie).send({ ...item, expiryDate: null }).expect(200);
+  const cleared = await request(app).get('/api/inventory').set('Cookie', owner.cookie).expect(200);
+  assert.equal(cleared.body.items[0].expiryDate, null);
+  assert.equal(cleared.body.items[0].daysUntilExpiry, null);
+  const movementUrl = `/api/inventory/${id}/movements`;
+  const sell = { type: 'SALE', quantity: 5, note: 'Bán thử', requestId: randomUUID() };
+  await request(app).post(movementUrl).set(csrf).set('Cookie', other.cookie).send(sell).expect(404);
+  await request(app).post(movementUrl).set(csrf).set('Cookie', supplier.cookie).send(sell).expect(403);
+  await request(app).post(movementUrl).set('Cookie', owner.cookie).send(sell).expect(403);
+  const sale = await request(app).post(movementUrl).set(csrf).set('Cookie', owner.cookie).send(sell).expect(200);
+  assert.equal(sale.body.movement.quantityAfter, 10);
+  const replay = await request(app).post(movementUrl).set(csrf).set('Cookie', owner.cookie).send(sell).expect(200);
+  assert.equal(replay.body.movement.id, sale.body.movement.id);
+  await request(app).post(movementUrl).set(csrf).set('Cookie', owner.cookie).send({ ...sell, quantity: 2 }).expect(409);
+  for (const quantity of [0, -1, 1.5]) await request(app).post(movementUrl).set(csrf).set('Cookie', owner.cookie).send({ ...sell, quantity, requestId: randomUUID() }).expect(400);
+  await request(app).post(movementUrl).set(csrf).set('Cookie', owner.cookie).send({ ...sell, quantity: 11, requestId: randomUUID() }).expect(409);
+  const received = await request(app).post(movementUrl).set(csrf).set('Cookie', owner.cookie).send({ type: 'RECEIPT', quantity: 4, requestId: randomUUID() }).expect(200);
+  assert.equal(received.body.movement.quantityAfter, 14);
+  const simultaneous = await Promise.all([1, 2].map(() => request(app).post(movementUrl).set(csrf).set('Cookie', owner.cookie).send({ type: 'SALE', quantity: 10, requestId: randomUUID() })));
+  assert.deepEqual(simultaneous.map((response) => response.status).sort(), [200, 409]);
+  const stockNow = await request(app).get('/api/inventory').set('Cookie', owner.cookie).expect(200);
+  assert.equal(stockNow.body.items[0].quantity, 4);
+  await request(app).put(`/api/inventory/${id}`).set(csrf).set('Cookie', owner.cookie).send({ ...item, expectedUpdatedAt: created.body.item.updatedAt }).expect(409);
+  const history = await request(app).get('/api/inventory/history').set('Cookie', owner.cookie).expect(200);
+  assert.equal(history.body.movements.filter((row) => row.type === 'SALE').length, 2);
+  assert.ok(history.body.movements.some((row) => row.type === 'ADJUSTMENT'));
+  assert.ok(history.body.movements.some((row) => row.type === 'OPENING'));
+  const privateHistory = await request(app).get('/api/inventory/history').set('Cookie', other.cookie).expect(200);
+  assert.equal(privateHistory.body.movements.length, 0);
+});
+
 test('giới hạn số lần đăng nhập sai', async () => {
   const limitedApp = createApp(prisma, config);
   for (let i = 0; i < 15; i++) {

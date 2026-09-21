@@ -9,6 +9,7 @@ const {
 const { createAuthRoutes } = require('./routes/authRoutes');
 const { createUserRoutes } = require('./routes/userRoutes');
 const { ROLES } = require('./config/roles');
+const { createInventoryRoutes } = require('./routes/inventoryRoutes');
 
 function createApp(prisma, config) {
   const app = express();
@@ -45,6 +46,7 @@ function createApp(prisma, config) {
   );
   app.use('/api/auth', createAuthRoutes(authService, requireAuth, config));
   app.use('/api/users', createUserRoutes(prisma, requireAuth));
+  app.use('/api/inventory', createInventoryRoutes(prisma, requireAuth));
   for (const [path, role] of [
     ['store', ROLES.STORE_OWNER],
     ['supplier', ROLES.SUPPLIER],
