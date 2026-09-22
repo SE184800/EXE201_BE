@@ -41,7 +41,7 @@ Email và số điện thoại có unique filtered index trong migration `202609
 
 JWT được lưu trong HttpOnly cookie, thời hạn 8 giờ, không lưu trong localStorage. Mọi request ghi dữ liệu cần header `X-CSRF-Protection: sg-restock-web`; browser Origin phải khớp `FRONTEND_URL`. Cookie Secure được bật ở production. Production cần HTTPS và FE/API cùng site; cấu hình reverse proxy `/api` là cách đơn giản nhất.
 
-Role và trạng thái hoạt động luôn được đọc từ database. Logout xóa session nên JWT cũ không thể dùng lại. Public registration chỉ cho phép `STORE_OWNER` và `SUPPLIER`; tài khoản Admin do hệ thống cấp. Chưa triển khai đổi/quên mật khẩu hoặc Google OAuth.
+Role và trạng thái hoạt động luôn được đọc từ database. Logout xóa session nên JWT cũ không thể dùng lại. Public registration chỉ cho phép `STORE_OWNER` và `SUPPLIER`; tài khoản Admin do hệ thống cấp. Đã có đổi mật khẩu và khôi phục qua email (cần cấu hình SMTP khi triển khai); chưa có Google OAuth.
 
 ## Kiểm tra
 
@@ -62,7 +62,7 @@ npm run dev
 
 Có 11 migration trong repo. Giữ nguyên tên đầy đủ, kể cả hai migration có chung tiền tố 003 hoặc 004; chúng có tên khác nhau. Migration `202609220003_platform_admin` bổ sung dữ liệu quản trị nền tảng; dùng `npm run db:migrate` để áp dụng.
 
-Đoạn SQL kho được chia sẻ riêng tương ứng ba migration `202609210003_inventory`, `202609210004_inventory_expiry`, `202609210005_stock_movements`. Máy chưa chạy SQL thủ công chỉ cần `npm run db:migrate`. `migrate resolve --applied` chỉ ghi lịch sử; dùng nó khi đã đối chiếu bảng/cột/index/constraint và SQL của migration thực sự chạy đủ trên database đó. Không dùng để bỏ qua migration chưa thực thi. Database máy hiện tại đã chạy đủ 7 migration bằng Prisma; không cần dán lại SQL hay resolve.
+Đoạn SQL kho được chia sẻ riêng tương ứng ba migration `202609210003_inventory`, `202609210004_inventory_expiry`, `202609210005_stock_movements`. Máy chưa chạy SQL thủ công chỉ cần `npm run db:migrate`. `migrate resolve --applied` chỉ ghi lịch sử; dùng nó khi đã đối chiếu bảng/cột/index/constraint và SQL của migration thực sự chạy đủ trên database đó. Không dùng để bỏ qua migration chưa thực thi. Kiểm tra từng máy bằng `npx prisma migrate status`; nếu đã cập nhật đủ thì không cần dán lại SQL hay resolve.
 
 ## Chủ vựa đăng hàng → tạp hóa xem nguồn sỉ
 

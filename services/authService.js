@@ -25,7 +25,7 @@ function cookieOptions(config) {
   return {
     httpOnly: true,
     secure: config.production,
-    sameSite: 'lax',
+    sameSite: config.production ? 'none' : 'lax',
     path: '/',
   };
 }

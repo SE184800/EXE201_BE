@@ -4,3 +4,4 @@ node_modules
 !*.env.example
 .vercel
 .local-mail/
+.env*.local

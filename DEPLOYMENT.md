@@ -11,13 +11,13 @@ Code đã được chuẩn bị để chạy FE và BE chung một URL HTTPS. Ch
 - Đây là dịch vụ có hạn mức: Azure có thể dừng khi hết hạn mức; không cam kết luôn hoạt động miễn phí vô hạn.
 
 ## 2. Đóng gói và đưa code lên GitHub
-Hai repo FE/BE vẫn giữ nguyên. Trong BE/EXE201_BE chạy:
+Hai repo FE/BE vẫn giữ nguyên. Đặt `EXE201_FE` cạnh `EXE201_BE` (hoặc giữ cấu trúc `FE/EXE201_FE` và `BE/EXE201_BE`). Trong `EXE201_BE` chạy:
 
 ```powershell
 npm run deploy:prepare
 ```
 
-Lệnh build FE ở thư mục kế bên và chép kết quả vào BE/public với API cùng origin `/api`, không chép `.env` hoặc database. Commit BE/public cùng các thay đổi BE vào repo backend. Không chỉ push repo FE vì Render chạy bản đã đóng gói trong BE.
+Lệnh build FE ở thư mục kế bên và chép kết quả vào BE/public với API cùng origin `/api`, không chép `.env` hoặc database. Nếu để FE ở nơi khác, đặt biến môi trường `FRONTEND_DIR` trỏ tới thư mục đó trước khi chạy. Commit BE/public cùng các thay đổi BE vào repo backend. Không chỉ push repo FE vì Render chạy bản đã đóng gói trong BE.
 
 ## 3. Render
 - Đăng nhập Render, kết nối đúng repo backend. Dùng Blueprint `render.yaml` hoặc tạo Web Service với cấu hình dưới đây.
@@ -37,7 +37,7 @@ sqlserver://YOUR_SERVER.database.windows.net:1433;database=YOUR_DATABASE;user=YO
 
 Nếu mật khẩu chứa ký tự đặc biệt, dùng quy tắc escape SQL Server connector; không tự URL-encode như PostgreSQL.
 
-Start script đợi database thức dậy, chạy `prisma migrate deploy`, bổ sung 3 role nếu thiếu rồi chạy server. Không reset database, không seed mật khẩu mặc định hoặc sao chép tài khoản cá nhân lên mạng. Cookie Secure/HttpOnly/SameSite=Lax, FE và BE cùng origin.
+Start script đợi database thức dậy, chạy `prisma migrate deploy`, bổ sung 3 role nếu thiếu rồi chạy server. Không reset database, không seed mật khẩu mặc định hoặc sao chép tài khoản cá nhân lên mạng. Cookie dùng Secure/HttpOnly/SameSite=None ở production; API vẫn kiểm tra Origin và header chống CSRF. Bản đóng gói FE và BE chạy cùng origin.
 
 ## 4. Dữ liệu demo
 Đăng ký một tài khoản chủ tạp hóa trên web online. Có thể dùng hai file SQL dữ liệu mẫu đã có, đổi @username cho đúng tài khoản và chạy trên **database online**: SupplyMindAI_30SanPhamMau.sql rồi SupplyMindAI_GiaMau.sql. Không chạy SQL tạo bảng cũ sau khi migrations đã chạy. Không tự sao chép người dùng, password hash hay phiên đăng nhập từ máy lên cloud.
