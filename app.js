@@ -233,7 +233,19 @@ function createApp(prisma, config) {
   // =========================
   // 404
   // =========================
-
+app.get('/api/db-test', async (req, res) => {
+  try {
+    const result = await prisma.$queryRaw`SELECT 1 AS ok`;
+    res.json({ success: true, result });
+  } catch (error) {
+    console.error('DB TEST ERROR:', error);
+    res.status(500).json({
+      success: false,
+      name: error.name,
+      message: error.message,
+    });
+  }
+});
   app.use((req, res) =>
     res.status(404).json({
       success: false,

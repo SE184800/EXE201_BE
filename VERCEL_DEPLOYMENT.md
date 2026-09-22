@@ -11,7 +11,7 @@
 1. Trong BE chạy `npm run deploy:prepare` để build FE vào `public` với API cùng domain `/api`.
 2. Đăng nhập Vercel CLI bằng `npm exec --yes --package=vercel -- vercel login` và dùng gói Hobby.
 3. Link/tạo project từ thư mục BE bằng CLI; không cần cấp quyền repository GitHub.
-4. Đặt `DATABASE_URL` và `JWT_SECRET` (ngẫu nhiên ít nhất 32 ký tự) trong Environment Variables của Vercel. Không commit bí mật. Vercel tự cung cấp hostname cho kiểm tra Origin. Nếu dùng domain riêng, đặt `FRONTEND_URL=https://domain-cua-ban`.
+4. Đặt `DATABASE_URL` và `JWT_SECRET` (ngẫu nhiên ít nhất 32 ký tự) trong Environment Variables của Vercel. Không commit bí mật. Nếu FE là project Vercel riêng, đặt `FRONTEND_URL` là origin của FE (ví dụ `https://ten-fe.vercel.app`) và `CORS_ORIGINS` cho các origin FE preview cần dùng, phân tách bằng dấu phẩy. Không dùng `localhost` trong production.
 5. Trước khi chạy API: cấu hình kết nối mạng Azure, tạo `.env.cloud` riêng chứa DATABASE_URL Azure rồi chạy `npm run db:migrate:cloud`. Script chỉ áp dụng migrations và tạo 3 vai trò, không tạo user/mật khẩu mẫu. Không chạy migrate reset.
 6. Chạy `npm exec --yes --package=vercel -- vercel --prod` từ thư mục BE. Kiểm tra `/api/health`, `/login`, đăng ký/đăng nhập, kho hàng, tải lại trang con và đăng xuất.
 

@@ -10,7 +10,33 @@ const TOKEN_OPTIONS = {
   audience: 'sg-restock-web',
 };
 // Vẫn so sánh mật khẩu khi username không tồn tại.
-const dummyHash = bcrypt.hashSync('not-a-real-account-password', 12);
+// Keep this precomputed so every Vercel cold start does not spend CPU hashing
+// a value that is never stored or accepted.
+const dummyHash = '$2b$12$5KSGNYoi5TEe5t3L6r196eZCZqygeQla2uRMSq5HuLvEGVxRvHMbq';
+const TRANSIENT_DATABASE_CODES = new Set(['P1001', 'P1008', 'P1017', 'P2024']);
+
+function isTransientDatabaseError(error) {
+  const initializationFailure =
+    error?.name === 'PrismaClientInitializationError' &&
+    /can't reach database server|timed out|connection/i.test(error.message || '');
+  return Boolean(
+    error &&
+      (initializationFailure ||
+        TRANSIENT_DATABASE_CODES.has(error.code) ||
+        ['ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED'].includes(error.code)),
+  );
+}
+
+async function withDatabaseRetry(operation) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isTransientDatabaseError(error) || attempt >= 2) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 200 * 2 ** attempt));
+    }
+  }
+}
 
 function publicUser(user) {
   return {
@@ -75,10 +101,31 @@ function createAuthService(prisma, config) {
     }
   }
   async function login(username, password) {
-    const user = await prisma.user.findUnique({
-      where: { username },
-      include: { role: true },
+    return withDatabaseRetry(async () => {
+      const user = await prisma.user.findUnique({
+        where: { username },
+        include: { role: true },
+      });
+      const validPassword = await bcrypt.compare(
+        password,
+        user?.passwordHash || dummyHash,
+      );
+      if (!user || !user.isActive || !validPassword) return null;
+      const session = await prisma.authSession.create({
+        data: {
+          id: randomUUID(),
+          userId: user.id,
+          expiresAt: new Date(Date.now() + config.sessionSeconds * 1000),
+        },
+      });
+      const token = jwt.sign({ sid: session.id }, config.jwtSecret, {
+        ...TOKEN_OPTIONS,
+        subject: String(user.id),
+        expiresIn: config.sessionSeconds,
+      });
+      return { token, user: publicUser(user) };
     });
+<<<<<<< Updated upstream
     const validPassword = await bcrypt.compare(
       password,
       user?.passwordHash || dummyHash,
@@ -102,6 +149,8 @@ function createAuthService(prisma, config) {
       expiresIn: config.sessionSeconds,
     });
     return { token, user: publicUser(user) };
+=======
+>>>>>>> Stashed changes
   }
 
   async function authenticate(token) {
@@ -118,10 +167,12 @@ function createAuthService(prisma, config) {
     }
     if (typeof payload !== 'object' || typeof payload.sid !== 'string')
       return null;
-    const session = await prisma.authSession.findUnique({
-      where: { id: payload.sid },
-      include: { user: { include: { role: true } } },
-    });
+    const session = await withDatabaseRetry(() =>
+      prisma.authSession.findUnique({
+        where: { id: payload.sid },
+        include: { user: { include: { role: true } } },
+      }),
+    );
     if (
       !session ||
       session.expiresAt <= new Date() ||

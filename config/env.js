@@ -11,8 +11,26 @@ function readConfig(env = process.env) {
   const parsedUrl = new URL(publicUrl || 'http://localhost:5173');
   if (!['http:', 'https:'].includes(parsedUrl.protocol) || (production && parsedUrl.protocol !== 'https:')) throw new Error('Production cần địa chỉ HTTPS hợp lệ.');
   const origin = parsedUrl.origin;
-  const allowedOrigins = production ? [origin] : [...new Set([origin, 'http://localhost:5173', 'http://127.0.0.1:5173'])];
-  // Trust only this deployment's platform-provided hostname, never arbitrary *.vercel.app.
+  // Production must opt in to every browser origin. This is important when the
+  // frontend and API are separate Vercel projects behind a rewrite.
+  const configuredOrigins = String(env.CORS_ORIGINS || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map((value) => {
+      const url = new URL(value);
+      if (!['http:', 'https:'].includes(url.protocol) || (production && url.protocol !== 'https:')) {
+        throw new Error('CORS_ORIGINS chỉ được chứa địa chỉ HTTP(S) hợp lệ.');
+      }
+      return url.origin;
+    });
+  const allowedOrigins = [
+    ...new Set([
+      origin,
+      ...configuredOrigins,
+      ...(production ? [] : ['http://localhost:5173', 'http://127.0.0.1:5173']),
+    ]),
+  ];
   if (production && env.VERCEL === '1' && env.VERCEL_URL) {
     const deploymentOrigin = new URL(`https://${env.VERCEL_URL}`).origin;
     if (!allowedOrigins.includes(deploymentOrigin)) allowedOrigins.push(deploymentOrigin);

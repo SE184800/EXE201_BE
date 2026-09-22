@@ -16,6 +16,10 @@ test('production requires HTTPS origin, rejects local origin and bounds proxy tr
  const config=readConfig({JWT_SECRET:secret,NODE_ENV:'production',RENDER_EXTERNAL_URL:'https://test.onrender.com',TRUST_PROXY_HOPS:'1'});
  assert.deepEqual(config.allowedOrigins,['https://test.onrender.com']);assert.equal(config.trustProxyHops,1);
 });
+test('separate Vercel frontend origins are explicit and local origins stay out of production',()=>{
+ const config=readConfig({JWT_SECRET:secret,NODE_ENV:'production',FRONTEND_URL:'https://api.example.com',CORS_ORIGINS:'https://web.example.com, https://preview.example.com'});
+ assert.deepEqual(config.allowedOrigins,['https://api.example.com','https://web.example.com','https://preview.example.com']);
+});
 test('single origin deployment serves SPA and static assets without swallowing API or secret paths',async()=>{
  const config=readConfig({JWT_SECRET:secret,NODE_ENV:'production',FRONTEND_URL:'https://test.onrender.com',SERVE_WEB:'true',TRUST_PROXY_HOPS:'1'});
  const app=createApp({},config);
