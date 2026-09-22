@@ -12,141 +12,146 @@ model Role {
   code  String @unique @db.VarChar(30)
   name  String @db.NVarChar(100)
   users User[]
+
   @@map("roles")
 }
 
 model User {
-  id           Int      @id @default(autoincrement())
-  username     String   @unique @db.VarChar(50)
-  name         String   @db.NVarChar(100)
+  id              Int              @id @default(autoincrement())
+  username        String           @unique @db.VarChar(50)
+  name            String           @db.NVarChar(100)
   // Filtered unique indexes for non-null email/phone are managed in migration
   // 202609210003_unique_registration_contacts (Prisma 6 cannot express the filter).
-  email        String?  @db.VarChar(255)
-  phone        String?  @db.VarChar(20)
-  dateOfBirth  DateTime? @db.Date
-  passwordHash String   @db.VarChar(255)
-  isActive     Boolean  @default(true)
-  roleId       Int
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  role         Role     @relation(fields: [roleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  sessions     AuthSession[]
-  inventory    InventoryItem[]
+  email           String?          @db.VarChar(255)
+  phone           String?          @db.VarChar(20)
+  dateOfBirth     DateTime?        @db.Date
+  passwordHash    String           @db.VarChar(255)
+  isActive        Boolean          @default(true)
+  roleId          Int
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  role            Role             @relation(fields: [roleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sessions        AuthSession[]
+  inventory       InventoryItem[]
   supplierProfile SupplierProfile?
-  buyerOrders WholesaleOrder[] @relation("buyerOrders")
-  restockPlans RestockPlan[]
-<<<<<<< Updated upstream
-  passwordResets PasswordReset[]
-=======
->>>>>>> Stashed changes
+  buyerOrders     WholesaleOrder[] @relation("buyerOrders")
+  restockPlans    RestockPlan[]
+  passwordResets  PasswordReset[]
+
   @@index([roleId])
   @@map("users")
 }
 
 model InventoryItem {
   purchasePrice Int?
-  sellingPrice Int?
-  id           Int      @id @default(autoincrement())
-  ownerId      Int
-  name         String   @db.NVarChar(100)
-  unit         String   @db.NVarChar(20)
-  quantity     Int      @default(0)
-  lowThreshold Int      @default(5)
-  expiryDate   DateTime? @db.Date
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  owner        User     @relation(fields: [ownerId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  movements    StockMovement[]
+  sellingPrice  Int?
+  id            Int             @id @default(autoincrement())
+  ownerId       Int
+  name          String          @db.NVarChar(100)
+  unit          String          @db.NVarChar(20)
+  quantity      Int             @default(0)
+  lowThreshold  Int             @default(5)
+  expiryDate    DateTime?       @db.Date
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  owner         User            @relation(fields: [ownerId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  movements     StockMovement[]
+
   @@unique([ownerId, name])
   @@map("inventory_items")
 }
 
 model StockMovement {
-  id             String   @id @default(uuid()) @db.VarChar(36)
+  id             String        @id @default(uuid()) @db.VarChar(36)
   itemId         Int
-  type           String   @db.VarChar(20)
+  type           String        @db.VarChar(20)
   quantityChange Int
   quantityBefore Int
   quantityAfter  Int
-  productName    String   @db.NVarChar(100)
-  unit           String   @db.NVarChar(20)
-  note           String   @db.NVarChar(250)
-  createdAt      DateTime @default(now())
+  productName    String        @db.NVarChar(100)
+  unit           String        @db.NVarChar(20)
+  note           String        @db.NVarChar(250)
+  createdAt      DateTime      @default(now())
   item           InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
   @@index([itemId, createdAt])
   @@map("stock_movements")
 }
 
 model SupplierProfile {
-  deliveryFee       Decimal  @default(0) @db.Decimal(18, 2)
-  id                Int      @id @default(autoincrement())
-  userId            Int      @unique
-  businessName      String   @db.NVarChar(150)
-  warehouseAddress  String   @db.NVarChar(255)
-  deliveryRadiusKm  Decimal  @db.Decimal(8, 2)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  products          SupplierProduct[]
-  orders            WholesaleOrder[]
+  deliveryFee      Decimal           @default(0) @db.Decimal(18, 2)
+  id               Int               @id @default(autoincrement())
+  userId           Int               @unique
+  businessName     String            @db.NVarChar(150)
+  warehouseAddress String            @db.NVarChar(255)
+  deliveryRadiusKm Decimal           @db.Decimal(8, 2)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  products         SupplierProduct[]
+  orders           WholesaleOrder[]
+
   @@map("supplier_profiles")
 }
 
 model SupplierProduct {
-  category        String   @default("Khác") @db.NVarChar(60)
-  imageUrl        String?  @db.NVarChar(1000)
-  id              Int      @id @default(autoincrement())
-  supplierId      Int
-  name            String   @db.NVarChar(150)
-  packaging       String   @db.NVarChar(50)
-  wholesalePrice  Decimal  @db.Decimal(18, 2)
-  stockQty        Int
-  moq             Int
-  isActive        Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  supplier        SupplierProfile @relation(fields: [supplierId], references: [id], onDelete: Cascade)
-  orderItems      WholesaleOrderItem[]
+  category       String               @default("Khác") @db.NVarChar(60)
+  imageUrl       String?              @db.NVarChar(1000)
+  id             Int                  @id @default(autoincrement())
+  supplierId     Int
+  name           String               @db.NVarChar(150)
+  packaging      String               @db.NVarChar(50)
+  wholesalePrice Decimal              @db.Decimal(18, 2)
+  stockQty       Int
+  moq            Int
+  isActive       Boolean              @default(true)
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  supplier       SupplierProfile      @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  orderItems     WholesaleOrderItem[]
+
   @@index([supplierId, isActive])
   @@map("supplier_products")
 }
 
 model WholesaleOrder {
-  requestId     String?  @db.VarChar(36)
-  requestHash   String?  @db.VarChar(64)
-  recipientName String?  @db.NVarChar(100)
-  recipientPhone String? @db.VarChar(20)
-  deliveryAddress String? @db.NVarChar(500)
-  id            Int      @id @default(autoincrement())
-  supplierId    Int
-  buyerId       Int
-  status        String   @db.VarChar(30)
-  subtotal      Decimal  @db.Decimal(18, 2)
-  deliveryFee   Decimal  @db.Decimal(18, 2)
-  total         Decimal  @db.Decimal(18, 2)
-  note          String?  @db.NVarChar(500)
-  rejectReason  String?  @db.NVarChar(255)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  supplier      SupplierProfile @relation(fields: [supplierId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  buyer         User     @relation("buyerOrders", fields: [buyerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  items         WholesaleOrderItem[]
+  requestId       String?              @db.VarChar(36)
+  requestHash     String?              @db.VarChar(64)
+  recipientName   String?              @db.NVarChar(100)
+  recipientPhone  String?              @db.VarChar(20)
+  deliveryAddress String?              @db.NVarChar(500)
+  id              Int                  @id @default(autoincrement())
+  supplierId      Int
+  buyerId         Int
+  status          String               @db.VarChar(30)
+  subtotal        Decimal              @db.Decimal(18, 2)
+  deliveryFee     Decimal              @db.Decimal(18, 2)
+  total           Decimal              @db.Decimal(18, 2)
+  note            String?              @db.NVarChar(500)
+  rejectReason    String?              @db.NVarChar(255)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  supplier        SupplierProfile      @relation(fields: [supplierId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  buyer           User                 @relation("buyerOrders", fields: [buyerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  items           WholesaleOrderItem[]
+
   @@index([supplierId, status])
   @@index([buyerId])
   @@map("wholesale_orders")
 }
 
 model WholesaleOrderItem {
-  id          Int      @id @default(autoincrement())
+  id          Int             @id @default(autoincrement())
   orderId     Int
   productId   Int
-  productName String   @db.NVarChar(150)
-  packaging   String   @db.NVarChar(50)
+  productName String          @db.NVarChar(150)
+  packaging   String          @db.NVarChar(50)
   quantity    Int
-  unitPrice   Decimal  @db.Decimal(18, 2)
-  lineTotal   Decimal  @db.Decimal(18, 2)
-  order       WholesaleOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  unitPrice   Decimal         @db.Decimal(18, 2)
+  lineTotal   Decimal         @db.Decimal(18, 2)
+  order       WholesaleOrder  @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product     SupplierProduct @relation(fields: [productId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
   @@index([orderId])
   @@index([productId])
   @@map("wholesale_order_items")
@@ -158,51 +163,55 @@ model AuthSession {
   expiresAt DateTime
   createdAt DateTime @default(now())
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@index([userId])
   @@index([expiresAt])
   @@map("auth_sessions")
 }
 
 model PasswordReset {
-  tokenHash String @id @db.VarChar(64)
-  userId Int
-  passwordSnapshot String @db.VarChar(255)
-  expiresAt DateTime
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tokenHash        String   @id @db.VarChar(64)
+  userId           Int
+  passwordSnapshot String   @db.VarChar(255)
+  expiresAt        DateTime
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
   @@index([userId])
   @@index([expiresAt])
   @@map("password_resets")
 }
 
 model RestockPlan {
-  id          String   @id @default(uuid()) @db.VarChar(36)
+  id          String            @id @default(uuid()) @db.VarChar(36)
   ownerId     Int
-  name        String   @db.NVarChar(100)
-  note        String   @db.NVarChar(500)
+  name        String            @db.NVarChar(100)
+  note        String            @db.NVarChar(500)
   horizonDays Int
   safetyDays  Int
-  requestHash String   @db.VarChar(64)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  requestHash String            @db.VarChar(64)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  owner       User              @relation(fields: [ownerId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   lines       RestockPlanLine[]
+
   @@index([ownerId, createdAt])
   @@map("restock_plans")
 }
 
 model RestockPlanLine {
- purchasePrice Int?
-  id                Int @id @default(autoincrement())
-  planId            String @db.VarChar(36)
+  purchasePrice     Int?
+  id                Int         @id @default(autoincrement())
+  planId            String      @db.VarChar(36)
   sourceItemId      Int
-  productName       String @db.NVarChar(100)
-  unit              String @db.NVarChar(20)
+  productName       String      @db.NVarChar(100)
+  unit              String      @db.NVarChar(20)
   quantity          Int
   stockSnapshot     Int
   suggestedQuantity Int?
   averageDailySales Float?
   observedDays      Int
   plan              RestockPlan @relation(fields: [planId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
   @@unique([planId, sourceItemId])
   @@map("restock_plan_lines")
 }
