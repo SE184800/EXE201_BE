@@ -100,58 +100,63 @@ function createAuthService(prisma, config) {
       throw error;
     }
   }
-  async function login(username, password) {
-    return withDatabaseRetry(async () => {
-      const user = await prisma.user.findUnique({
-        where: { username },
-        include: { role: true },
-      });
-      const validPassword = await bcrypt.compare(
-        password,
-        user?.passwordHash || dummyHash,
-      );
-      if (!user || !user.isActive || !validPassword) return null;
-      const session = await prisma.authSession.create({
-        data: {
-          id: randomUUID(),
-          userId: user.id,
-          expiresAt: new Date(Date.now() + config.sessionSeconds * 1000),
-        },
-      });
-      const token = jwt.sign({ sid: session.id }, config.jwtSecret, {
-        ...TOKEN_OPTIONS,
-        subject: String(user.id),
-        expiresIn: config.sessionSeconds,
-      });
-      return { token, user: publicUser(user) };
+async function login(username, password) {
+  return withDatabaseRetry(async () => {
+    const user = await prisma.user.findUnique({
+      where: { username },
+      include: { role: true },
     });
-<<<<<<< Updated upstream
+
     const validPassword = await bcrypt.compare(
       password,
       user?.passwordHash || dummyHash,
     );
+
     if (!accountAvailable(user) || !validPassword) return null;
-    const session = await prisma.$transaction(async tx => {
-      const current = await tx.user.findFirst({ where: { id: user.id, passwordHash: user.passwordHash, ...activeAccountWhere() } });
-      if (!current) return null;
-      return tx.authSession.create({
-      data: {
-        id: randomUUID(),
-        userId: user.id,
-        expiresAt: new Date(Date.now() + config.sessionSeconds * 1000),
+
+    const session = await prisma.$transaction(
+      async (tx) => {
+        const current = await tx.user.findFirst({
+          where: {
+            id: user.id,
+            passwordHash: user.passwordHash,
+            ...activeAccountWhere(),
+          },
+        });
+
+        if (!current) return null;
+
+        return tx.authSession.create({
+          data: {
+            id: randomUUID(),
+            userId: user.id,
+            expiresAt: new Date(
+              Date.now() + config.sessionSeconds * 1000,
+            ),
+          },
+        });
       },
-      });
-    }, { isolationLevel: 'Serializable' });
+      { isolationLevel: 'Serializable' },
+    );
+
     if (!session) return null;
-    const token = jwt.sign({ sid: session.id }, config.jwtSecret, {
-      ...TOKEN_OPTIONS,
-      subject: String(user.id),
-      expiresIn: config.sessionSeconds,
-    });
-    return { token, user: publicUser(user) };
-=======
->>>>>>> Stashed changes
-  }
+
+    const token = jwt.sign(
+      { sid: session.id },
+      config.jwtSecret,
+      {
+        ...TOKEN_OPTIONS,
+        subject: String(user.id),
+        expiresIn: config.sessionSeconds,
+      },
+    );
+
+    return {
+      token,
+      user: publicUser(user),
+    };
+  }); 
+}
 
   async function authenticate(token) {
     if (!token || typeof token !== 'string') return null;
