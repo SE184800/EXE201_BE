@@ -17,8 +17,11 @@ const { createCatalogRoutes } = require('./routes/catalogRoutes');
 const { createProfileRoutes } = require('./routes/profileRoutes');
 const { createRestockRoutes } = require('./routes/restockRoutes');
 const { createAdvisorRoutes } = require('./routes/advisorRoutes');
+<<<<<<< Updated upstream
 const { createOrderRoutes } = require('./routes/orderRoutes');
 const { createPasswordRoutes } = require('./routes/passwordRoutes');
+=======
+>>>>>>> Stashed changes
 
 function createApp(prisma, config) {
   const app = express();
@@ -61,7 +64,10 @@ function createApp(prisma, config) {
   app.use('/api/inventory', createInventoryRoutes(prisma, requireAuth));
   app.use('/api/supplier', createSupplierRoutes(prisma, requireAuth));
   app.use('/api/catalog', createCatalogRoutes(prisma, requireAuth));
+<<<<<<< Updated upstream
   app.use('/api/orders', createOrderRoutes(prisma, requireAuth));
+=======
+>>>>>>> Stashed changes
   app.use('/api/profile', createProfileRoutes(prisma, requireAuth));
   app.use('/api/restock', createRestockRoutes(prisma, requireAuth));
   app.use('/api/advisor', createAdvisorRoutes(prisma, requireAuth, config));
@@ -104,7 +110,12 @@ function createApp(prisma, config) {
         .status(error.status || 400)
         .json({ success: false, message: 'Dữ liệu gửi lên không hợp lệ.' });
     }
-    console.error('API error:', error.code || error.name);
+    console.error('API error:', {
+  name: error.name,
+  code: error.code,
+  message: error.message,
+  stack: error.stack,
+});
     res
       .status(500)
       .json({

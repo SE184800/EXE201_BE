@@ -3,4 +3,8 @@ node_modules
 .env.*
 !*.env.example
 .vercel
+<<<<<<< Updated upstream
 .local-mail/
+=======
+.env*.local
+>>>>>>> Stashed changes

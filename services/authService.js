@@ -23,8 +23,8 @@ function publicUser(user) {
 function cookieOptions(config) {
   return {
     httpOnly: true,
-    secure: config.production,
-    sameSite: 'lax',
+secure: config.production,
+sameSite: config.production ? 'none' : 'lax',
     path: '/',
   };
 }
