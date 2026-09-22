@@ -77,6 +77,7 @@ test('API cô lập kho theo người đăng nhập, không nhận ownerId từ 
     create: async (args) => { calls.push(args); return { id: 4, ...args.data }; },
   } };
   prisma.stockMovement = { create: async ({ data }) => data };
+  prisma.auditLog = { create: async ({ data }) => { assert.equal(data.actorId, 12); return data; } };
   prisma.$transaction = async (run) => run(prisma);
   const app = express(); app.use(express.json());
   app.use('/inventory', createInventoryRoutes(prisma, (req, res, next) => { req.auth = { user: { id: 12, role: 'STORE_OWNER' } }; next(); }));

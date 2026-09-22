@@ -4,6 +4,7 @@ const { createHash, randomBytes } = require('node:crypto');
 const { rateLimit } = require('express-rate-limit');
 const { createResetMailer } = require('../services/resetMail');
 const { COOKIE_NAME, cookieOptions } = require('../services/authService');
+const { audit, activeAccountWhere } = require('../services/platformPolicy');
 const hash = value => createHash('sha256').update(value).digest('hex');
 const invalidToken = () => Object.assign(new Error('Liên kết không hợp lệ, đã dùng hoặc hết hạn. Hãy yêu cầu liên kết mới.'), { status: 400 });
 function passwordError(password, confirmPassword) {
@@ -20,7 +21,7 @@ function createPasswordRoutes(prisma, requireAuth, config) {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email) || email.length > 255 || !/^[\x21-\x7E]+$/.test(email)) return res.status(400).json({ message: 'Nhập email hợp lệ.' });
     if (!config.sendResetMail && !(config.mailTransport === 'file' && !config.production) && !(config.mailTransport === 'smtp' && config.smtp?.host && config.smtp?.from)) return res.status(503).json({ message: 'Khôi phục mật khẩu chưa sẵn sàng. Vui lòng liên hệ quản trị viên.' });
     try {
-      const user = await prisma.user.findFirst({ where: { email, isActive: true } });
+      const user = await prisma.user.findFirst({ where: { email, ...activeAccountWhere() } });
       if (user) {
         const token = randomBytes(32).toString('hex');
         const tokenHash = hash(token);
@@ -44,10 +45,11 @@ function createPasswordRoutes(prisma, requireAuth, config) {
         if (!reset || reset.expiresAt <= new Date()) throw invalidToken();
         const claim = await tx.passwordReset.deleteMany({ where: { tokenHash: reset.tokenHash, expiresAt: { gt: new Date() } } });
         if (!claim.count) throw invalidToken();
-        const updated = await tx.user.updateMany({ where: { id: reset.userId, isActive: true, passwordHash: reset.passwordSnapshot }, data: { passwordHash } });
+        const updated = await tx.user.updateMany({ where: { id: reset.userId, ...activeAccountWhere(), passwordHash: reset.passwordSnapshot }, data: { passwordHash } });
         if (!updated.count) throw invalidToken();
         await tx.authSession.deleteMany({ where: { userId: reset.userId } });
         await tx.passwordReset.deleteMany({ where: { userId: reset.userId } });
+        await audit(tx, reset.userId, 'PASSWORD_RESET', 'USER', reset.userId);
       });
       res.clearCookie(COOKIE_NAME, cookieOptions(config));
       res.json({ message: 'Đã đặt lại mật khẩu. Hãy đăng nhập bằng mật khẩu mới.' });
@@ -63,10 +65,11 @@ function createPasswordRoutes(prisma, requireAuth, config) {
       if (await bcrypt.compare(password, user.passwordHash)) return res.status(400).json({ message: 'Mật khẩu mới phải khác mật khẩu hiện tại.' });
       const passwordHash = await bcrypt.hash(password, 12);
       await prisma.$transaction(async tx => {
-        const updated = await tx.user.updateMany({ where: { id: user.id, isActive: true, passwordHash: user.passwordHash }, data: { passwordHash } });
+        const updated = await tx.user.updateMany({ where: { id: user.id, ...activeAccountWhere(), passwordHash: user.passwordHash }, data: { passwordHash } });
         if (!updated.count) throw invalidToken();
         await tx.authSession.deleteMany({ where: { userId: user.id } });
         await tx.passwordReset.deleteMany({ where: { userId: user.id } });
+        await audit(tx, user.id, 'PASSWORD_CHANGED', 'USER', user.id);
       });
       res.clearCookie(COOKIE_NAME, cookieOptions(config));
       res.json({ message: 'Đã đổi mật khẩu và đăng xuất các phiên. Hãy đăng nhập lại.' });

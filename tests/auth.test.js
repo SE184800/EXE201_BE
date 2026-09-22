@@ -39,6 +39,9 @@ before(async () => {
 
 after(async () => {
   // Chỉ xóa đúng các tài khoản tạm được tạo bởi lượt test này.
+  await prisma.auditLog.deleteMany({ where: { actorId: { in: createdIds } } });
+  await prisma.aiUsageEvent.deleteMany({ where: { userId: { in: createdIds } } });
+  await prisma.recommendationRun.deleteMany({ where: { ownerId: { in: createdIds } } });
   await prisma.user.deleteMany({ where: { id: { in: createdIds } } });
   await prisma.$disconnect();
 });

@@ -1,5 +1,6 @@
 const { randomUUID } = require('node:crypto');
 const { expiryInfo } = require('./inventoryExpiry');
+const { audit } = require('./platformPolicy');
 function problem(status, message) { return Object.assign(new Error(message), { status }); }
 async function record(tx, item, before, type, note, id = randomUUID()) {
   return tx.stockMovement.create({ data: { id, itemId: item.id, type, quantityChange: item.quantity - before, quantityBefore: before, quantityAfter: item.quantity, productName: item.name, unit: item.unit, note } });
@@ -9,6 +10,7 @@ function createStockService(prisma) {
     return prisma.$transaction(async (tx) => {
       const item = await tx.inventoryItem.create({ data: { ...data, ownerId } });
       await record(tx, item, 0, 'OPENING', 'Tồn ban đầu khi tạo sản phẩm');
+      await audit(tx, ownerId, 'INVENTORY_CREATED', 'INVENTORY', item.id, { name: item.name, quantity: item.quantity, purchasePrice: item.purchasePrice, sellingPrice: item.sellingPrice });
       return item;
     });
   }
@@ -21,6 +23,7 @@ function createStockService(prisma) {
       const changed = await tx.inventoryItem.updateMany({ where: { id, ownerId, quantity: old.quantity, updatedAt: old.updatedAt }, data });
       if (!changed.count) throw problem(409, 'Kho vừa thay đổi. Vui lòng tải lại và thử lại.');
       if (data.quantity !== old.quantity) await record(tx, { ...old, ...data }, old.quantity, 'ADJUSTMENT', 'Điều chỉnh số tồn thủ công');
+      await audit(tx, ownerId, 'INVENTORY_UPDATED', 'INVENTORY', id, { before: { quantity: old.quantity, unit: old.unit, purchasePrice: old.purchasePrice, sellingPrice: old.sellingPrice }, after: data });
       return { success: true };
     });
   }
@@ -44,6 +47,7 @@ function createStockService(prisma) {
         if (after > 2147483647) throw problem(400, 'Số lượng vượt giới hạn lưu trữ.');
         const result = await tx.inventoryItem.updateMany({ where: { id, ownerId, quantity: item.quantity, updatedAt: item.updatedAt }, data: { quantity: after } });
         if (!result.count) throw problem(409, 'Kho vừa thay đổi. Vui lòng thử lại.');
+        await audit(tx, ownerId, 'STOCK_MOVEMENT', 'INVENTORY', id, { type: input.type, before: item.quantity, after, expiredSaleAcknowledged: Boolean(input.allowExpiredSale) });
         return record(tx, { ...item, quantity: after }, item.quantity, input.type, input.note, input.requestId);
       });
     } catch (error) {

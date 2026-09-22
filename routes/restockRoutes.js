@@ -10,7 +10,12 @@ function createRestockRoutes(prisma, requireAuth) {
   router.get('/forecast', async (req, res, next) => {
     const h = Number(req.query.horizonDays || 7), s = Number(req.query.safetyDays ?? 2);
     if (!validDays(h, s)) return res.status(400).json({ message: 'Chọn kỳ 7, 14 hoặc 30 ngày; dự phòng 0–7 ngày.' });
-    try { res.json(await getForecast(prisma, req.auth.user.id, h, s)); } catch (error) { next(error); }
+    try {
+      const forecast = await getForecast(prisma, req.auth.user.id, h, s);
+      const suggestions = forecast.items.filter(item => item.suggestedQuantity > 0 && !item.name.startsWith('[Mẫu]')).map(item => ({ itemId: item.itemId, quantity: item.suggestedQuantity }));
+      const run = suggestions.length ? await prisma.recommendationRun.create({ data: { ownerId: req.auth.user.id, horizonDays: h, safetyDays: s, suggestions: JSON.stringify(suggestions) } }) : null;
+      res.json({ ...forecast, recommendationRunId: run?.id || null });
+    } catch (error) { next(error); }
   });
   router.get('/plans', async (req, res, next) => {
     const page = Number(req.query.page || 1);
@@ -43,6 +48,12 @@ function createRestockRoutes(prisma, requireAuth) {
       });
       const data = { name, note, horizonDays, safetyDays, requestHash: hash };
       const plan = await prisma.$transaction(async (tx) => {
+        if (typeof body.recommendationRunId === 'string' && uuid.test(body.recommendationRunId)) {
+          const run = await tx.recommendationRun.findFirst({ where: { id: body.recommendationRunId, ownerId, horizonDays, safetyDays, createdAt: { gte: new Date(Date.now() - 86400000) } } });
+          if (run && JSON.parse(run.suggestions).some(s => lines.some(line => line.itemId === s.itemId && line.quantity === s.quantity))) {
+            await tx.recommendationRun.updateMany({ where: { id: run.id, acceptedAt: null }, data: { acceptedAt: new Date() } });
+          }
+        }
         if (req.method === 'POST') return tx.restockPlan.create({ data: { id, ownerId, ...data, lines: { create: snapshots } }, include: { lines: true } });
         const updated = await tx.restockPlan.updateMany({ where: { id, ownerId, updatedAt: new Date(body.expectedUpdatedAt) }, data });
         if (!updated.count) throw Object.assign(new Error('Kế hoạch không tồn tại hoặc đã thay đổi. Tải lại trước khi sửa.'), { status: 409 });

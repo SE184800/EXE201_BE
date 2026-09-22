@@ -19,6 +19,7 @@ const { createRestockRoutes } = require('./routes/restockRoutes');
 const { createAdvisorRoutes } = require('./routes/advisorRoutes');
 const { createOrderRoutes } = require('./routes/orderRoutes');
 const { createPasswordRoutes } = require('./routes/passwordRoutes');
+const { createAdminRoutes } = require('./routes/adminRoutes');
 
 function createApp(prisma, config) {
   const app = express();
@@ -57,6 +58,7 @@ function createApp(prisma, config) {
   );
   app.use('/api/auth', createAuthRoutes(authService, requireAuth, config));
   app.use('/api/auth', createPasswordRoutes(prisma, requireAuth, config));
+  app.use('/api/admin', createAdminRoutes(prisma, requireAuth, config));
   app.use('/api/users', createUserRoutes(prisma, requireAuth));
   app.use('/api/inventory', createInventoryRoutes(prisma, requireAuth));
   app.use('/api/supplier', createSupplierRoutes(prisma, requireAuth));

@@ -26,6 +26,8 @@ model User {
   dateOfBirth  DateTime? @db.Date
   passwordHash String   @db.VarChar(255)
   isActive     Boolean  @default(true)
+  suspendedUntil DateTime?
+  lockReason String? @db.NVarChar(500)
   roleId       Int
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -75,6 +77,16 @@ model StockMovement {
 }
 
 model SupplierProfile {
+  region String? @db.NVarChar(100)
+  taxCode String? @db.VarChar(30)
+  legalRepresentative String? @db.NVarChar(100)
+  verificationDocumentUrl String? @db.NVarChar(1000)
+  verificationStatus String @default("DRAFT") @db.VarChar(20)
+  verificationVersion Int @default(0)
+  verificationNote String? @db.NVarChar(500)
+  submittedAt DateTime?
+  reviewedAt DateTime?
+  reviewedBy Int?
   deliveryFee       Decimal  @default(0) @db.Decimal(18, 2)
   id                Int      @id @default(autoincrement())
   userId            Int      @unique
@@ -109,6 +121,13 @@ model SupplierProduct {
 }
 
 model WholesaleOrder {
+  commissionRate Decimal? @db.Decimal(5, 2)
+  commissionAmount Decimal? @db.Decimal(18, 2)
+  deliveredAt DateTime?
+  supplierRegion String? @db.NVarChar(100)
+  commissionPaidAt DateTime?
+  commissionPaidBy Int?
+  commissionPaymentReference String? @db.NVarChar(150)
   requestId     String?  @db.VarChar(36)
   requestHash   String?  @db.VarChar(64)
   recipientName String?  @db.NVarChar(100)
@@ -130,6 +149,8 @@ model WholesaleOrder {
   items         WholesaleOrderItem[]
   @@index([supplierId, status])
   @@index([buyerId])
+  @@index([deliveredAt])
+  @@index([commissionPaidAt])
   @@map("wholesale_orders")
 }
 
@@ -158,6 +179,55 @@ model AuthSession {
   @@index([userId])
   @@index([expiresAt])
   @@map("auth_sessions")
+}
+
+model PlatformSetting {
+  id Int @id
+  commissionRate Decimal @default(0) @db.Decimal(5, 2)
+  version Int @default(0)
+  updatedAt DateTime @updatedAt
+  @@map("platform_settings")
+}
+
+// Actor IDs are snapshots: deleting an account must not delete financial/audit history.
+model AuditLog {
+  id Int @id @default(autoincrement())
+  actorId Int?
+  action String @db.VarChar(60)
+  entityType String @db.VarChar(40)
+  entityId String @db.VarChar(50)
+  details String @db.NVarChar(Max)
+  createdAt DateTime @default(now())
+  @@index([createdAt, id])
+  @@index([action, createdAt])
+  @@map("audit_logs")
+}
+
+model AiUsageEvent {
+  id Int @id @default(autoincrement())
+  userId Int
+  provider String @db.VarChar(20)
+  model String? @db.NVarChar(100)
+  status String @db.VarChar(20)
+  durationMs Int
+  inputTokens Int?
+  outputTokens Int?
+  createdAt DateTime @default(now())
+  @@index([createdAt, provider])
+  @@map("ai_usage_events")
+}
+
+model RecommendationRun {
+  id String @id @default(uuid()) @db.VarChar(36)
+  ownerId Int
+  horizonDays Int
+  safetyDays Int
+  suggestions String @db.NVarChar(Max)
+  acceptedAt DateTime?
+  createdAt DateTime @default(now())
+  @@index([createdAt])
+  @@index([ownerId, createdAt])
+  @@map("recommendation_runs")
 }
 
 model PasswordReset {

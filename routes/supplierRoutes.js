@@ -10,6 +10,7 @@ function createSupplierRoutes(prisma, requireAuth) {
   router.use(requireAuth, requireRole(ROLES.SUPPLIER));
   router.get('/dashboard', controller.dashboard);
   router.route('/profile').get(controller.getProfile).put(controller.saveProfile);
+  router.post('/verification', controller.submitVerification);
   router.route('/products').get(controller.listProducts).post(controller.createProduct);
   router.route('/products/:productId').put(controller.updateProduct).delete(controller.deactivateProduct);
   router.get('/orders', controller.listOrders);

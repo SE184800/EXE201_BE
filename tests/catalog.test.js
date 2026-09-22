@@ -32,6 +32,7 @@ before(async () => {
 after(async () => {
   const profiles = await prisma.supplierProfile.findMany({ where: { userId: { in: users.map((user) => user.id) } } });
   await prisma.wholesaleOrder.deleteMany({ where: { supplierId: { in: profiles.map((item) => item.id) } } });
+  await prisma.auditLog.deleteMany({ where: { actorId: { in: users.map(user => user.id) } } });
   await prisma.user.deleteMany({ where: { id: { in: users.map((user) => user.id) } } });
   await prisma.$disconnect();
 });
@@ -43,6 +44,8 @@ test('chủ vựa thiết lập gian hàng, đăng sản phẩm; tạp hóa th�
   const saved = await request(app).put('/api/supplier/profile').set(csrf).set('Cookie', cookies[0])
     .send({ businessName: `${prefix} Đại lý Minh Phát`, warehouseAddress: 'Kho kiểm thử nguồn sỉ', deliveryRadiusKm: 12.5 }).expect(200);
   profile = saved.body.profile;
+  // This suite tests catalog behavior after KYC. Admin review is covered separately.
+  await prisma.supplierProfile.update({ where: { id: profile.id }, data: { verificationStatus: 'APPROVED' } });
   const created = await request(app).post('/api/supplier/products').set(csrf).set('Cookie', cookies[0])
     .send({ ...input, supplierId: -1, userId: users[2].id }).expect(201);
   published = created.body.product;

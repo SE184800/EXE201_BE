@@ -1,4 +1,5 @@
 const express = require('express');
+const { audit } = require('../services/platformPolicy');
 const { normalizePhone, todayInVietnam } = require('../services/registrationValidation');
 const select = { id: true, username: true, name: true, email: true, phone: true, dateOfBirth: true, createdAt: true, role: { select: { code: true } } };
 const serialize = (user) => ({ ...user, role: user.role.code });
@@ -35,7 +36,11 @@ function createProfileRoutes(prisma, requireAuth) {
       const contactFilters = ['email', 'phone'].filter((field) => validation.data[field]).map((field) => ({ [field]: validation.data[field] }));
       if (contactFilters.length && await prisma.user.findFirst({ where: { id: { not: req.auth.user.id }, OR: contactFilters }, select: { id: true } })) return res.status(409).json({ message: 'Email hoặc số điện thoại đã được tài khoản khác sử dụng.' });
       // Only explicitly allowed fields; never accept id, role, username or password.
-      const profile = await prisma.user.update({ where: { id: req.auth.user.id }, data: validation.data, select });
+      const profile = await prisma.$transaction(async tx => {
+        const saved = await tx.user.update({ where: { id: req.auth.user.id }, data: validation.data, select });
+        await audit(tx, req.auth.user.id, 'PERSONAL_PROFILE_UPDATED', 'USER', req.auth.user.id, { changedFields: Object.keys(validation.data) });
+        return saved;
+      });
       res.json({ profile: serialize(profile), message: 'Đã cập nhật thông tin cá nhân.' });
     } catch (error) {
       if (error.code === 'P2002') return res.status(409).json({ message: 'Email hoặc số điện thoại đã được tài khoản khác sử dụng.' });

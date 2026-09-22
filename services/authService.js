@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { randomUUID } = require('node:crypto');
+const { accountAvailable, activeAccountWhere } = require('./platformPolicy');
 
 const COOKIE_NAME = 'sg_restock_session';
 const TOKEN_OPTIONS = {
@@ -82,14 +83,19 @@ function createAuthService(prisma, config) {
       password,
       user?.passwordHash || dummyHash,
     );
-    if (!user || !user.isActive || !validPassword) return null;
-    const session = await prisma.authSession.create({
+    if (!accountAvailable(user) || !validPassword) return null;
+    const session = await prisma.$transaction(async tx => {
+      const current = await tx.user.findFirst({ where: { id: user.id, passwordHash: user.passwordHash, ...activeAccountWhere() } });
+      if (!current) return null;
+      return tx.authSession.create({
       data: {
         id: randomUUID(),
         userId: user.id,
         expiresAt: new Date(Date.now() + config.sessionSeconds * 1000),
       },
-    });
+      });
+    }, { isolationLevel: 'Serializable' });
+    if (!session) return null;
     const token = jwt.sign({ sid: session.id }, config.jwtSecret, {
       ...TOKEN_OPTIONS,
       subject: String(user.id),
@@ -120,7 +126,7 @@ function createAuthService(prisma, config) {
       !session ||
       session.expiresAt <= new Date() ||
       String(session.userId) !== payload.sub ||
-      !session.user.isActive
+      !accountAvailable(session.user)
     )
       return null;
     // Luôn đọc role mới nhất từ SQL Server, không tin role do trình duyệt gửi.

@@ -1,4 +1,4 @@
-const { validateProfileInput, validateProductInput } = require('../services/supplierService');
+const { validateProfileInput, validateProductInput, serializeProfile } = require('../services/supplierService');
 
 function idFrom(value) {
   const id = Number(value);
@@ -13,7 +13,7 @@ function createSupplierController(service) {
     async getProfile(req, res, next) {
       try {
         const profile = await service.getProfile(req.auth.user.id);
-        return res.json({ success: true, profile: profile ? { id: profile.id, businessName: profile.businessName, warehouseAddress: profile.warehouseAddress, deliveryRadiusKm: Number(profile.deliveryRadiusKm), deliveryFee: Number(profile.deliveryFee) } : null });
+        return res.json({ success: true, profile: profile ? serializeProfile(profile) : null });
       } catch (error) { return next(error); }
     },
     async saveProfile(req, res, next) {
@@ -21,8 +21,11 @@ function createSupplierController(service) {
       if (!validation.data) return res.status(400).json({ success: false, message: 'Thông tin gian hàng chưa hợp lệ.', errors: validation.errors });
       try {
         const profile = await service.upsertProfile(req.auth.user.id, validation.data);
-        return res.json({ success: true, profile: { id: profile.id, businessName: profile.businessName, warehouseAddress: profile.warehouseAddress, deliveryRadiusKm: Number(profile.deliveryRadiusKm), deliveryFee: Number(profile.deliveryFee) } });
+        return res.json({ success: true, profile: serializeProfile(profile) });
       } catch (error) { return next(error); }
+    },
+    async submitVerification(req, res, next) {
+      try { res.json({ profile: await service.submitVerification(req.auth.user.id) }); } catch (error) { next(error); }
     },
     async listProducts(req, res, next) {
       try { return res.json({ success: true, products: await service.listProducts(req.auth.user.id) }); } catch (error) { return next(error); }

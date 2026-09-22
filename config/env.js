@@ -22,11 +22,14 @@ function readConfig(env = process.env) {
   const port = Number(env.PORT || 5000);
   if (!Number.isInteger(port) || port < 1 || port > 65535)
     throw new Error('PORT không hợp lệ.');
+  const aiProvider = env.AI_PROVIDER || (env.GEMINI_API_KEY ? 'GEMINI' : 'OPENAI');
+  if (!['GEMINI', 'OPENAI'].includes(aiProvider)) throw new Error('AI_PROVIDER phải là GEMINI hoặc OPENAI.');
   return {
     mailTransport,
     smtp: { host: env.SMTP_HOST || '', port: Number(env.SMTP_PORT || 587), user: env.SMTP_USER || '', pass: env.SMTP_PASSWORD || '', from: env.SMTP_FROM || '' },
-    aiApiKey: env.OPENAI_API_KEY || '',
-    aiModel: env.OPENAI_MODEL || '',
+    aiProvider,
+    aiApiKey: (aiProvider === 'GEMINI' ? env.GEMINI_API_KEY : env.OPENAI_API_KEY) || '',
+    aiModel: (aiProvider === 'GEMINI' ? env.GEMINI_MODEL : env.OPENAI_MODEL) || '',
     jwtSecret: env.JWT_SECRET,
     origin,
     allowedOrigins,

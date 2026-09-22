@@ -1,10 +1,10 @@
 const express = require('express');
 const { requireRole } = require('../middlewares/authMiddleware');
 const { ROLES } = require('../config/roles');
+const { visibleSupplierWhere } = require('../services/platformPolicy');
 
 // Publish business details only, never the supplier's login or personal profile.
 const supplierSelect = { id: true, businessName: true, warehouseAddress: true, deliveryRadiusKm: true, deliveryFee: true };
-const visibleSupplier = { user: { isActive: true, role: { code: ROLES.SUPPLIER } } };
 const serializeSupplier = (supplier) => ({ ...supplier, deliveryRadiusKm: Number(supplier.deliveryRadiusKm), deliveryFee: Number(supplier.deliveryFee) });
 
 function createCatalogRoutes(prisma, requireAuth) {
@@ -14,7 +14,7 @@ function createCatalogRoutes(prisma, requireAuth) {
   router.get('/suppliers', async (req, res, next) => {
     try {
       const suppliers = await prisma.supplierProfile.findMany({
-        where: { ...visibleSupplier, products: { some: { isActive: true } } },
+        where: { ...visibleSupplierWhere(), products: { some: { isActive: true } } },
         select: supplierSelect,
         orderBy: [{ businessName: 'asc' }, { id: 'asc' }],
       });
@@ -37,7 +37,7 @@ function createCatalogRoutes(prisma, requireAuth) {
       const search = q.trim();
       const products = await prisma.supplierProduct.findMany({
         where: {
-          isActive: true, supplier: visibleSupplier,
+          isActive: true, supplier: visibleSupplierWhere(),
           ...(category ? { category } : {}),
           ...(inStock === 'true' ? { stockQty: { gt: 0 } } : {}),
           ...(minPrice !== '' || maxPrice !== '' ? { wholesalePrice: { ...(minPrice !== '' ? { gte: Number(minPrice) } : {}), ...(maxPrice !== '' ? { lte: Number(maxPrice) } : {}) } } : {}),

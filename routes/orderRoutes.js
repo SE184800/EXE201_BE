@@ -5,6 +5,7 @@ const { requireRole } = require('../middlewares/authMiddleware');
 const { normalizePhone } = require('../services/registrationValidation');
 const { serializeOrder } = require('../services/supplierService');
 const { orderQuery } = require('../services/orderQuery');
+const { visibleSupplierWhere, audit } = require('../services/platformPolicy');
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const problem = (status, message) => Object.assign(new Error(message), { status });
 const include = { buyer: true, items: true, supplier: true };
@@ -46,7 +47,7 @@ function createOrderRoutes(prisma, requireAuth) {
       const old = await previous();
       if (old) return res.json({ order: serialize(old) });
       const order = await prisma.$transaction(async tx => {
-        const products = await tx.supplierProduct.findMany({ where: { id: { in: lines.map(line => line.productId) }, isActive: true, supplier: { user: { isActive: true, role: { code: 'SUPPLIER' } } } }, include: { supplier: true } });
+        const products = await tx.supplierProduct.findMany({ where: { id: { in: lines.map(line => line.productId) }, isActive: true, supplier: visibleSupplierWhere() }, include: { supplier: true } });
         if (products.length !== lines.length) throw problem(409, 'Có sản phẩm đã ngừng bán. Tải lại nguồn hàng trước khi đặt.');
         const supplier = products[0].supplier;
         if (products.some(product => product.supplierId !== supplier.id)) throw problem(400, 'Mỗi đơn chỉ đặt hàng từ một chủ vựa.');
@@ -60,7 +61,10 @@ function createOrderRoutes(prisma, requireAuth) {
         const subtotal = snapshots.reduce((sum, line) => sum.add(line.lineTotal), new Prisma.Decimal(0));
         const total = subtotal.add(supplier.deliveryFee);
         if (total.greaterThan('1000000000000')) throw problem(400, 'Giá trị đơn vượt giới hạn 1.000 tỷ đồng. Vui lòng chia thành đơn nhỏ hơn.');
-        return tx.wholesaleOrder.create({ data: { requestId, requestHash, buyerId, supplierId: supplier.id, recipientName, recipientPhone, deliveryAddress, note: note || null, status: 'PENDING', subtotal, deliveryFee: supplier.deliveryFee, total, items: { create: snapshots } }, include });
+        const settings = await tx.platformSetting.findUniqueOrThrow({ where: { id: 1 } });
+        const created = await tx.wholesaleOrder.create({ data: { requestId, requestHash, buyerId, supplierId: supplier.id, supplierRegion: supplier.region, commissionRate: settings.commissionRate, recipientName, recipientPhone, deliveryAddress, note: note || null, status: 'PENDING', subtotal, deliveryFee: supplier.deliveryFee, total, items: { create: snapshots } }, include });
+        await audit(tx, buyerId, 'ORDER_CREATED', 'ORDER', created.id, { supplierId: supplier.id, subtotal: subtotal.toString(), commissionRate: settings.commissionRate.toString() });
+        return created;
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
       res.status(201).json({ order: serialize(order) });
     } catch (error) {

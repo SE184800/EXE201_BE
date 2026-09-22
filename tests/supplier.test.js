@@ -35,6 +35,7 @@ before(async () => {
 
 after(async () => {
   if (profile) await prisma.wholesaleOrder.deleteMany({ where: { supplierId: profile.id } });
+  await prisma.auditLog.deleteMany({ where: { actorId: { in: createdUserIds } } });
   await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
   await prisma.$disconnect();
 });
@@ -48,6 +49,7 @@ test('supplier core flow: setup, catalog, reject and approve order', async () =>
   const savedProfile = await request(app).put('/api/supplier/profile').set(csrf).set('Cookie', supplierCookie)
     .send({ businessName: 'Đại lý Minh Phát', warehouseAddress: '12 Nguyễn Trãi, Quận 5', deliveryRadiusKm: 15 }).expect(200);
   profile = savedProfile.body.profile;
+  await prisma.supplierProfile.update({ where: { id: profile.id }, data: { verificationStatus: 'APPROVED' } });
   assert.equal(profile.deliveryRadiusKm, 15);
 
   const created = await request(app).post('/api/supplier/products').set(csrf).set('Cookie', supplierCookie)
