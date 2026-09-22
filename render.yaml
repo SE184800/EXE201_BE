@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: supplymind-demo
+    runtime: node
+    plan: free
+    buildCommand: npm ci --include=dev && npm run db:generate
+    startCommand: npm run start:deploy
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 22.14.0
+      - key: NODE_ENV
+        value: production
+      - key: SERVE_WEB
+        value: "true"
+      - key: TRUST_PROXY_HOPS
+        value: "1"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false

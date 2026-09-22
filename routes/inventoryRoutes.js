@@ -12,6 +12,11 @@ function validateItem(body) {
   if (!name || name.length > 100 || !unit || unit.length > 20 ||
     ![body.quantity, ...(body.lowThreshold === undefined ? [] : [body.lowThreshold])].every((value) => Number.isInteger(value) && value >= 0 && value <= 2147483647)) return null;
   const data = { name, unit, quantity: body.quantity };
+  for (const key of ['purchasePrice', 'sellingPrice']) {
+    if (body[key] === undefined) continue;
+    if (body[key] !== null && (!Number.isInteger(body[key]) || body[key] < 0 || body[key] > 2147483647)) return null;
+    data[key] = body[key];
+  }
   if (body.lowThreshold !== undefined) data.lowThreshold = body.lowThreshold;
   // Missing field preserves the existing date for older clients; empty clears it.
   if (body.expiryDate !== undefined) {
@@ -58,7 +63,7 @@ function createInventoryRoutes(prisma, requireAuth) {
   });
   async function save(req, res, next) {
     const data = validateItem(req.body);
-    if (!data) return res.status(400).json({ message: 'Kiểm tra tên hàng, đơn vị, số lượng/ngưỡng nguyên không âm và hạn sử dụng hợp lệ (YYYY-MM-DD).' });
+    if (!data) return res.status(400).json({ message: 'Kiểm tra tên hàng, đơn vị, số lượng và giá tiền nguyên không âm (tối đa 2.147.483.647), hạn dùng hợp lệ (YYYY-MM-DD).' });
     const ownerId = req.auth.user.id;
     try {
       if (req.method === 'POST') {

@@ -1,6 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
+const path = require('node:path');
+const fs = require('node:fs');
 const { createAuthService } = require('./services/authService');
 const {
   createRequireAuth,
@@ -10,14 +12,21 @@ const { createAuthRoutes } = require('./routes/authRoutes');
 const { createUserRoutes } = require('./routes/userRoutes');
 const { ROLES } = require('./config/roles');
 const { createInventoryRoutes } = require('./routes/inventoryRoutes');
+<<<<<<< Updated upstream
 const { createSupplierRoutes } = require('./routes/supplierRoutes');
 const { createCatalogRoutes } = require('./routes/catalogRoutes');
+=======
+const { createProfileRoutes } = require('./routes/profileRoutes');
+const { createRestockRoutes } = require('./routes/restockRoutes');
+const { createAdvisorRoutes } = require('./routes/advisorRoutes');
+>>>>>>> Stashed changes
 
 function createApp(prisma, config) {
   const app = express();
   const authService = createAuthService(prisma, config);
   const requireAuth = createRequireAuth(authService);
   app.disable('x-powered-by');
+  if (config.trustProxyHops) app.set('trust proxy', config.trustProxyHops);
   app.use(cors({
     origin: (requestOrigin, callback) => {
       if (!requestOrigin || config.allowedOrigins.includes(requestOrigin)) return callback(null, requestOrigin || config.origin);
@@ -43,14 +52,21 @@ function createApp(prisma, config) {
     }
     next();
   });
-  app.get('/', (req, res) =>
+  app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
+  if (!config.serveWeb) app.get('/', (req, res) =>
     res.json({ name: 'SupplyMind AI API', status: 'running' }),
   );
   app.use('/api/auth', createAuthRoutes(authService, requireAuth, config));
   app.use('/api/users', createUserRoutes(prisma, requireAuth));
   app.use('/api/inventory', createInventoryRoutes(prisma, requireAuth));
+<<<<<<< Updated upstream
   app.use('/api/supplier', createSupplierRoutes(prisma, requireAuth));
   app.use('/api/catalog', createCatalogRoutes(prisma, requireAuth));
+=======
+  app.use('/api/profile', createProfileRoutes(prisma, requireAuth));
+  app.use('/api/restock', createRestockRoutes(prisma, requireAuth));
+  app.use('/api/advisor', createAdvisorRoutes(prisma, requireAuth, config));
+>>>>>>> Stashed changes
   for (const [path, role] of [
     ['store', ROLES.STORE_OWNER],
     ['supplier', ROLES.SUPPLIER],
@@ -64,6 +80,19 @@ function createApp(prisma, config) {
         res.json({ success: true, user: req.auth.user, workspace: path });
       },
     );
+  }
+  if (config.serveWeb) {
+    const webRoot = path.join(__dirname, 'public');
+    const index = path.join(webRoot, 'index.html');
+    if (!fs.existsSync(index)) throw new Error('Chưa có web build. Chạy npm run deploy:prepare trước khi deploy.');
+    app.use(express.static(webRoot, { index: false, dotfiles: 'deny' }));
+    app.get('*', (req, res, next) => {
+      let route;
+      try { route = decodeURIComponent(req.path); } catch { return next(); }
+      if (route === '/api' || route.startsWith('/api/') || route.split('/').some(part => part.startsWith('.')) || path.extname(route) || !req.accepts('html')) return next();
+      res.set('Cache-Control', 'no-cache');
+      res.sendFile(index);
+    });
   }
   app.use((req, res) =>
     res.status(404).json({ success: false, message: 'Không tìm thấy API.' }),

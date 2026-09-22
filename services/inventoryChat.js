@@ -15,9 +15,9 @@ function answerInventory(message, items, now = new Date()) {
     const soon = /\b(sap|gan)\b/.test(text);
     matches = items.filter((item) => {
       const days = expiryInfo(item.expiryDate, now).daysUntilExpiry;
-      return item.quantity > 0 && days !== null && (soon ? days >= 0 && days <= 7 : days < 0);
+      return item.quantity > 0 && days !== null && (soon ? days >= 0 && days <= 15 : days < 0);
     });
-    intro = soon ? 'Hàng còn tồn sẽ hết hạn trong 7 ngày tới (gồm hôm nay):' : 'Hàng còn tồn đã quá hạn:';
+    intro = soon ? 'Hàng còn tồn sẽ hết hạn trong 15 ngày tới (gồm hôm nay):' : 'Hàng còn tồn đã quá hạn:';
     if (!matches.length) intro = 'Không có hàng còn tồn phù hợp. Sản phẩm chưa nhập hạn sử dụng không được tính.';
   } else if (!expiryQuestion && /\b(sap het|gan het|duoi nguong|can nhap)\b/.test(text)) {
     matches = items.filter((item) => item.quantity <= item.lowThreshold);
@@ -45,3 +45,4 @@ function answerInventory(message, items, now = new Date()) {
   };
 }
 module.exports = { answerInventory };
+

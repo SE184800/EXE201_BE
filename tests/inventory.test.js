@@ -5,6 +5,18 @@ const request = require('supertest');
 const { answerInventory } = require('../services/inventoryChat');
 const { createInventoryRoutes, validateItem } = require('../routes/inventoryRoutes');
 const { expiryInfo } = require('../services/inventoryExpiry');
+test('cảnh báo hết hạn bao gồm ngày thứ 15, loại ngày 16 và hàng hết tồn', () => {
+  const now = new Date('2026-09-21T12:00:00Z');
+  const stock = [
+    { name: 'Trong 15 ngày', quantity: 1, unit: 'hộp', expiryDate: '2026-10-06' },
+    { name: 'Sau 16 ngày', quantity: 1, unit: 'hộp', expiryDate: '2026-10-07' },
+    { name: 'Không còn tồn', quantity: 0, unit: 'hộp', expiryDate: '2026-10-01' },
+  ];
+  const reply = answerInventory('Hàng nào sắp hết hạn?', stock, now);
+  assert.equal(reply.items.length, 1);
+  assert.equal(reply.items[0].name, 'Trong 15 ngày');
+  assert.match(reply.answer, /15 ngày tới/);
+});
 
 test('ngày hết hạn đúng lịch Việt Nam, ranh giới nửa đêm và ngày nhuận', () => {
   assert.equal(expiryInfo(null).daysUntilExpiry, null);

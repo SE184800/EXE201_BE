@@ -1,5 +1,13 @@
 # Bàn giao chức năng kho tạp hóa và chatbox
 
+## Cập nhật hồ sơ và cảnh báo 15 ngày
+
+Đã áp dụng migration có sẵn `202609210003_unique_registration_contacts` trên máy hiện tại khi kiểm thử hồ sơ. Migration thêm hai UNIQUE INDEX có lọc NULL trên users.email/users.phone và thay hai index thường cũ. Bạn cùng nhóm cần nhận migration này và chạy `npm run db:migrate`; không xóa dữ liệu trùng tự động. Không thêm cột/bảng cho hồ sơ. Trang hồ sơ và nút Đăng xuất truy cập được từ góc trên bên phải dashboard.
+
+Cảnh báo sắp hết hạn hiện tính từ hôm nay đến hết ngày thứ 15 (gồm cả hai mốc), chỉ tính hàng còn tồn, đồng bộ dashboard/bộ lọc/chatbox. Quy tắc này thay cho 7 ngày trong các ghi chú cũ.
+
+Thêm GET/PUT `/api/profile` yêu cầu đăng nhập; PUT cần CSRF. Cho sửa name, email, phone, dateOfBirth; liên hệ và ngày sinh có thể để trống. Chặn ngày không hợp lệ, ngày tương lai, email/điện thoại trùng tài khoản khác. Không cho sửa id, username, role, isActive hoặc mật khẩu qua endpoint này. Dùng các cột users hiện có, không có thay đổi cấu trúc SQL trong đợt này.
+
 ## Ghi nhận bán hàng và lịch sử nhập xuất
 
 Đã áp dụng migration 005 trên máy hiện tại ngày 21/09/2026, tạo dòng tồn đầu kỳ cho hàng hiện có. Không thêm giao dịch mua/bán mẫu vào tài khoản người dùng. FE build/lint đạt; 17/17 test backend đạt, gồm giao dịch SQL, chống gửi lặp, bán đồng thời, phân quyền lịch sử và chặn ghi đè dữ liệu kho cũ.
@@ -106,3 +114,15 @@ Tất cả endpoint cần cookie đăng nhập và role STORE_OWNER; request ghi
 7. Chủ vựa/admin không được gọi API kho này.
 
 Test không cần DB: `node --test tests/inventory.test.js`. Toàn bộ test: `npm test` cần SQL Server đã migrate và có role. FE: `npm run build`, `npm run lint`.
+
+Bổ sung dự báo/kế hoạch nhập: xem INVENTORY_HANDOFF.md ở thư mục gốc EXE201 và hai file SupplyMindAI_KeHoachNhap.sql, SupplyMindAI_30SanPhamMau.sql. Migration mới: 202609210006_restock_plans. Dữ liệu mẫu [Mẫu] có lịch sử giả lập, chỉ dùng test.
+
+## Giá sản phẩm (202609220001_product_prices)
+- inventory_items thêm purchasePrice, sellingPrice INT NULL, không âm, VND nguyên trên một đơn vị hàng.
+- restock_plan_lines thêm purchasePrice INT NULL: giá nhập chụp lại khi lưu kế hoạch. Đổi giá hàng không đổi kế hoạch đã lưu; sửa/lưu lại kế hoạch sẽ lấy giá mới.
+- Giá bỏ trống là NULL, khác 0 đồng. API cũ không gửi giá sẽ giữ giá hiện tại. Tổng tiền FE dùng BigInt tránh mất chính xác khi nhân số lớn. Mặt hàng thiếu giá được báo rõ, không xem là miễn phí.
+- Chưa có giá theo lô, doanh thu/lợi nhuận giao dịch hoặc phí vận chuyển/chiết khấu.
+- SupplyMindAI_GiaSanPham.sql: thay đổi schema. SupplyMindAI_GiaMau.sql: giá giả định cho 32 sản phẩm, đổi @username trước khi gửi/chạy ở máy khác. Chạy schema trước dữ liệu giá, không chạy lại schema đã migrate.
+- Đã điền giá demo vào kho duy11; chỉ điền ô NULL. Script chạy lại: node prisma/seed-demo-prices.js duy11.
+
+Chatbot và lịch nhập theo thứ: xem AI_SETUP.md. Không có migration SQL mới. Thời tiết đã bỏ. Chưa có key/model thì dùng tra cứu cơ bản và ghi rõ chưa bật AI.

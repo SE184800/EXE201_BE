@@ -32,13 +32,19 @@ model User {
   role         Role     @relation(fields: [roleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sessions     AuthSession[]
   inventory    InventoryItem[]
+<<<<<<< Updated upstream
   supplierProfile SupplierProfile?
   buyerOrders WholesaleOrder[] @relation("buyerOrders")
+=======
+  restockPlans RestockPlan[]
+>>>>>>> Stashed changes
   @@index([roleId])
   @@map("users")
 }
 
 model InventoryItem {
+  purchasePrice Int?
+  sellingPrice Int?
   id           Int      @id @default(autoincrement())
   ownerId      Int
   name         String   @db.NVarChar(100)
@@ -146,4 +152,37 @@ model AuthSession {
   @@index([userId])
   @@index([expiresAt])
   @@map("auth_sessions")
+}
+
+model RestockPlan {
+  id          String   @id @default(uuid()) @db.VarChar(36)
+  ownerId     Int
+  name        String   @db.NVarChar(100)
+  note        String   @db.NVarChar(500)
+  horizonDays Int
+  safetyDays  Int
+  requestHash String   @db.VarChar(64)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  lines       RestockPlanLine[]
+  @@index([ownerId, createdAt])
+  @@map("restock_plans")
+}
+
+model RestockPlanLine {
+ purchasePrice Int?
+  id                Int @id @default(autoincrement())
+  planId            String @db.VarChar(36)
+  sourceItemId      Int
+  productName       String @db.NVarChar(100)
+  unit              String @db.NVarChar(20)
+  quantity          Int
+  stockSnapshot     Int
+  suggestedQuantity Int?
+  averageDailySales Float?
+  observedDays      Int
+  plan              RestockPlan @relation(fields: [planId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  @@unique([planId, sourceItemId])
+  @@map("restock_plan_lines")
 }

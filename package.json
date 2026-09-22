@@ -5,6 +5,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "start:deploy": "node scripts/start-deploy.js",
+    "deploy:prepare": "node scripts/prepare-web.js",
+    "db:migrate:cloud": "node scripts/migrate-cloud.js",
     "dev": "nodemon server.js",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
