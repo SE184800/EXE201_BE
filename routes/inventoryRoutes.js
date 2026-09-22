@@ -38,8 +38,15 @@ function createInventoryRoutes(prisma, requireAuth) {
   router.get('/history', async (req, res, next) => {
     const page = Number(req.query.page || 1);
     if (!Number.isInteger(page) || page < 1 || page > 100000) return res.status(400).json({ message: 'Trang không hợp lệ.' });
+    const { itemId, type, from, to } = req.query;
+    const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && value >= '1900-01-01' && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
+    if ((itemId !== undefined && (typeof itemId !== 'string' || !/^\d+$/.test(itemId) || Number(itemId) < 1 || Number(itemId) > 2147483647)) ||
+      (type !== undefined && !['OPENING', 'SALE', 'RECEIPT', 'ADJUSTMENT'].includes(type)) ||
+      (from !== undefined && !validDate(from)) || (to !== undefined && !validDate(to)) || (from && to && from > to)) return res.status(400).json({ message: 'Bộ lọc lịch sử hoặc khoảng ngày không hợp lệ.' });
+    const where = { item: { ownerId: req.auth.user.id }, ...(itemId ? { itemId: Number(itemId) } : {}), ...(type ? { type } : {}),
+      ...(from || to ? { createdAt: { ...(from ? { gte: new Date(`${from}T00:00:00+07:00`) } : {}), ...(to ? { lt: new Date(new Date(`${to}T00:00:00+07:00`).getTime() + 86400000) } : {}) } } : {}) };
     try {
-      const rows = await prisma.stockMovement.findMany({ where: { item: { ownerId: req.auth.user.id } }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: (page - 1) * 20, take: 21 });
+      const rows = await prisma.stockMovement.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: (page - 1) * 20, take: 21 });
       res.json({ movements: rows.slice(0, 20), hasMore: rows.length > 20 });
     } catch (error) { next(error); }
   });
@@ -47,7 +54,7 @@ function createInventoryRoutes(prisma, requireAuth) {
     const id = Number(req.params.id);
     const { type, quantity, requestId, note = '' } = req.body || {};
     if (!Number.isInteger(id) || id < 1 || id > 2147483647 || !['SALE', 'RECEIPT'].includes(type) || !Number.isInteger(quantity) || quantity < 1 || quantity > 2147483647 || typeof note !== 'string' || note.length > 250 || typeof requestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)) return res.status(400).json({ message: 'Chọn nhập/bán hàng, số lượng nguyên dương và ghi chú tối đa 250 ký tự.' });
-    try { res.json({ movement: await stock.move(req.auth.user.id, id, { type, quantity, requestId, note: note.trim() }) }); }
+    try { res.json({ movement: await stock.move(req.auth.user.id, id, { type, quantity, requestId, note: note.trim(), allowExpiredSale: req.body.allowExpiredSale === true }) }); }
     catch (error) { if (error.status) return res.status(error.status).json({ message: error.message }); next(error); }
   });
   const list = (ownerId) => prisma.inventoryItem.findMany({ where: { ownerId }, orderBy: { name: 'asc' } });

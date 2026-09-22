@@ -13,7 +13,7 @@ function createSupplierController(service) {
     async getProfile(req, res, next) {
       try {
         const profile = await service.getProfile(req.auth.user.id);
-        return res.json({ success: true, profile: profile ? { id: profile.id, businessName: profile.businessName, warehouseAddress: profile.warehouseAddress, deliveryRadiusKm: Number(profile.deliveryRadiusKm) } : null });
+        return res.json({ success: true, profile: profile ? { id: profile.id, businessName: profile.businessName, warehouseAddress: profile.warehouseAddress, deliveryRadiusKm: Number(profile.deliveryRadiusKm), deliveryFee: Number(profile.deliveryFee) } : null });
       } catch (error) { return next(error); }
     },
     async saveProfile(req, res, next) {
@@ -21,7 +21,7 @@ function createSupplierController(service) {
       if (!validation.data) return res.status(400).json({ success: false, message: 'Thông tin gian hàng chưa hợp lệ.', errors: validation.errors });
       try {
         const profile = await service.upsertProfile(req.auth.user.id, validation.data);
-        return res.json({ success: true, profile: { id: profile.id, businessName: profile.businessName, warehouseAddress: profile.warehouseAddress, deliveryRadiusKm: Number(profile.deliveryRadiusKm) } });
+        return res.json({ success: true, profile: { id: profile.id, businessName: profile.businessName, warehouseAddress: profile.warehouseAddress, deliveryRadiusKm: Number(profile.deliveryRadiusKm), deliveryFee: Number(profile.deliveryFee) } });
       } catch (error) { return next(error); }
     },
     async listProducts(req, res, next) {
@@ -53,7 +53,7 @@ function createSupplierController(service) {
       } catch (error) { return next(error); }
     },
     async listOrders(req, res, next) {
-      try { return res.json({ success: true, orders: await service.listOrders(req.auth.user.id) }); } catch (error) { return next(error); }
+      try { return res.json({ success: true, ...await service.listOrders(req.auth.user.id, req.query) }); } catch (error) { return next(error); }
     },
     async updateOrderStatus(req, res, next) {
       const orderId = idFrom(req.params.orderId);

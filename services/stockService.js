@@ -1,4 +1,5 @@
 const { randomUUID } = require('node:crypto');
+const { expiryInfo } = require('./inventoryExpiry');
 function problem(status, message) { return Object.assign(new Error(message), { status }); }
 async function record(tx, item, before, type, note, id = randomUUID()) {
   return tx.stockMovement.create({ data: { id, itemId: item.id, type, quantityChange: item.quantity - before, quantityBefore: before, quantityAfter: item.quantity, productName: item.name, unit: item.unit, note } });
@@ -37,6 +38,7 @@ function createStockService(prisma) {
       return await prisma.$transaction(async (tx) => {
         const item = await tx.inventoryItem.findFirst({ where: { id, ownerId } });
         if (!item) throw problem(404, 'Không tìm thấy sản phẩm trong kho của bạn.');
+        if (input.type === 'SALE' && expiryInfo(item.expiryDate).daysUntilExpiry < 0 && !input.allowExpiredSale) throw problem(409, 'Mặt hàng đã hết hạn. Kiểm tra lại lô hàng và xác nhận cảnh báo trước khi ghi nhận bán.');
         const after = item.quantity + (input.type === 'SALE' ? -input.quantity : input.quantity);
         if (after < 0) throw problem(409, `Kho chỉ còn ${item.quantity} ${item.unit}, không đủ để bán.`);
         if (after > 2147483647) throw problem(400, 'Số lượng vượt giới hạn lưu trữ.');

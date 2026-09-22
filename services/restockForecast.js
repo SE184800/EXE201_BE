@@ -30,7 +30,7 @@ function forecastItem(item, movements, horizonDays = 7, safetyDays = 2, now = ne
   if (expiry.daysUntilExpiry !== null && expiry.daysUntilExpiry < 0) notes.push('Tồn đã quá hạn không được tính là hàng có thể sử dụng.');
   else if (rate !== null && usableStock < item.quantity) notes.push('Hạn gần nhất có thể khiến một phần tồn không bán kịp; ưu tiên xử lý hàng cũ, nhập từng đợt.');
   if (!item.expiryDate) notes.push('Chưa nhập hạn dùng; tạm tính toàn bộ tồn là có thể sử dụng.');
-  return { purchasePrice: item.purchasePrice ?? null, itemId: item.id, name: item.name, unit: item.unit, quantity: item.quantity, usableStock, expiryDate: item.expiryDate,
+  return { purchasePrice: item.purchasePrice ?? null, lowThreshold: item.lowThreshold ?? 5, itemId: item.id, name: item.name, unit: item.unit, quantity: item.quantity, usableStock, expiryDate: item.expiryDate,
     observedDays, soldQuantity, salesDays, averageDailySales: rate === null ? null : Number(rate.toFixed(4)),
     forecastDemand: rate === null ? null : Math.ceil(rate * horizonDays),
     daysUntilStockout: usableStock === 0 ? 0 : rate === null ? null : Number((usableStock / rate).toFixed(1)),

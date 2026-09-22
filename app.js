@@ -12,14 +12,13 @@ const { createAuthRoutes } = require('./routes/authRoutes');
 const { createUserRoutes } = require('./routes/userRoutes');
 const { ROLES } = require('./config/roles');
 const { createInventoryRoutes } = require('./routes/inventoryRoutes');
-<<<<<<< Updated upstream
 const { createSupplierRoutes } = require('./routes/supplierRoutes');
 const { createCatalogRoutes } = require('./routes/catalogRoutes');
-=======
 const { createProfileRoutes } = require('./routes/profileRoutes');
 const { createRestockRoutes } = require('./routes/restockRoutes');
 const { createAdvisorRoutes } = require('./routes/advisorRoutes');
->>>>>>> Stashed changes
+const { createOrderRoutes } = require('./routes/orderRoutes');
+const { createPasswordRoutes } = require('./routes/passwordRoutes');
 
 function createApp(prisma, config) {
   const app = express();
@@ -57,16 +56,15 @@ function createApp(prisma, config) {
     res.json({ name: 'SupplyMind AI API', status: 'running' }),
   );
   app.use('/api/auth', createAuthRoutes(authService, requireAuth, config));
+  app.use('/api/auth', createPasswordRoutes(prisma, requireAuth, config));
   app.use('/api/users', createUserRoutes(prisma, requireAuth));
   app.use('/api/inventory', createInventoryRoutes(prisma, requireAuth));
-<<<<<<< Updated upstream
   app.use('/api/supplier', createSupplierRoutes(prisma, requireAuth));
   app.use('/api/catalog', createCatalogRoutes(prisma, requireAuth));
-=======
+  app.use('/api/orders', createOrderRoutes(prisma, requireAuth));
   app.use('/api/profile', createProfileRoutes(prisma, requireAuth));
   app.use('/api/restock', createRestockRoutes(prisma, requireAuth));
   app.use('/api/advisor', createAdvisorRoutes(prisma, requireAuth, config));
->>>>>>> Stashed changes
   for (const [path, role] of [
     ['store', ROLES.STORE_OWNER],
     ['supplier', ROLES.SUPPLIER],

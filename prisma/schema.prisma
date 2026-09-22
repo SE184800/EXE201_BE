@@ -32,12 +32,10 @@ model User {
   role         Role     @relation(fields: [roleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sessions     AuthSession[]
   inventory    InventoryItem[]
-<<<<<<< Updated upstream
   supplierProfile SupplierProfile?
   buyerOrders WholesaleOrder[] @relation("buyerOrders")
-=======
   restockPlans RestockPlan[]
->>>>>>> Stashed changes
+  passwordResets PasswordReset[]
   @@index([roleId])
   @@map("users")
 }
@@ -77,6 +75,7 @@ model StockMovement {
 }
 
 model SupplierProfile {
+  deliveryFee       Decimal  @default(0) @db.Decimal(18, 2)
   id                Int      @id @default(autoincrement())
   userId            Int      @unique
   businessName      String   @db.NVarChar(150)
@@ -91,6 +90,8 @@ model SupplierProfile {
 }
 
 model SupplierProduct {
+  category        String   @default("Khác") @db.NVarChar(60)
+  imageUrl        String?  @db.NVarChar(1000)
   id              Int      @id @default(autoincrement())
   supplierId      Int
   name            String   @db.NVarChar(150)
@@ -108,6 +109,11 @@ model SupplierProduct {
 }
 
 model WholesaleOrder {
+  requestId     String?  @db.VarChar(36)
+  requestHash   String?  @db.VarChar(64)
+  recipientName String?  @db.NVarChar(100)
+  recipientPhone String? @db.VarChar(20)
+  deliveryAddress String? @db.NVarChar(500)
   id            Int      @id @default(autoincrement())
   supplierId    Int
   buyerId       Int
@@ -152,6 +158,17 @@ model AuthSession {
   @@index([userId])
   @@index([expiresAt])
   @@map("auth_sessions")
+}
+
+model PasswordReset {
+  tokenHash String @id @db.VarChar(64)
+  userId Int
+  passwordSnapshot String @db.VarChar(255)
+  expiresAt DateTime
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_resets")
 }
 
 model RestockPlan {

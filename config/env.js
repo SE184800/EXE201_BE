@@ -3,6 +3,8 @@ function readConfig(env = process.env) {
     throw new Error('JWT_SECRET phải có ít nhất 32 ký tự. Kiểm tra file .env.');
   }
   const production = env.NODE_ENV === 'production';
+  const mailTransport = env.MAIL_TRANSPORT || (env.SMTP_HOST ? 'smtp' : production ? 'disabled' : 'file');
+  if (!['smtp', 'file', 'disabled'].includes(mailTransport) || (production && mailTransport === 'file')) throw new Error('Production chỉ dùng SMTP hoặc tắt khôi phục mật khẩu; không dùng hộp thư test.');
   const vercelUrl = env.VERCEL === '1' && (env.VERCEL_PROJECT_PRODUCTION_URL || env.VERCEL_URL);
   const publicUrl = env.FRONTEND_URL || env.RENDER_EXTERNAL_URL || (vercelUrl && `https://${vercelUrl}`);
   if (production && !publicUrl) throw new Error('Production cần FRONTEND_URL hoặc RENDER_EXTERNAL_URL.');
@@ -21,6 +23,8 @@ function readConfig(env = process.env) {
   if (!Number.isInteger(port) || port < 1 || port > 65535)
     throw new Error('PORT không hợp lệ.');
   return {
+    mailTransport,
+    smtp: { host: env.SMTP_HOST || '', port: Number(env.SMTP_PORT || 587), user: env.SMTP_USER || '', pass: env.SMTP_PASSWORD || '', from: env.SMTP_FROM || '' },
     aiApiKey: env.OPENAI_API_KEY || '',
     aiModel: env.OPENAI_MODEL || '',
     jwtSecret: env.JWT_SECRET,

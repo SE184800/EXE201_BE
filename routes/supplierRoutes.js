@@ -15,6 +15,7 @@ function createSupplierRoutes(prisma, requireAuth) {
   router.get('/orders', controller.listOrders);
   router.patch('/orders/:orderId/status', controller.updateOrderStatus);
   router.use((error, req, res, next) => {
+    if (error.status) return res.status(error.status).json({ message: error.message });
     if (error.code === 'SUPPLIER_PROFILE_REQUIRED') return res.status(409).json({ message: error.message });
     if (error.code === 'STALE_PRODUCT') return res.status(409).json({ message: 'Sản phẩm vừa thay đổi. Tải lại sản phẩm rồi bấm Sửa sản phẩm để lấy tồn kho mới.' });
     if (error.code === 'P2034') return res.status(409).json({ message: 'Dữ liệu vừa thay đổi. Vui lòng tải lại và thử lại.' });

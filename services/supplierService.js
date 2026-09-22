@@ -27,6 +27,7 @@ function hasTwoDecimals(value) {
 
 function serializeProduct(product) {
   return {
+    category: product.category, imageUrl: product.imageUrl,
     id: product.id,
     name: product.name,
     packaging: product.packaging,
@@ -41,6 +42,7 @@ function serializeProduct(product) {
 
 function serializeOrder(order) {
   return {
+    recipientName: order.recipientName, recipientPhone: order.recipientPhone, deliveryAddress: order.deliveryAddress,
     id: order.id,
     status: order.status,
     statusLabel: STATUS_LABELS[order.status] || order.status,
@@ -66,10 +68,11 @@ function validateProfileInput(body = {}) {
   const warehouseAddress = typeof body.warehouseAddress === 'string' ? body.warehouseAddress.trim().replace(/\s+/g, ' ') : '';
   const deliveryRadiusKm = typeof body.deliveryRadiusKm === 'number' ? body.deliveryRadiusKm : NaN;
   const errors = {};
+  if (body.deliveryFee !== undefined && (typeof body.deliveryFee !== 'number' || !hasTwoDecimals(body.deliveryFee) || body.deliveryFee < 0 || body.deliveryFee > 1000000000)) errors.deliveryFee = 'Phí giao hàng từ 0 đến 1 tỷ đồng, tối đa 2 số thập phân.';
   if (businessName.length < 2 || businessName.length > 150) errors.businessName = 'Tên gian hàng cần từ 2 đến 150 ký tự.';
   if (warehouseAddress.length < 5 || warehouseAddress.length > 255) errors.warehouseAddress = 'Địa chỉ kho cần từ 5 đến 255 ký tự.';
   if (!hasTwoDecimals(deliveryRadiusKm) || deliveryRadiusKm < 0.01 || deliveryRadiusKm > 500) errors.deliveryRadiusKm = 'Bán kính giao hàng từ 0,01 đến 500 km, tối đa 2 chữ số thập phân.';
-  return Object.keys(errors).length ? { errors } : { data: { businessName, warehouseAddress, deliveryRadiusKm } };
+  return Object.keys(errors).length ? { errors } : { data: { businessName, warehouseAddress, deliveryRadiusKm, ...(body.deliveryFee === undefined ? {} : { deliveryFee: body.deliveryFee }) } };
 }
 
 function validateProductInput(body = {}) {
@@ -80,13 +83,29 @@ function validateProductInput(body = {}) {
   const stockQty = typeof body.stockQty === 'number' ? body.stockQty : NaN;
   const moq = typeof body.moq === 'number' ? body.moq : NaN;
   const errors = {};
+  const extras = {};
+  if (body.category !== undefined) {
+    if (!['Đồ uống', 'Thực phẩm', 'Gia vị', 'Hóa phẩm', 'Chăm sóc cá nhân', 'Khác'].includes(body.category)) errors.category = 'Chọn danh mục sản phẩm hợp lệ.';
+    else extras.category = body.category;
+  }
+  if (body.imageUrl !== undefined) {
+    const imageUrl = typeof body.imageUrl === 'string' ? body.imageUrl.trim() : body.imageUrl;
+    if (imageUrl === '' || imageUrl === null) extras.imageUrl = null;
+    else {
+      try {
+        const url = new URL(imageUrl);
+        if (typeof imageUrl !== 'string' || imageUrl.length > 1000 || url.protocol !== 'https:' || url.username || url.password) throw new Error();
+        extras.imageUrl = url.href;
+      } catch { errors.imageUrl = 'Ảnh cần đường dẫn HTTPS hợp lệ, tối đa 1.000 ký tự.'; }
+    }
+  }
   if (name.length < 2 || name.length > 150) errors.name = 'Tên sản phẩm cần từ 2 đến 150 ký tự.';
   if (!packaging || packaging.length > 50) errors.packaging = 'Nhập quy cách đóng gói, ví dụ thùng, lốc hoặc bao.';
   if (!hasTwoDecimals(wholesalePrice) || wholesalePrice < 0.01 || wholesalePrice > 1_000_000_000) errors.wholesalePrice = 'Giá sỉ từ 0,01 đến 1 tỷ đồng, tối đa 2 chữ số thập phân.';
   if (!Number.isInteger(stockQty) || stockQty < 0 || stockQty > 2147483647) errors.stockQty = 'Tồn kho phải là số nguyên từ 0.';
   if (!Number.isInteger(moq) || moq < 1 || moq > 2147483647) errors.moq = 'MOQ phải là số nguyên từ 1.';
   if (body.isActive !== undefined && typeof body.isActive !== 'boolean') errors.isActive = 'Trạng thái đăng bán không hợp lệ.';
-  return Object.keys(errors).length ? { errors } : { data: { name, packaging, wholesalePrice, stockQty, moq, ...(body.isActive === undefined ? {} : { isActive: body.isActive }) } };
+  return Object.keys(errors).length ? { errors } : { data: { name, packaging, wholesalePrice, stockQty, moq, ...extras, ...(body.isActive === undefined ? {} : { isActive: body.isActive }) } };
 }
 
 function createSupplierService(prisma) {
@@ -140,14 +159,16 @@ function createSupplierService(prisma) {
     return serializeProduct(await prisma.supplierProduct.update({ where: { id: productId }, data: { isActive: false } }));
   }
 
-  async function listOrders(userId) {
+  async function listOrders(userId, query = {}) {
     const profile = await requireProfile(userId);
-    const orders = await prisma.wholesaleOrder.findMany({
-      where: { supplierId: profile.id },
+    const { page, status } = require('./orderQuery').orderQuery(query);
+    const where = { supplierId: profile.id, ...(status ? { status } : {}) };
+    const [orders, total] = await Promise.all([prisma.wholesaleOrder.findMany({
+      where,
       include: { buyer: true, items: true },
-      orderBy: { createdAt: 'desc' },
-    });
-    return orders.map(serializeOrder);
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 21, skip: (page - 1) * 20,
+    }), prisma.wholesaleOrder.count({ where })]);
+    return { orders: orders.slice(0, 20).map(serializeOrder), total, page, hasMore: orders.length > 20 };
   }
 
   async function updateOrderStatus(userId, orderId, status, rejectReason) {
@@ -204,7 +225,7 @@ function createSupplierService(prisma) {
       prisma.wholesaleOrder.aggregate({ where: { supplierId: profile.id, status: 'DELIVERED' }, _sum: { total: true } }),
     ]);
     return {
-      profile: { id: profile.id, businessName: profile.businessName, warehouseAddress: profile.warehouseAddress, deliveryRadiusKm: numberValue(profile.deliveryRadiusKm) },
+      profile: { id: profile.id, businessName: profile.businessName, warehouseAddress: profile.warehouseAddress, deliveryRadiusKm: numberValue(profile.deliveryRadiusKm), deliveryFee: numberValue(profile.deliveryFee) },
       products: products.map(serializeProduct), orders: orders.map(serializeOrder),
       summary: {
         productCount: products.filter((product) => product.isActive).length,
@@ -221,4 +242,4 @@ function createSupplierService(prisma) {
   };
 }
 
-module.exports = { createSupplierService, validateProfileInput, validateProductInput, ORDER_STATUSES, STATUS_LABELS };
+module.exports = { createSupplierService, validateProfileInput, validateProductInput, ORDER_STATUSES, STATUS_LABELS, serializeOrder };
