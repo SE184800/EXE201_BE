@@ -28,12 +28,26 @@ function isTransientDatabaseError(error) {
 }
 
 async function withDatabaseRetry(operation) {
+  const delays = [1000, 2000, 4000, 6000, 8000, 10000];
+
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await operation();
     } catch (error) {
-      if (!isTransientDatabaseError(error) || attempt >= 2) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 200 * 2 ** attempt));
+      if (
+        !isTransientDatabaseError(error) ||
+        attempt >= delays.length
+      ) {
+        throw error;
+      }
+
+      console.log(
+        `Database waking up, retry ${attempt + 1}/${delays.length}...`
+      );
+
+      await new Promise((resolve) =>
+        setTimeout(resolve, delays[attempt])
+      );
     }
   }
 }
