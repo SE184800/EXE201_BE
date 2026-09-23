@@ -70,6 +70,8 @@ model StockMovement {
   quantityChange Int
   quantityBefore Int
   quantityAfter  Int
+  // Historical sales without a known price stay null; never use today's price.
+  unitSalePrice  Int?
   productName    String        @db.NVarChar(100)
   unit           String        @db.NVarChar(20)
   note           String        @db.NVarChar(250)

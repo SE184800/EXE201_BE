@@ -2,8 +2,8 @@ const { randomUUID } = require('node:crypto');
 const { expiryInfo } = require('./inventoryExpiry');
 const { audit } = require('./platformPolicy');
 function problem(status, message) { return Object.assign(new Error(message), { status }); }
-async function record(tx, item, before, type, note, id = randomUUID()) {
-  return tx.stockMovement.create({ data: { id, itemId: item.id, type, quantityChange: item.quantity - before, quantityBefore: before, quantityAfter: item.quantity, productName: item.name, unit: item.unit, note } });
+async function record(tx, item, before, type, note, id = randomUUID(), unitSalePrice = null) {
+  return tx.stockMovement.create({ data: { id, itemId: item.id, type, quantityChange: item.quantity - before, quantityBefore: before, quantityAfter: item.quantity, productName: item.name, unit: item.unit, note, unitSalePrice } });
 }
 function createStockService(prisma) {
   async function create(ownerId, data) {
@@ -32,7 +32,7 @@ function createStockService(prisma) {
       const previous = await prisma.stockMovement.findUnique({ where: { id: input.requestId }, include: { item: true } });
       if (!previous) return null;
       const delta = input.type === 'SALE' ? -input.quantity : input.quantity;
-      if (previous.item.ownerId !== ownerId || previous.itemId !== id || previous.type !== input.type || previous.quantityChange !== delta || previous.note !== input.note) throw problem(409, 'Mã thao tác đã được dùng. Hãy tạo thao tác mới.');
+      if (previous.item.ownerId !== ownerId || previous.itemId !== id || previous.type !== input.type || previous.quantityChange !== delta || previous.note !== input.note || (input.unitSalePrice !== undefined && previous.unitSalePrice !== input.unitSalePrice)) throw problem(409, 'Mã thao tác đã được dùng. Hãy tạo thao tác mới.');
       return previous;
     }
     const previous = await existing();
@@ -47,8 +47,9 @@ function createStockService(prisma) {
         if (after > 2147483647) throw problem(400, 'Số lượng vượt giới hạn lưu trữ.');
         const result = await tx.inventoryItem.updateMany({ where: { id, ownerId, quantity: item.quantity, updatedAt: item.updatedAt }, data: { quantity: after } });
         if (!result.count) throw problem(409, 'Kho vừa thay đổi. Vui lòng thử lại.');
-        await audit(tx, ownerId, 'STOCK_MOVEMENT', 'INVENTORY', id, { type: input.type, before: item.quantity, after, expiredSaleAcknowledged: Boolean(input.allowExpiredSale) });
-        return record(tx, { ...item, quantity: after }, item.quantity, input.type, input.note, input.requestId);
+        const unitSalePrice = input.type === 'SALE' ? (input.unitSalePrice ?? item.sellingPrice ?? null) : null;
+        await audit(tx, ownerId, 'STOCK_MOVEMENT', 'INVENTORY', id, { type: input.type, before: item.quantity, after, unitSalePrice, expiredSaleAcknowledged: Boolean(input.allowExpiredSale) });
+        return record(tx, { ...item, quantity: after }, item.quantity, input.type, input.note, input.requestId, unitSalePrice);
       });
     } catch (error) {
       // A concurrent retry may have committed the same request. Never apply twice.

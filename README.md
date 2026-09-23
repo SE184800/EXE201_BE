@@ -60,7 +60,16 @@ npm run db:generate
 npm run dev
 ```
 
-Có 11 migration trong repo. Giữ nguyên tên đầy đủ, kể cả hai migration có chung tiền tố 003 hoặc 004; chúng có tên khác nhau. Migration `202609220003_platform_admin` bổ sung dữ liệu quản trị nền tảng; dùng `npm run db:migrate` để áp dụng.
+Có 12 migration trong repo. Giữ nguyên tên đầy đủ, kể cả các migration có chung tiền tố nhưng tên khác nhau. Migration `202609220003_platform_admin` bổ sung quản trị nền tảng; `202609230001_store_revenue` bổ sung giá bán tại thời điểm giao dịch. Dùng `npm run db:migrate` để áp dụng.
+
+## Doanh thu chủ tạp hóa
+
+- FE: **Doanh thu** tại `/store/revenue`, vẫn nằm trong menu cửa hàng. Có Hôm nay, 7 ngày qua, Tháng này và khoảng ngày tùy chọn tối đa 366 ngày; biểu đồ ngày, 10 mặt hàng theo doanh thu và lịch bán phân trang.
+- `GET /api/inventory/revenue?from=YYYY-MM-DD&to=YYYY-MM-DD&page=1`: chỉ role `STORE_OWNER`, luôn lấy chủ kho từ phiên đăng nhập. Ngày theo UTC+7, bao gồm cả ngày kết thúc. Tổng tiền trả chuỗi số nguyên VNĐ để không mất độ chính xác khi số lớn.
+- `POST /api/inventory/:id/movements`: khi `type=SALE`, thêm `unitSalePrice` (số nguyên 0–2.147.483.647). FE yêu cầu giá thực bán, tự điền giá bán trong kho khi chọn sản phẩm. Giá của lượt bán không làm thay đổi giá mặc định sản phẩm.
+- BE lưu `stock_movements.unitSalePrice` cùng transaction trừ kho và giữ cơ chế chống gửi trùng `requestId`. Client cũ thiếu trường giá sẽ lấy giá kho tại lúc bán; nếu giá kho cũng thiếu thì ghi nhận là chưa biết giá.
+- Chỉ `SALE` được tính doanh thu. Không lấy số giảm tồn thủ công, đơn nhập sỉ hay tiền nhập hàng để tính. Thay giá/tên sản phẩm sau này không thay đổi lịch sử. Dữ liệu cũ thiếu giá được giữ NULL và báo rõ số lượt chưa tính tiền; không tự gán giá hiện tại cho giao dịch cũ.
+- Đây là doanh thu bán hàng đã ghi nhận, chưa phải lợi nhuận hay tiền đã thu; chưa có đối soát thanh toán, công nợ hoặc hoàn trả hàng.
 
 Đoạn SQL kho được chia sẻ riêng tương ứng ba migration `202609210003_inventory`, `202609210004_inventory_expiry`, `202609210005_stock_movements`. Máy chưa chạy SQL thủ công chỉ cần `npm run db:migrate`. `migrate resolve --applied` chỉ ghi lịch sử; dùng nó khi đã đối chiếu bảng/cột/index/constraint và SQL của migration thực sự chạy đủ trên database đó. Không dùng để bỏ qua migration chưa thực thi. Kiểm tra từng máy bằng `npx prisma migrate status`; nếu đã cập nhật đủ thì không cần dán lại SQL hay resolve.
 

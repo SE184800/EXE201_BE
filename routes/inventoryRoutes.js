@@ -4,6 +4,7 @@ const { ROLES } = require('../config/roles');
 const { answerInventory } = require('../services/inventoryChat');
 const { expiryInfo } = require('../services/inventoryExpiry');
 const { createStockService } = require('../services/stockService');
+const { createStoreRevenueService } = require('../services/storeRevenueService');
 
 function validateItem(body) {
   if (!body || typeof body !== 'object') return null;
@@ -34,7 +35,12 @@ function validateItem(body) {
 function createInventoryRoutes(prisma, requireAuth) {
   const router = express.Router();
   const stock = createStockService(prisma);
+  const revenue = createStoreRevenueService(prisma);
   router.use(requireAuth, requireRole(ROLES.STORE_OWNER));
+  router.get('/revenue', async (req, res, next) => {
+    try { res.json(await revenue.report(req.auth.user.id, req.query)); }
+    catch (error) { if (error.status) return res.status(error.status).json({ message: error.message }); next(error); }
+  });
   router.get('/history', async (req, res, next) => {
     const page = Number(req.query.page || 1);
     if (!Number.isInteger(page) || page < 1 || page > 100000) return res.status(400).json({ message: 'Trang không hợp lệ.' });
@@ -54,7 +60,9 @@ function createInventoryRoutes(prisma, requireAuth) {
     const id = Number(req.params.id);
     const { type, quantity, requestId, note = '' } = req.body || {};
     if (!Number.isInteger(id) || id < 1 || id > 2147483647 || !['SALE', 'RECEIPT'].includes(type) || !Number.isInteger(quantity) || quantity < 1 || quantity > 2147483647 || typeof note !== 'string' || note.length > 250 || typeof requestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)) return res.status(400).json({ message: 'Chọn nhập/bán hàng, số lượng nguyên dương và ghi chú tối đa 250 ký tự.' });
-    try { res.json({ movement: await stock.move(req.auth.user.id, id, { type, quantity, requestId, note: note.trim(), allowExpiredSale: req.body.allowExpiredSale === true }) }); }
+    const unitSalePrice = req.body.unitSalePrice;
+    if (unitSalePrice !== undefined && (type !== 'SALE' || !Number.isInteger(unitSalePrice) || unitSalePrice < 0 || unitSalePrice > 2147483647)) return res.status(400).json({ message: 'Giá bán phải là số nguyên từ 0 đến 2.147.483.647 VNĐ và chỉ áp dụng khi bán hàng.' });
+    try { res.json({ movement: await stock.move(req.auth.user.id, id, { type, quantity, requestId, note: note.trim(), unitSalePrice, allowExpiredSale: req.body.allowExpiredSale === true }) }); }
     catch (error) { if (error.status) return res.status(error.status).json({ message: error.message }); next(error); }
   });
   const list = (ownerId) => prisma.inventoryItem.findMany({ where: { ownerId }, orderBy: { name: 'asc' } });
