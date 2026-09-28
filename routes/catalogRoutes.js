@@ -4,8 +4,8 @@ const { ROLES } = require('../config/roles');
 const { visibleSupplierWhere } = require('../services/platformPolicy');
 
 // Publish business details only, never the supplier's login or personal profile.
-const supplierSelect = { id: true, businessName: true, warehouseAddress: true, deliveryRadiusKm: true, deliveryFee: true };
-const serializeSupplier = (supplier) => ({ ...supplier, deliveryRadiusKm: Number(supplier.deliveryRadiusKm), deliveryFee: Number(supplier.deliveryFee) });
+const supplierSelect = { id: true, businessName: true, warehouseAddress: true, deliveryRadiusKm: true, deliveryFee: true, user: { select: { phone: true } } };
+const serializeSupplier = (supplier) => ({ id: supplier.id, businessName: supplier.businessName, warehouseAddress: supplier.warehouseAddress, deliveryRadiusKm: Number(supplier.deliveryRadiusKm), deliveryFee: Number(supplier.deliveryFee), phone: supplier.user?.phone || null });
 
 function createCatalogRoutes(prisma, requireAuth) {
   const router = express.Router();

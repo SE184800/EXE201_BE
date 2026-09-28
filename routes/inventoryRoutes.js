@@ -58,16 +58,20 @@ function createInventoryRoutes(prisma, requireAuth) {
   });
   router.post('/:id/movements', async (req, res, next) => {
     const id = Number(req.params.id);
-    const { type, quantity, requestId, note = '' } = req.body || {};
+    const { type, quantity, requestId, note = '', occurredOn, lotExpiryDate } = req.body || {};
     if (!Number.isInteger(id) || id < 1 || id > 2147483647 || !['SALE', 'RECEIPT'].includes(type) || !Number.isInteger(quantity) || quantity < 1 || quantity > 2147483647 || typeof note !== 'string' || note.length > 250 || typeof requestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)) return res.status(400).json({ message: 'Chọn nhập/bán hàng, số lượng nguyên dương và ghi chú tối đa 250 ký tự.' });
     const unitSalePrice = req.body.unitSalePrice;
+    const occurredAt = occurredOn === undefined ? new Date() : (typeof occurredOn === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(occurredOn) ? new Date(`${occurredOn}T12:00:00+07:00`) : null);
+    if (!occurredAt || Number.isNaN(occurredAt.valueOf()) || occurredAt > new Date(Date.now() + 86400000) || occurredAt < new Date('1900-01-01T00:00:00Z')) return res.status(400).json({ message: 'Ngày giao dịch không hợp lệ.' });
+    const expiryAt = lotExpiryDate === undefined || lotExpiryDate === '' ? null : (typeof lotExpiryDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(lotExpiryDate) ? new Date(`${lotExpiryDate}T00:00:00.000Z`) : null);
+    if (lotExpiryDate !== undefined && lotExpiryDate !== '' && (!expiryAt || Number.isNaN(expiryAt.valueOf()))) return res.status(400).json({ message: 'Hạn sử dụng của lô không hợp lệ.' });
     if (unitSalePrice !== undefined && (type !== 'SALE' || !Number.isInteger(unitSalePrice) || unitSalePrice < 0 || unitSalePrice > 2147483647)) return res.status(400).json({ message: 'Giá bán phải là số nguyên từ 0 đến 2.147.483.647 VNĐ và chỉ áp dụng khi bán hàng.' });
-    try { res.json({ movement: await stock.move(req.auth.user.id, id, { type, quantity, requestId, note: note.trim(), unitSalePrice, allowExpiredSale: req.body.allowExpiredSale === true }) }); }
+    try { res.json({ movement: await stock.move(req.auth.user.id, id, { type, quantity, requestId, note: note.trim(), unitSalePrice, occurredAt, lotExpiryDate: expiryAt, allowExpiredSale: req.body.allowExpiredSale === true }) }); }
     catch (error) { if (error.status) return res.status(error.status).json({ message: error.message }); next(error); }
   });
-  const list = (ownerId) => prisma.inventoryItem.findMany({ where: { ownerId }, orderBy: { name: 'asc' } });
+  const list = (ownerId) => prisma.inventoryItem.findMany({ where: { ownerId }, orderBy: { name: 'asc' }, include: { lots: { orderBy: [{ expiryDate: 'asc' }, { receivedAt: 'asc' }] } } });
   router.get('/', async (req, res, next) => {
-    try { res.json({ items: (await list(req.auth.user.id)).map((item) => ({ ...item, ...expiryInfo(item.expiryDate) })) }); } catch (error) { next(error); }
+    try { res.json({ items: (await list(req.auth.user.id)).map((item) => ({ ...item, ...expiryInfo(item.expiryDate), lots: (item.lots || []).map((lot) => ({ ...lot, expiryDate: lot.expiryDate?.toISOString().slice(0, 10) || null })) })) }); } catch (error) { next(error); }
   });
   router.post('/chat', async (req, res, next) => {
     const message = req.body?.message;
