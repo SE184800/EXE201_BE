@@ -2,6 +2,7 @@ const { getForecast, dayStart } = require('./restockForecast');
 const DAY = 86400000, OFFSET = 7 * 3600000;
 const dateKey = (ms) => new Date(ms + OFFSET).toISOString().slice(0, 10);
 const weekday = (ms) => new Date(ms + OFFSET).getUTCDay();
+
 function calendarItem(item, movements, leadDays, now = new Date()) {
   const today = dayStart(now), start = item.windowStart ? new Date(item.windowStart).getTime() : today;
   const buckets = Array.from({ length: 7 }, () => ({ days: 0, sold: 0 }));
@@ -19,7 +20,10 @@ function calendarItem(item, movements, leadDays, now = new Date()) {
     const demand = rates[daily[i].weekday];
     if (stock + 1e-8 < demand) {
       const needDay = today + i * DAY;
-      const quantity = Math.ceil(Array.from({length:7}, (_, n) => rates[weekday(needDay+n*DAY)]).reduce((a,b)=>a+b,0) + item.averageDailySales * 2 - stock);
+      let quantity = Math.ceil(Array.from({length:7}, (_, n) => rates[weekday(needDay+n*DAY)]).reduce((a,b)=>a+b,0) + item.averageDailySales * 2 - stock);
+      if (item.holidayMultiplier > 1.0) {
+        quantity = Math.ceil(quantity * item.holidayMultiplier);
+      }
       recommendation = { arrivalDate: dateKey(needDay), orderDate: dateKey(Math.max(today, needDay-leadDays*DAY)), urgent: needDay-leadDays*DAY < today, quantity: quantity <= 2147483647 ? quantity : null };
       break;
     }
@@ -33,9 +37,18 @@ function calendarItem(item, movements, leadDays, now = new Date()) {
     calendarNote: weekly ? 'Sơ bộ theo từng thứ: ít nhất 4 lần quan sát mỗi thứ, gồm ngày không ghi nhận bán.' : 'Chưa đủ 4 tuần đầy đủ để kết luận xu hướng cuối tuần; dùng trung bình nếu đủ dữ liệu.',
   };
 }
+
 async function getSalesCalendar(prisma, ownerId, leadDays = 2, now = new Date()) {
   const forecast = await getForecast(prisma, ownerId, 14, 2, now);
   const movements = await prisma.stockMovement.findMany({ where: { item: { ownerId }, type: 'SALE', createdAt: { gte: new Date(dayStart(now)-30*DAY), lt: new Date(dayStart(now)) } }, select: { itemId:true,unit:true,type:true,quantityChange:true,createdAt:true } });
-  return { generatedAt: now.toISOString(), leadDays, days:14, items: forecast.items.map(item=>calendarItem(item,movements,leadDays,now)), assumptions: 'Giả định chưa có đơn đang giao, chưa tính bán hôm nay; ước tính từ đầu ngày với tồn hiện tại nên có thể đặt sớm. Mỗi đề xuất đủ bán 7 ngày + dự phòng 2 ngày. Chưa học tác động thời tiết, ngày lễ hay khuyến mãi.' };
+  return {
+    generatedAt: now.toISOString(),
+    leadDays,
+    days: 14,
+    upcomingHolidays: forecast.upcomingHolidays,
+    items: forecast.items.map(item => calendarItem(item, movements, leadDays, now)),
+    assumptions: 'Giả định chưa có đơn đang giao, chưa tính bán hôm nay; ước tính từ đầu ngày với tồn hiện tại. Đã tích hợp mô hình Lịch Ngày Lễ tại Việt Nam để tự động điều chỉnh nhu cầu khuyên nhập.'
+  };
 }
-module.exports={calendarItem,getSalesCalendar};
+
+module.exports = { calendarItem, getSalesCalendar };
