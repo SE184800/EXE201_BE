@@ -53,8 +53,13 @@ function serializeOrder(order) {
     subtotal: numberValue(order.subtotal),
     deliveryFee: numberValue(order.deliveryFee),
     total: numberValue(order.total),
+    dealStatus: order.dealStatus || null,
+    proposedTotal: order.proposedTotal === null || order.proposedTotal === undefined ? null : numberValue(order.proposedTotal),
+    agreedTotal: order.agreedTotal === null || order.agreedTotal === undefined ? null : numberValue(order.agreedTotal),
+    dealResponse: order.dealResponse || null,
     note: order.note,
     rejectReason: order.rejectReason,
+    complaint: order.complaint ? { id: order.complaint.id, reason: order.complaint.reason, description: order.complaint.description, status: order.complaint.status, response: order.complaint.response } : null,
     createdAt: order.createdAt,
     updatedAt: order.updatedAt,
     buyer: { id: order.buyer.id, name: order.buyer.name, username: order.buyer.username },
@@ -205,7 +210,7 @@ function createSupplierService(prisma) {
     const where = { supplierId: profile.id, ...(status ? { status } : {}) };
     const [orders, total] = await Promise.all([prisma.wholesaleOrder.findMany({
       where,
-      include: { buyer: true, items: true },
+      include: { buyer: true, items: true, complaint: true },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 21, skip: (page - 1) * 20,
     }), prisma.wholesaleOrder.count({ where })]);
     return { orders: orders.slice(0, 20).map(serializeOrder), total, page, hasMore: orders.length > 20 };
@@ -265,7 +270,7 @@ function createSupplierService(prisma) {
     if (!profile) return { profile: null, products: [], orders: [], summary: { productCount: 0, lowStockCount: 0, pendingOrders: 0, deliveredRevenue: 0 } };
     const [products, orders, pendingOrders, delivered] = await Promise.all([
       prisma.supplierProduct.findMany({ where: { supplierId: profile.id }, orderBy: { updatedAt: 'desc' } }),
-      prisma.wholesaleOrder.findMany({ where: { supplierId: profile.id }, include: { buyer: true, items: true }, orderBy: { createdAt: 'desc' }, take: 50 }),
+      prisma.wholesaleOrder.findMany({ where: { supplierId: profile.id }, include: { buyer: true, items: true, complaint: true }, orderBy: { createdAt: 'desc' }, take: 50 }),
       prisma.wholesaleOrder.count({ where: { supplierId: profile.id, status: 'PENDING' } }),
       prisma.wholesaleOrder.aggregate({ where: { supplierId: profile.id, status: 'DELIVERED' }, _sum: { total: true } }),
     ]);

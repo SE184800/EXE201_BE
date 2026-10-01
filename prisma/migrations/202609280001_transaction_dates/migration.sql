@@ -1,0 +1,2 @@
+-- createdAt is reused as the business occurrence time for late-entered movements.
+-- No historical rows are rewritten.

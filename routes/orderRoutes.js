@@ -8,7 +8,7 @@ const { orderQuery } = require('../services/orderQuery');
 const { visibleSupplierWhere, audit } = require('../services/platformPolicy');
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const problem = (status, message) => Object.assign(new Error(message), { status });
-const include = { buyer: true, items: true, supplier: true };
+const include = { buyer: true, items: true, supplier: true, complaint: true };
 const serialize = order => ({ ...serializeOrder(order), supplier: { id: order.supplier.id, businessName: order.supplier.businessName } });
 
 function createOrderRoutes(prisma, requireAuth) {

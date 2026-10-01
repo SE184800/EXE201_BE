@@ -23,6 +23,7 @@ const { createAdvisorRoutes } = require('./routes/advisorRoutes');
 const { createOrderRoutes } = require('./routes/orderRoutes');
 const { createPasswordRoutes } = require('./routes/passwordRoutes');
 const { createAdminRoutes } = require('./routes/adminRoutes');
+const { createComplaintRoutes } = require('./routes/complaintRoutes');
 
 function createApp(prisma, config) {
   const app = express();
@@ -146,6 +147,7 @@ function createApp(prisma, config) {
     '/api/orders',
     createOrderRoutes(prisma, requireAuth)
   );
+  app.use('/api/complaints', createComplaintRoutes(prisma, requireAuth));
 
   app.use(
     '/api/profile',
