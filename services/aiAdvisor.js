@@ -2,7 +2,7 @@ const { answerInventory } = require('./inventoryChat');
 
 function basicAnswer(message, calendar) {
   const query = message.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').toLowerCase();
-  
+
   if (/le|tet|ngay le|30\/4|1\/5|2\/9|trung thu|giang sinh/.test(query)) {
     const holidays = calendar.upcomingHolidays || [];
     if (holidays.length) {
@@ -16,7 +16,7 @@ function basicAnswer(message, calendar) {
     const rows = calendar.items.filter(i => i.method === 'WEEKDAY' && i.weekendRatio > 1.2);
     return rows.length ? 'Ước tính sơ bộ từ lịch sử theo thứ:\n' + rows.slice(0, 10).map(i => `${i.name}: mức bán/ngày cuối tuần ≈ ${i.weekendRatio} lần ngày thường.${i.isDemo ? ' Dữ liệu mẫu, không phải xu hướng thực.' : ''}`).join('\n') : 'Chưa có bằng chứng đủ rõ về mặt hàng bán mạnh cuối tuần. Cần ít nhất 4 tuần theo dõi đầy đủ; không mặc định bia sẽ bán nhiều hơn.';
   }
-  
+
   if (/nhap|ngay nao|du bao/.test(query)) {
     const rows = calendar.items.filter(i => i.recommendation).sort((a, b) => a.recommendation.orderDate.localeCompare(b.recommendation.orderDate));
     return rows.length ? `Dự kiến trong 14 ngày, giả định giao hàng ${calendar.leadDays} ngày (Đã tính tác động Lịch Ngày Lễ nếu có):\n` + rows.slice(0, 10).map(i => `${i.name}: đặt ${i.recommendation.orderDate}, cần hàng ${i.recommendation.arrivalDate}; gợi ý ${i.recommendation.quantity ?? 'kiểm tra lại số lượng'} ${i.unit}.${i.recommendation.urgent ? ' Cần giao sớm hơn thời gian thông thường.' : ''}${i.isDemo ? ' [Dữ liệu mẫu]' : ''}`).join('\n') + '\nXem Lịch nhập dự kiến để xem đầy đủ.' : 'Chưa xác định mặt hàng cần nhập trong 14 ngày. Có thể kho đủ dùng hoặc lịch sử bán chưa đủ; xem chi tiết trong Lịch nhập dự kiến.';
@@ -27,7 +27,7 @@ function basicAnswer(message, calendar) {
 
 async function answerWithAI({ message, history = [], calendar, apiKey, model, provider = 'OPENAI', fetcher = fetch }) {
   if (!apiKey || !model) return { mode: 'RULES', answer: 'Chưa bật AI · Trả lời theo quy tắc và số liệu hệ thống.\n\n' + basicAnswer(message, calendar) };
-  
+
   const rows = calendar.items.slice(0, 100).map(({ itemId, name, unit, quantity, lowThreshold, purchasePrice, expiryDate, averageDailySales, method, recommendation, weekendRatio, holidayMultiplier, holidayName, isDemo, calendarNote }) => ({
     itemId, name, unit, quantity, lowThreshold, purchasePrice, expiryDate, averageDailySales, method, recommendation, weekendRatio, holidayMultiplier, holidayName, isDemo, calendarNote
   }));
