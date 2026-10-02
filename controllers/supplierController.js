@@ -70,6 +70,13 @@ function createSupplierController(service) {
         return next(error);
       }
     },
+    uploadImage(req, res) {
+      if (!req.file) {
+        return res.status(400).json({ success: false, message: 'Vui lòng chọn file ảnh để tải lên.' });
+      }
+      const imageUrl = `/uploads/${req.file.filename}`;
+      return res.json({ success: true, imageUrl });
+    },
   };
 }
 
