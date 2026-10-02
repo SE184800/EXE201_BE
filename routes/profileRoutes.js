@@ -9,7 +9,7 @@ function validateProfile(body) {
   const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
   const phone = normalizePhone(body.phone);
   const birth = typeof body.dateOfBirth === 'string' ? body.dateOfBirth : '';
-  if (!/^[\p{L}\p{M} .'-]{2,100}$/u.test(name) || !/\p{L}/u.test(name)) return { message: 'Họ tên cần 2–100 ký tự chữ cái và dấu phân cách hợp lệ.' };
+  if (!/^[\p{L}\p{M} .'-]{2,100}$/u.test(name) || !/\p{L}/u.test(name)) return { message: 'Họ và tên không hợp lệ. Vui lòng chỉ nhập chữ và ít nhất là 2 chữ cái và nhiều nhất là 100 chữ cái' };
   if (body.email !== null && typeof body.email !== 'string') return { message: 'Email không hợp lệ.' };
   if (body.phone !== null && typeof body.phone !== 'string') return { message: 'Số điện thoại không hợp lệ.' };
   if (body.dateOfBirth !== null && typeof body.dateOfBirth !== 'string') return { message: 'Ngày sinh không hợp lệ.' };

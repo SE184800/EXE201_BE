@@ -13,6 +13,7 @@
     "db:migrate": "prisma migrate deploy",
     "db:seed": "node prisma/seed.js",
     "db:seed:market": "node prisma/seed-demo-market.js",
+    "db:seed:full": "node prisma/seed-demo-full.js",
     "test": "node --test --test-concurrency=1"
   },
   "keywords": [],

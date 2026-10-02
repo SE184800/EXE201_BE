@@ -69,9 +69,9 @@ function createInventoryRoutes(prisma, requireAuth) {
     try { res.json({ movement: await stock.move(req.auth.user.id, id, { type, quantity, requestId, note: note.trim(), unitSalePrice, occurredAt, lotExpiryDate: expiryAt, allowExpiredSale: req.body.allowExpiredSale === true }) }); }
     catch (error) { if (error.status) return res.status(error.status).json({ message: error.message }); next(error); }
   });
-  const list = (ownerId) => prisma.inventoryItem.findMany({ where: { ownerId }, orderBy: { name: 'asc' }, include: { lots: { orderBy: [{ expiryDate: 'asc' }, { receivedAt: 'asc' }] } } });
+  const list = (ownerId) => prisma.inventoryItem.findMany({ where: { ownerId }, orderBy: { name: 'asc' } });
   router.get('/', async (req, res, next) => {
-    try { res.json({ items: (await list(req.auth.user.id)).map((item) => ({ ...item, ...expiryInfo(item.expiryDate), lots: (item.lots || []).map((lot) => ({ ...lot, expiryDate: lot.expiryDate?.toISOString().slice(0, 10) || null })) })) }); } catch (error) { next(error); }
+    try { res.json({ items: (await list(req.auth.user.id)).map((item) => ({ ...item, ...expiryInfo(item.expiryDate), lots: [] })) }); } catch (error) { next(error); }
   });
   router.post('/chat', async (req, res, next) => {
     const message = req.body?.message;
