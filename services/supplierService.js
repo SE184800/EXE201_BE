@@ -1,18 +1,20 @@
 const { audit, problem, httpsDocument, verificationComplete } = require('./platformPolicy');
 const ORDER_STATUSES = Object.freeze([
-  'PENDING', 'APPROVED', 'REJECTED', 'PREPARING', 'SHIPPING', 'DELIVERED',
+  'PENDING', 'APPROVED', 'REJECTED', 'PREPARING', 'SHIPPING', 'ISSUE_HANDLING', 'DELIVERED',
 ]);
 
 const STATUS_LABELS = Object.freeze({
   PENDING: 'Chờ duyệt', APPROVED: 'Đã duyệt', REJECTED: 'Đã từ chối',
-  PREPARING: 'Đang chuẩn bị', SHIPPING: 'Đang vận chuyển', DELIVERED: 'Đã giao',
+  PREPARING: 'Đang chuẩn bị', SHIPPING: 'Đang vận chuyển',
+  ISSUE_HANDLING: 'Tiếp nhận xử lý', DELIVERED: 'Đã giao',
 });
 
 const TRANSITIONS = Object.freeze({
   PENDING: ['APPROVED', 'REJECTED'],
   APPROVED: ['PREPARING'],
   PREPARING: ['SHIPPING'],
-  SHIPPING: ['DELIVERED'],
+  SHIPPING: ['ISSUE_HANDLING', 'DELIVERED'],
+  ISSUE_HANDLING: ['DELIVERED'],
   REJECTED: [],
   DELIVERED: [],
 });
@@ -59,7 +61,7 @@ function serializeOrder(order) {
     dealResponse: order.dealResponse || null,
     note: order.note,
     rejectReason: order.rejectReason,
-    complaint: order.complaint ? { id: order.complaint.id, reason: order.complaint.reason, description: order.complaint.description, status: order.complaint.status, response: order.complaint.response } : null,
+    complaint: order.complaint ? { id: order.complaint.id, reason: order.complaint.reason, description: order.complaint.description, imageUrl: order.complaint.imageUrl || null, status: order.complaint.status, response: order.complaint.response } : null,
     createdAt: order.createdAt,
     updatedAt: order.updatedAt,
     buyer: { id: order.buyer.id, name: order.buyer.name, username: order.buyer.username },
@@ -110,12 +112,14 @@ function validateProductInput(body = {}) {
   if (body.imageUrl !== undefined) {
     const imageUrl = typeof body.imageUrl === 'string' ? body.imageUrl.trim() : body.imageUrl;
     if (imageUrl === '' || imageUrl === null) extras.imageUrl = null;
-    else {
+    else if (typeof imageUrl === 'string' && imageUrl.startsWith('/uploads/') && imageUrl.length <= 1000 && !imageUrl.includes('..')) {
+      extras.imageUrl = imageUrl;
+    } else {
       try {
         const url = new URL(imageUrl);
-        if (typeof imageUrl !== 'string' || imageUrl.length > 1000 || url.protocol !== 'https:' || url.username || url.password) throw new Error();
+        if (typeof imageUrl !== 'string' || imageUrl.length > 1000 || !['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error();
         extras.imageUrl = url.href;
-      } catch { errors.imageUrl = 'Ảnh cần đường dẫn HTTPS hợp lệ, tối đa 1.000 ký tự.'; }
+      } catch { errors.imageUrl = 'Ảnh cần đường dẫn hoặc file hợp lệ, tối đa 1.000 ký tự.'; }
     }
   }
   if (name.length < 2 || name.length > 150) errors.name = 'Tên sản phẩm cần từ 2 đến 150 ký tự.';
@@ -261,7 +265,7 @@ function createSupplierService(prisma) {
       await audit(transaction, userId, 'ORDER_STATUS_CHANGED', 'ORDER', order.id, { before: order.status, after: status, rejectReason: status === 'REJECTED' ? normalizedRejectReason : null });
     }, { isolationLevel: 'Serializable' });
     return serializeOrder(await prisma.wholesaleOrder.findUnique({
-      where: { id: order.id }, include: { buyer: true, items: true },
+      where: { id: order.id }, include: { buyer: true, items: true, complaint: true },
     }));
   }
 

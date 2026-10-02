@@ -1,8 +1,41 @@
 const express = require('express');
+const multer = require('multer');
+const path = require('node:path');
+const fs = require('node:fs');
 const { requireRole } = require('../middlewares/authMiddleware');
 const { ROLES } = require('../config/roles');
 const { createSupplierService } = require('../services/supplierService');
 const { createSupplierController } = require('../controllers/supplierController');
+
+const uploadsDir = path.join(__dirname, '../public/uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadsDir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    const safeExt = ['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(ext) ? ext : '.png';
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    cb(null, `product-${uniqueSuffix}${safeExt}`);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Chỉ chấp nhận file ảnh (JPG, PNG, WEBP, GIF).'));
+    }
+  },
+});
 
 function createSupplierRoutes(prisma, requireAuth) {
   const router = express.Router();
@@ -11,6 +44,19 @@ function createSupplierRoutes(prisma, requireAuth) {
   router.get('/dashboard', controller.dashboard);
   router.route('/profile').get(controller.getProfile).put(controller.saveProfile);
   router.post('/verification', controller.submitVerification);
+  router.post('/upload-image', (req, res, next) => {
+    upload.single('image')(req, res, (err) => {
+      if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(400).json({ success: false, message: 'Kích thước ảnh không được vượt quá 5MB.' });
+        }
+        return res.status(400).json({ success: false, message: err.message });
+      } else if (err) {
+        return res.status(400).json({ success: false, message: err.message });
+      }
+      next();
+    });
+  }, controller.uploadImage);
   router.route('/products').get(controller.listProducts).post(controller.createProduct);
   router.route('/products/:productId').put(controller.updateProduct).delete(controller.deactivateProduct);
   router.get('/orders', controller.listOrders);

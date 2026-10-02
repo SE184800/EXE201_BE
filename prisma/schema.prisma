@@ -188,8 +188,9 @@ model OrderComplaint {
   orderId     Int      @unique
   buyerId     Int
   supplierId  Int
-  reason      String   @db.VarChar(40)
+  reason      String   @db.NVarChar(200)
   description String   @db.NVarChar(1000)
+  imageUrl    String?  @db.NVarChar(1000)
   status      String   @default("OPEN") @db.VarChar(20)
   response    String?  @db.NVarChar(1000)
   createdAt   DateTime @default(now())
