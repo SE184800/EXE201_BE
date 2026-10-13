@@ -2,6 +2,7 @@ const express = require('express');
 const { requireRole } = require('../middlewares/authMiddleware');
 const { ROLES } = require('../config/roles');
 const { visibleSupplierWhere } = require('../services/platformPolicy');
+const { getUpcomingHolidays } = require('../services/holidayService');
 
 // Publish business details only, never the supplier's login or personal profile.
 const supplierSelect = { id: true, businessName: true, warehouseAddress: true, deliveryRadiusKm: true, deliveryFee: true, user: { select: { phone: true } } };
@@ -35,7 +36,7 @@ function createCatalogRoutes(prisma, requireAuth) {
     }
     try {
       const search = q.trim();
-      const products = await prisma.supplierProduct.findMany({
+      const [products, activeHolidays] = await Promise.all([prisma.supplierProduct.findMany({
         where: {
           isActive: true, supplier: visibleSupplierWhere(),
           ...(category ? { category } : {}),
@@ -44,11 +45,47 @@ function createCatalogRoutes(prisma, requireAuth) {
           ...(supplierId ? { supplierId: Number(supplierId) } : {}),
           ...(search ? { OR: [{ name: { contains: search } }, { supplier: { businessName: { contains: search } } }] } : {}),
         },
-        select: { id: true, name: true, packaging: true, category: true, imageUrl: true, wholesalePrice: true, stockQty: true, moq: true, updatedAt: true, supplier: { select: supplierSelect } },
+        select: {
+          id: true, name: true, packaging: true, category: true, imageUrl: true,
+          wholesalePrice: true, stockQty: true, moq: true, updatedAt: true,
+          priceHistory: {
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+            select: { oldPrice: true, changePercent: true, reason: true, createdAt: true },
+          },
+          supplier: { select: supplierSelect },
+        },
         orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }], skip: (Number(page) - 1) * 24, take: 25,
-      });
+      }), getUpcomingHolidays(prisma, 60, new Date())]);
       res.json({
-        products: products.slice(0, 24).map((product) => ({ ...product, wholesalePrice: Number(product.wholesalePrice), supplier: serializeSupplier(product.supplier) })),
+        products: products.slice(0, 24).map((product) => {
+          const latestPrice = product.priceHistory[0] || null;
+          const changePercent = latestPrice ? Number(latestPrice.changePercent) : null;
+          const normalizedName = product.name.toLocaleLowerCase('vi-VN');
+          const matchedHoliday = changePercent !== null && changePercent > 0
+            ? activeHolidays.find(holiday => {
+              const preparationStart = new Date(holiday.startDate + 'T00:00:00.000Z').getTime() - holiday.preparationDays * 86400000;
+              return latestPrice.createdAt.getTime() >= preparationStart
+                && holiday.categories.some(keyword => normalizedName.includes(keyword.toLocaleLowerCase('vi-VN')));
+            })
+            : null;
+          const { priceHistory: _priceHistory, ...publicProduct } = product;
+          return {
+            ...publicProduct,
+            wholesalePrice: Number(product.wholesalePrice),
+            previousPrice: latestPrice ? Number(latestPrice.oldPrice) : null,
+            priceChangePercent: changePercent,
+            priceChangedAt: latestPrice?.createdAt || null,
+            priceChangeReason: latestPrice?.reason || null,
+            priceWarning: (changePercent !== null && changePercent >= 20) || Boolean(matchedHoliday),
+            holidayPriceContext: matchedHoliday ? {
+              name: matchedHoliday.name,
+              startDate: matchedHoliday.startDate,
+              daysUntil: matchedHoliday.daysUntil,
+            } : null,
+            supplier: serializeSupplier(product.supplier),
+          };
+        }),
         page: Number(page), hasMore: products.length > 24,
       });
     } catch (error) { next(error); }

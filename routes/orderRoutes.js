@@ -13,6 +13,29 @@ const serialize = order => ({ ...serializeOrder(order), supplier: { id: order.su
 
 function createOrderRoutes(prisma, requireAuth) {
   const router = express.Router();
+  async function submitDeposit(buyerId, id, reference, auditEvent) {
+    return prisma.$transaction(async tx => {
+      const current = await tx.wholesaleOrder.findFirst({ where: { id, buyerId }, include });
+      if (!current) throw problem(404, 'Không tìm thấy đơn hàng.');
+      if (['SUBMITTED', 'PAID'].includes(current.depositStatus)) return current;
+      if (current.depositAmount.lessThanOrEqualTo(0) || current.depositStatus !== 'PENDING' || current.status !== 'PENDING') throw problem(409, 'Đơn này không cần cọc hoặc không còn ở trạng thái có thể đặt cọc.');
+      const changed = await tx.wholesaleOrder.updateMany({
+        where: { id, buyerId, status: 'PENDING', depositStatus: 'PENDING' },
+        data: {
+          depositStatus: 'SUBMITTED',
+          depositReference: reference,
+          depositSubmittedAt: new Date(),
+          depositPaidAt: null,
+          depositReviewedAt: null,
+          depositRejectionReason: null,
+        },
+      });
+      if (!changed.count) throw problem(409, 'Khoản cọc vừa được xử lý. Tải lại đơn hàng.');
+      const saved = await tx.wholesaleOrder.findUniqueOrThrow({ where: { id }, include });
+      await audit(tx, buyerId, auditEvent, 'ORDER', id, { amount: saved.depositAmount.toString(), reference });
+      return saved;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
   router.use(requireAuth, requireRole('STORE_OWNER'));
   router.get('/', async (req, res, next) => {
     try {
@@ -32,12 +55,14 @@ function createOrderRoutes(prisma, requireAuth) {
     const deliveryAddress = typeof body.deliveryAddress === 'string' ? body.deliveryAddress.trim() : '';
     const note = typeof body.note === 'string' ? body.note.trim() : '';
     const { requestId, lines, expectedDeliveryFee } = body;
+    const depositRate = body.depositRate === undefined ? 0 : body.depositRate;
     if (typeof requestId !== 'string' || !uuid.test(requestId) || recipientName.length < 2 || recipientName.length > 100 || !/^0\d{9}$/.test(recipientPhone) || deliveryAddress.length < 10 || deliveryAddress.length > 500 || note.length > 500 ||
       typeof expectedDeliveryFee !== 'number' || !Number.isFinite(expectedDeliveryFee) || expectedDeliveryFee < 0 || expectedDeliveryFee > 1000000000 ||
+      typeof depositRate !== 'number' || !Number.isFinite(depositRate) || depositRate < 0 || depositRate > 100 || Math.abs(depositRate * 100 - Math.round(depositRate * 100)) > 0.000001 ||
       !Array.isArray(lines) || lines.length < 1 || lines.length > 100 || lines.some(line => !line || !Number.isInteger(line.productId) || line.productId < 1 || line.productId > 2147483647 || !Number.isInteger(line.quantity) || line.quantity < 1 || line.quantity > 2147483647 || typeof line.expectedUpdatedAt !== 'string' || !Number.isFinite(Date.parse(line.expectedUpdatedAt))) || new Set(lines.map(line => line.productId)).size !== lines.length)
       return res.status(400).json({ message: 'Kiểm tra người nhận, số điện thoại, địa chỉ (10–500 ký tự) và 1–100 mặt hàng với số lượng nguyên dương.' });
     const buyerId = req.auth.user.id;
-    const requestHash = createHash('sha256').update(JSON.stringify({ recipientName, recipientPhone, deliveryAddress, note, expectedDeliveryFee, lines: lines.map(({ productId, quantity, expectedUpdatedAt }) => ({ productId, quantity, expectedUpdatedAt })).sort((a,b) => a.productId-b.productId) })).digest('hex');
+    const requestHash = createHash('sha256').update(JSON.stringify({ recipientName, recipientPhone, deliveryAddress, note, expectedDeliveryFee, depositRate, lines: lines.map(({ productId, quantity, expectedUpdatedAt }) => ({ productId, quantity, expectedUpdatedAt })).sort((a,b) => a.productId-b.productId) })).digest('hex');
     async function previous() {
       const order = await prisma.wholesaleOrder.findFirst({ where: { requestId }, include });
       if (order && (order.buyerId !== buyerId || order.requestHash !== requestHash)) throw problem(409, 'Mã đặt hàng đã được dùng với nội dung khác. Hãy mở lại form đặt hàng.');
@@ -60,10 +85,14 @@ function createOrderRoutes(prisma, requireAuth) {
         });
         const subtotal = snapshots.reduce((sum, line) => sum.add(line.lineTotal), new Prisma.Decimal(0));
         const total = subtotal.add(supplier.deliveryFee);
+        const depositAmount = total.mul(depositRate).div(100).toDecimalPlaces(2);
+        if (depositAmount.greaterThan(0) && (!supplier.bankName || !supplier.bankAccountNumber || !supplier.bankAccountHolder)) {
+          throw problem(409, 'Chủ vựa chưa cấu hình tài khoản nhận cọc. Hãy liên hệ chủ vựa hoặc đặt đơn không yêu cầu cọc.');
+        }
         if (total.greaterThan('1000000000000')) throw problem(400, 'Giá trị đơn vượt giới hạn 1.000 tỷ đồng. Vui lòng chia thành đơn nhỏ hơn.');
         const settings = await tx.platformSetting.findUniqueOrThrow({ where: { id: 1 } });
-        const created = await tx.wholesaleOrder.create({ data: { requestId, requestHash, buyerId, supplierId: supplier.id, supplierRegion: supplier.region, commissionRate: settings.commissionRate, recipientName, recipientPhone, deliveryAddress, note: note || null, status: 'PENDING', subtotal, deliveryFee: supplier.deliveryFee, total, items: { create: snapshots } }, include });
-        await audit(tx, buyerId, 'ORDER_CREATED', 'ORDER', created.id, { supplierId: supplier.id, subtotal: subtotal.toString(), commissionRate: settings.commissionRate.toString() });
+        const created = await tx.wholesaleOrder.create({ data: { requestId, requestHash, buyerId, supplierId: supplier.id, supplierRegion: supplier.region, commissionRate: settings.commissionRate, recipientName, recipientPhone, deliveryAddress, note: note || null, status: 'PENDING', subtotal, deliveryFee: supplier.deliveryFee, total, depositRate, depositAmount, depositStatus: depositAmount.greaterThan(0) ? 'PENDING' : 'NONE', depositBankName: depositAmount.greaterThan(0) ? supplier.bankName : null, depositBankAccountNumber: depositAmount.greaterThan(0) ? supplier.bankAccountNumber : null, depositBankAccountHolder: depositAmount.greaterThan(0) ? supplier.bankAccountHolder : null, items: { create: snapshots } }, include });
+        await audit(tx, buyerId, 'ORDER_CREATED', 'ORDER', created.id, { supplierId: supplier.id, subtotal: subtotal.toString(), commissionRate: settings.commissionRate.toString(), depositRate: String(depositRate), depositAmount: depositAmount.toString() });
         return created;
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
       res.status(201).json({ order: serialize(order) });
@@ -74,6 +103,25 @@ function createOrderRoutes(prisma, requireAuth) {
       }
       next(error);
     }
+  });
+  router.post('/:id/deposit', async (req, res, next) => {
+    const id = Number(req.params.id);
+    const reference = typeof req.body?.reference === 'string' ? req.body.reference.trim() : '';
+    if (!Number.isInteger(id) || id < 1 || id > 2147483647) return res.status(400).json({ message: 'Mã đơn hàng không hợp lệ.' });
+    if (reference.length < 3 || reference.length > 100) return res.status(400).json({ message: 'Nhập mã giao dịch hoặc nội dung chuyển khoản từ 3 đến 100 ký tự.' });
+    try {
+      const order = await submitDeposit(req.auth.user.id, id, reference, 'DEPOSIT_SUBMITTED');
+      res.json({ order: serialize(order) });
+    } catch (error) { next(error); }
+  });
+  router.post('/:id/deposit/sandbox', async (req, res, next) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1 || id > 2147483647) return res.status(400).json({ message: 'Mã đơn hàng không hợp lệ.' });
+    try {
+      const reference = `SANDBOX-${id}-${Date.now()}`;
+      const order = await submitDeposit(req.auth.user.id, id, reference, 'DEPOSIT_SANDBOX_SUBMITTED');
+      res.json({ order: serialize(order) });
+    } catch (error) { next(error); }
   });
   router.use((error, req, res, next) => error.status ? res.status(error.status).json({ message: error.message }) : next(error));
   return router;

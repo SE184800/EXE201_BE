@@ -5,6 +5,10 @@ const request = require('supertest');
 const { answerInventory } = require('../services/inventoryChat');
 const { createInventoryRoutes, validateItem } = require('../routes/inventoryRoutes');
 const { expiryInfo } = require('../services/inventoryExpiry');
+const {
+  annotateInventoryImport,
+  parseInventorySheetData,
+} = require('../services/inventoryImport');
 test('cảnh báo hết hạn bao gồm ngày thứ 15, loại ngày 16 và hàng hết tồn', () => {
   const now = new Date('2026-09-21T12:00:00Z');
   const stock = [
@@ -67,6 +71,80 @@ test('từ chối số âm, số lẻ, kiểu sai và vượt giới hạn SQL I
   assert.ok(validateItem(valid));
   for (const quantity of [-1, 1.2, '5', 2147483648, null]) assert.equal(validateItem({ ...valid, quantity }), null);
   assert.equal(validateItem(null), null);
+});
+test('đọc file nhập kho, chuẩn hóa tiền/ngày và báo đúng dòng lỗi', () => {
+  const parsed = parseInventorySheetData([
+    ['Mẫu nhập kho'],
+    [
+      'Tên sản phẩm',
+      'Đơn vị',
+      'Số lượng nhập',
+      'Giá nhập',
+      'Giá bán',
+      'Ngày nhập',
+      'Hạn sử dụng',
+      'Ghi chú',
+    ],
+    [
+      'Aquafina 500ml',
+      'chai',
+      '24',
+      '3.500',
+      5000,
+      '12/10/2026',
+      '2027-04-12',
+      'Lô đầu ngày',
+    ],
+    ['Mì Hảo Hảo', 'gói', 0, 3200, 4000, '', '', ''],
+  ]);
+  assert.equal(parsed.rows.length, 2);
+  assert.equal(parsed.rows[0].quantity, 24);
+  assert.equal(parsed.rows[0].purchasePrice, 3500);
+  assert.equal(parsed.rows[0].receivedAt.toISOString().slice(0, 10), '2026-10-12');
+  assert.equal(parsed.rows[0].expiryDate.toISOString().slice(0, 10), '2027-04-12');
+  assert.deepEqual(parsed.errors, [
+    {
+      rowNumber: 4,
+      message: 'Số lượng nhập: Phải là số nguyên từ 1 đến 2.147.483.647.',
+    },
+  ]);
+});
+test('xem trước phân biệt tạo mới, cộng thêm và chặn sai đơn vị', () => {
+  const rows = [
+    {
+      rowNumber: 2,
+      name: 'Aquafina 500ml',
+      unit: 'chai',
+      quantity: 10,
+      receivedAt: new Date(),
+      warnings: [],
+    },
+    {
+      rowNumber: 3,
+      name: 'Sản phẩm mới',
+      unit: 'gói',
+      quantity: 5,
+      receivedAt: new Date(),
+      warnings: [],
+    },
+    {
+      rowNumber: 4,
+      name: 'Aquafina 500ml',
+      unit: 'lon',
+      quantity: 2,
+      receivedAt: new Date(),
+      warnings: [],
+    },
+  ];
+  const result = annotateInventoryImport(rows, [
+    { id: 1, name: 'Aquafina 500ml', unit: 'chai' },
+  ]);
+  assert.deepEqual(
+    result.rows.map((row) => row.action),
+    ['ADD', 'CREATE', 'ADD'],
+  );
+  assert.equal(result.errors[0].rowNumber, 4);
+  assert.match(result.errors[0].message, /đơn vị “chai”/);
 });
 test('API cô lập kho theo người đăng nhập, không nhận ownerId từ client', async () => {
   const calls = [];

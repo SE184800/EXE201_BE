@@ -10,9 +10,35 @@ function createStockService(prisma) {
     return prisma.$transaction(async (tx) => {
       const existing = await tx.inventoryItem.findFirst({ where: { ownerId, name: data.name } });
       if (existing) {
+        if (existing.unit.trim().toLocaleLowerCase('vi') !== data.unit.trim().toLocaleLowerCase('vi')) {
+          throw problem(409, `“${existing.name}” đang dùng đơn vị ${existing.unit}. Hãy giữ đúng đơn vị khi tạo lô mới.`);
+        }
         const quantity = existing.quantity + data.quantity;
-        const item = await tx.inventoryItem.update({ where: { id: existing.id }, data: { quantity, unit: data.unit, purchasePrice: data.purchasePrice, sellingPrice: data.sellingPrice, expiryDate: data.expiryDate } });
-        if (data.quantity > 0 && tx.inventoryLot) await tx.inventoryLot.create({ data: { itemId: item.id, quantity: data.quantity, receivedAt: new Date(), expiryDate: data.expiryDate, purchasePrice: data.purchasePrice } });
+        if (quantity > 2147483647) throw problem(400, 'Số lượng sau khi nhập vượt giới hạn lưu trữ.');
+        const nearestExpiry = data.expiryDate && (!existing.expiryDate || data.expiryDate < existing.expiryDate)
+          ? data.expiryDate
+          : existing.expiryDate;
+        const changed = await tx.inventoryItem.updateMany({
+          where: { id: existing.id, ownerId, quantity: existing.quantity, updatedAt: existing.updatedAt },
+          data: {
+            quantity,
+            unit: existing.unit,
+            purchasePrice: data.purchasePrice,
+            sellingPrice: data.sellingPrice,
+            expiryDate: nearestExpiry,
+          },
+        });
+        if (!changed.count) throw problem(409, 'Kho vừa thay đổi. Tải lại rồi tạo lô mới.');
+        const item = await tx.inventoryItem.findUniqueOrThrow({ where: { id: existing.id } });
+        if (data.quantity > 0 && tx.inventoryLot) await tx.inventoryLot.create({
+          data: {
+            itemId: item.id,
+            quantity: data.quantity,
+            receivedAt: new Date(),
+            expiryDate: data.expiryDate || null,
+            purchasePrice: data.purchasePrice,
+          },
+        });
         await record(tx, item, existing.quantity, 'RECEIPT', 'Nhập thêm từ form Thêm sản phẩm');
         await audit(tx, ownerId, 'INVENTORY_RECEIVED', 'INVENTORY', item.id, { quantity: data.quantity, total: quantity });
         return item;
@@ -22,7 +48,7 @@ function createStockService(prisma) {
       await record(tx, item, 0, 'OPENING', 'Tồn ban đầu khi tạo sản phẩm');
       await audit(tx, ownerId, 'INVENTORY_CREATED', 'INVENTORY', item.id, { name: item.name, quantity: item.quantity, purchasePrice: item.purchasePrice, sellingPrice: item.sellingPrice });
       return item;
-    });
+    }, { isolationLevel: 'Serializable' });
   }
   async function edit(ownerId, id, data, expectedUpdatedAt) {
     return prisma.$transaction(async (tx) => {
@@ -81,6 +107,95 @@ function createStockService(prisma) {
       throw error;
     }
   }
-  return { create, edit, move };
+  async function importRows(ownerId, rows) {
+    return prisma.$transaction(async (tx) => {
+      let createdCount = 0;
+      let updatedCount = 0;
+      let importedQuantity = 0;
+      for (const row of rows) {
+        const existing = await tx.inventoryItem.findFirst({
+          where: { ownerId, name: row.name },
+        });
+        if (existing && existing.unit.trim().toLocaleLowerCase('vi') !== row.unit.trim().toLocaleLowerCase('vi')) {
+          throw problem(
+            409,
+            `Dòng ${row.rowNumber}: sản phẩm “${row.name}” đang dùng đơn vị “${existing.unit}”.`,
+          );
+        }
+        if (existing) {
+          const quantity = existing.quantity + row.quantity;
+          if (quantity > 2147483647) {
+            throw problem(400, `Dòng ${row.rowNumber}: số lượng tồn vượt giới hạn lưu trữ.`);
+          }
+          const nearestExpiry =
+            row.expiryDate === undefined
+              ? existing.expiryDate
+              : !existing.expiryDate || row.expiryDate < existing.expiryDate
+                ? row.expiryDate
+                : existing.expiryDate;
+          const update = {
+            quantity,
+            ...(row.purchasePrice !== undefined ? { purchasePrice: row.purchasePrice } : {}),
+            ...(row.sellingPrice !== undefined ? { sellingPrice: row.sellingPrice } : {}),
+            ...(row.expiryDate !== undefined ? { expiryDate: nearestExpiry } : {}),
+          };
+          const item = await tx.inventoryItem.update({
+            where: { id: existing.id },
+            data: update,
+          });
+          await tx.inventoryLot.create({
+            data: {
+              itemId: item.id,
+              quantity: row.quantity,
+              receivedAt: row.receivedAt,
+              expiryDate: row.expiryDate ?? null,
+              purchasePrice: row.purchasePrice ?? existing.purchasePrice,
+            },
+          });
+          const note = `Nhập kho từ Excel${row.note ? ` · ${row.note}` : ''}`.slice(0, 250);
+          await record(tx, item, existing.quantity, 'RECEIPT', note, undefined, null, row.receivedAt);
+          await audit(tx, ownerId, 'INVENTORY_IMPORTED', 'INVENTORY', item.id, {
+            rowNumber: row.rowNumber,
+            quantity: row.quantity,
+            before: existing.quantity,
+            after: quantity,
+          });
+          updatedCount += 1;
+        } else {
+          const item = await tx.inventoryItem.create({
+            data: {
+              ownerId,
+              name: row.name,
+              unit: row.unit,
+              quantity: row.quantity,
+              purchasePrice: row.purchasePrice ?? null,
+              sellingPrice: row.sellingPrice ?? null,
+              expiryDate: row.expiryDate ?? null,
+            },
+          });
+          await tx.inventoryLot.create({
+            data: {
+              itemId: item.id,
+              quantity: row.quantity,
+              receivedAt: row.receivedAt,
+              expiryDate: row.expiryDate ?? null,
+              purchasePrice: row.purchasePrice ?? null,
+            },
+          });
+          const note = `Tạo sản phẩm từ Excel${row.note ? ` · ${row.note}` : ''}`.slice(0, 250);
+          await record(tx, item, 0, 'OPENING', note, undefined, null, row.receivedAt);
+          await audit(tx, ownerId, 'INVENTORY_IMPORTED', 'INVENTORY', item.id, {
+            rowNumber: row.rowNumber,
+            quantity: row.quantity,
+            created: true,
+          });
+          createdCount += 1;
+        }
+        importedQuantity += row.quantity;
+      }
+      return { createdCount, updatedCount, importedQuantity, rowCount: rows.length };
+    }, { maxWait: 5000, timeout: 30000 });
+  }
+  return { create, edit, move, importRows };
 }
 module.exports = { createStockService };

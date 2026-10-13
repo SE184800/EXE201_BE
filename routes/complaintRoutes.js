@@ -4,6 +4,16 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { requireRole } = require('../middlewares/authMiddleware');
 
+const COMPLAINT_REASONS = new Set([
+  'DAMAGED',
+  'SHORTAGE',
+  'WRONG_ITEM',
+  'EXPIRED',
+  'QUALITY',
+  'LATE',
+  'OTHER',
+]);
+
 const uploadsDir = path.join(__dirname, '../public/uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -70,7 +80,14 @@ function createComplaintRoutes(prisma, requireAuth) {
   r.post('/', requireRole('STORE_OWNER'), async (req, res, next) => {
     try {
       const { orderId, reason, description, imageUrl } = req.body || {};
-      if (!Number.isInteger(orderId) || typeof reason !== 'string' || reason.trim().length < 2 || reason.trim().length > 200 || typeof description !== 'string' || description.trim().length < 3) {
+      const normalizedReason = typeof reason === 'string' ? reason.trim() : '';
+      const normalizedDescription = typeof description === 'string' ? description.trim() : '';
+      if (
+        !Number.isInteger(orderId) ||
+        !COMPLAINT_REASONS.has(normalizedReason) ||
+        normalizedDescription.length < 3 ||
+        normalizedDescription.length > 1000
+      ) {
         return res.status(400).json({ message: 'Thông tin khiếu nại chưa hợp lệ.' });
       }
 
@@ -87,7 +104,7 @@ function createComplaintRoutes(prisma, requireAuth) {
 
       const existing = await prisma.orderComplaint.findUnique({ where: { orderId } });
       if (existing) {
-        return res.status(400).json({ message: 'Đơn hàng này đã có báo cáo khiếu nại.' });
+        return res.status(409).json({ message: 'Đơn hàng này đã có báo cáo khiếu nại.' });
       }
 
       const normalizedImageUrl = typeof imageUrl === 'string' && imageUrl.trim().length > 0 && imageUrl.trim().length <= 1000
@@ -99,13 +116,15 @@ function createComplaintRoutes(prisma, requireAuth) {
           orderId,
           buyerId: req.auth.user.id,
           supplierId: order.supplierId,
-          reason: reason.trim(),
-          description: description.trim(),
+          reason: normalizedReason,
+          description: normalizedDescription,
           imageUrl: normalizedImageUrl,
         },
       });
       res.status(201).json({ complaint: c });
     } catch (e) {
+      if (e.code === 'P2002') return res.status(409).json({ message: 'Đơn hàng này đã có báo cáo khiếu nại.' });
+      if (e.code === 'P2000') return res.status(400).json({ message: 'Nội dung báo cáo vượt quá giới hạn cho phép.' });
       next(e);
     }
   });
@@ -113,6 +132,9 @@ function createComplaintRoutes(prisma, requireAuth) {
   r.patch('/:id', requireRole('SUPPLIER'), async (req, res, next) => {
     try {
       const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id < 1 || id > 2147483647) {
+        return res.status(400).json({ message: 'Mã báo cáo không hợp lệ.' });
+      }
       const p = await prisma.supplierProfile.findUnique({ where: { userId: req.auth.user.id } });
       if (!p) return res.status(404).json({ message: 'Không tìm thấy hồ sơ nhà cung cấp.' });
 
@@ -121,16 +143,21 @@ function createComplaintRoutes(prisma, requireAuth) {
 
       const status = ['IN_REVIEW', 'RESOLVED', 'REJECTED'].includes(req.body?.status) ? req.body.status : null;
       if (!status) return res.status(400).json({ message: 'Trạng thái không hợp lệ.' });
+      const response = typeof req.body.response === 'string' ? req.body.response.trim() : '';
+      if (response.length > 1000 || (['RESOLVED', 'REJECTED'].includes(status) && response.length < 3)) {
+        return res.status(400).json({ message: 'Nhập phản hồi từ 3 đến 1.000 ký tự khi kết thúc báo cáo.' });
+      }
 
       const saved = await prisma.orderComplaint.update({
         where: { id },
         data: {
           status,
-          response: typeof req.body.response === 'string' ? req.body.response.trim() : null,
+          response: response || null,
         },
       });
       res.json({ complaint: saved });
     } catch (e) {
+      if (e.code === 'P2000') return res.status(400).json({ message: 'Phản hồi vượt quá giới hạn cho phép.' });
       next(e);
     }
   });

@@ -1,9 +1,13 @@
 const { Prisma } = require('@prisma/client');
 const { moderateContent } = require('./contentModerationService');
 const { audit, problem, activeAccountWhere, verificationComplete } = require('./platformPolicy');
+const { addCalendarMonth, MONTHLY_PRICE } = require('./subscriptionService');
 const PAGE_SIZE = 20;
 const number = value => Number(value || 0);
 const vnDate = date => new Date(date.getTime() + 7 * 3600000).toISOString().slice(0, 10);
+const dateOnly = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+  && value >= '2020-01-01' && value <= '2100-12-31'
+  && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
 function textFilter(value, max = 150) {
   if (value === undefined) return '';
   if (typeof value !== 'string' || value.length > max) throw problem(400, 'Bộ lọc không hợp lệ.');
@@ -30,8 +34,15 @@ function period(query) {
   return { from, to, start, end, range: { gte: start, lt: end } };
 }
 function state(user) { return !user.isActive ? 'BANNED' : user.suspendedUntil && user.suspendedUntil > new Date() ? 'SUSPENDED' : 'ACTIVE'; }
-const userSelect = { id: true, username: true, name: true, email: true, phone: true, isActive: true, suspendedUntil: true, lockReason: true, createdAt: true, updatedAt: true, role: { select: { code: true } } };
-const publicAccount = user => ({ ...user, status: state(user), role: user.role.code });
+const subscriptionSelect = { id: true, status: true, trialStartedAt: true, trialEndsAt: true, currentPeriodStart: true, currentPeriodEnd: true, updatedAt: true };
+const userSelect = { id: true, username: true, name: true, email: true, phone: true, isActive: true, suspendedUntil: true, lockReason: true, createdAt: true, updatedAt: true, role: { select: { code: true } }, subscription: { select: subscriptionSelect } };
+function publicSubscription(subscription, now = new Date()) {
+  if (!subscription) return { status: 'NOT_STARTED', hasAccess: true, accessEndsAt: null, updatedAt: null };
+  const accessEndsAt = subscription.status === 'TRIAL' ? subscription.trialEndsAt : subscription.currentPeriodEnd;
+  const hasAccess = Boolean(accessEndsAt && accessEndsAt > now && ['TRIAL', 'ACTIVE'].includes(subscription.status));
+  return { ...subscription, status: hasAccess ? subscription.status : 'EXPIRED', hasAccess, accessEndsAt };
+}
+const publicAccount = user => ({ ...user, status: state(user), role: user.role.code, subscription: publicSubscription(user.subscription) });
 const orderInclude = { supplier: { select: { id: true, businessName: true } }, buyer: { select: { name: true } } };
 function settlementRow(order) {
   return { id: order.id, supplierId: order.supplierId, businessName: order.supplier.businessName, buyerName: order.buyer.name, subtotal: number(order.subtotal), total: number(order.total), commissionRate: order.commissionRate === null ? null : number(order.commissionRate), commissionAmount: order.commissionAmount === null ? null : number(order.commissionAmount), deliveredAt: order.deliveredAt, paidAt: order.commissionPaidAt, paymentReference: order.commissionPaymentReference, region: order.supplierRegion, paymentStatus: order.commissionAmount === null ? 'UNTRACKED' : number(order.commissionAmount) === 0 ? 'NO_FEE' : order.commissionPaidAt ? 'PAID' : 'UNPAID' };
@@ -39,21 +50,65 @@ function settlementRow(order) {
 function settlementWhere(query, dates) {
   const status = textFilter(query.status);
   if (!['', 'PAID', 'UNPAID', 'NO_FEE', 'UNTRACKED'].includes(status)) throw problem(400, 'Trạng thái đối soát không hợp lệ.');
-  return { status: 'DELIVERED', deliveredAt: dates.range, ...(query.supplierId ? { supplierId: idParam(query.supplierId) } : {}),
-    ...(status === 'PAID' ? { commissionPaidAt: { not: null } } : status === 'UNPAID' ? { commissionPaidAt: null, commissionAmount: { gt: 0 } } : status === 'NO_FEE' ? { commissionAmount: 0 } : status === 'UNTRACKED' ? { commissionAmount: null } : {}) };
+  return {
+    status: 'DELIVERED', deliveredAt: dates.range, ...(query.supplierId ? { supplierId: idParam(query.supplierId) } : {}),
+    ...(status === 'PAID' ? { commissionPaidAt: { not: null } } : status === 'UNPAID' ? { commissionPaidAt: null, commissionAmount: { gt: 0 } } : status === 'NO_FEE' ? { commissionAmount: 0 } : status === 'UNTRACKED' ? { commissionAmount: null } : {})
+  };
 }
 function csvCell(value) {
   let text = value === null || value === undefined ? '' : String(value);
   if (/^[\s]*[=+\-@]/.test(text)) text = "'" + text;
   return '"' + text.replaceAll('"', '""') + '"';
 }
+function serializeHoliday(row) {
+  return {
+    ...row,
+    startDate: new Date(row.startDate).toISOString().slice(0, 10),
+    endDate: new Date(row.endDate).toISOString().slice(0, 10),
+    demandMultiplier: number(row.demandMultiplier),
+  };
+}
+function holidayInput(body, requireVersion = false) {
+  body = body && typeof body === 'object' ? body : {};
+  const name = typeof body.name === 'string' ? body.name.trim().replace(/\s+/g, ' ') : '';
+  const description = typeof body.description === 'string' ? body.description.trim().replace(/\s+/g, ' ') : '';
+  const keywords = typeof body.categoryKeywords === 'string'
+    ? [...new Set(body.categoryKeywords.split(',').map(value => value.trim().replace(/\s+/g, ' ')).filter(Boolean))].join(', ')
+    : '';
+  const preparationDays = body.preparationDays;
+  const demandMultiplier = body.demandMultiplier;
+  if (name.length < 2 || name.length > 150) throw problem(400, 'Tên ngày lễ cần từ 2–150 ký tự.');
+  if (!dateOnly(body.startDate) || !dateOnly(body.endDate) || body.startDate > body.endDate) throw problem(400, 'Chọn ngày bắt đầu, kết thúc hợp lệ và đúng thứ tự.');
+  if (new Date(body.endDate) - new Date(body.startDate) > 31 * 86400000) throw problem(400, 'Một đợt ngày lễ tối đa 32 ngày.');
+  if (!Number.isInteger(preparationDays) || preparationDays < 0 || preparationDays > 60) throw problem(400, 'Số ngày chuẩn bị cần là số nguyên từ 0–60.');
+  if (typeof demandMultiplier !== 'number' || !Number.isFinite(demandMultiplier) || demandMultiplier < 1 || demandMultiplier > 5 || Math.abs(demandMultiplier * 100 - Math.round(demandMultiplier * 100)) > 0.000001) throw problem(400, 'Hệ số nhu cầu từ 1–5, tối đa 2 số thập phân.');
+  if (!keywords || keywords.length > 1000) throw problem(400, 'Nhập nhóm hàng áp dụng, ngăn cách bằng dấu phẩy và tối đa 1.000 ký tự.');
+  if (description.length > 500) throw problem(400, 'Mô tả tối đa 500 ký tự.');
+  if (typeof body.isActive !== 'boolean') throw problem(400, 'Trạng thái cấu hình không hợp lệ.');
+  if (requireVersion && !Number.isInteger(body.version)) throw problem(400, 'Tải lại cấu hình trước khi sửa.');
+  return {
+    data: {
+      name,
+      startDate: new Date(body.startDate + 'T00:00:00.000Z'),
+      endDate: new Date(body.endDate + 'T00:00:00.000Z'),
+      preparationDays,
+      demandMultiplier,
+      categoryKeywords: keywords,
+      description: description || null,
+      isActive: body.isActive,
+    },
+    version: body.version,
+  };
+}
 function createAdminService(prisma, config) {
   async function listUsers(query) {
     const { page, skip, take } = pagination(query), q = textFilter(query.q), role = textFilter(query.role), status = textFilter(query.status);
     if (!['', 'STORE_OWNER', 'SUPPLIER'].includes(role) || !['', 'ACTIVE', 'SUSPENDED', 'BANNED'].includes(status)) throw problem(400, 'Vai trò hoặc trạng thái không hợp lệ.');
-    const where = { role: { code: role || { in: ['STORE_OWNER', 'SUPPLIER'] } },
+    const where = {
+      role: { code: role || { in: ['STORE_OWNER', 'SUPPLIER'] } },
       ...(status === 'BANNED' ? { isActive: false } : status === 'SUSPENDED' ? { isActive: true, suspendedUntil: { gt: new Date() } } : status === 'ACTIVE' ? activeAccountWhere() : {}),
-      ...(q ? { AND: [{ OR: ['username', 'name', 'email', 'phone'].map(field => ({ [field]: { contains: q } })) }] } : {}) };
+      ...(q ? { AND: [{ OR: ['username', 'name', 'email', 'phone'].map(field => ({ [field]: { contains: q } })) }] } : {})
+    };
     const [users, total] = await Promise.all([prisma.user.findMany({ where, select: userSelect, skip, take, orderBy: { id: 'desc' } }), prisma.user.count({ where })]);
     return { users: users.map(publicAccount), total, page, hasMore: skip + take < total };
   }
@@ -74,6 +129,33 @@ function createAdminService(prisma, config) {
         await tx.passwordReset.deleteMany({ where: { userId: id } });
       }
       await audit(tx, actorId, 'ACCOUNT_STATUS_CHANGED', 'USER', id, { before: state(user), after: body.status, until, reason });
+      return publicAccount(await tx.user.findUniqueOrThrow({ where: { id }, select: userSelect }));
+    }, { isolationLevel: 'Serializable' });
+  }
+  async function unlockSubscription(actorId, id, body) {
+    const reason = textFilter(body.reason, 500);
+    if (reason.length < 3) throw problem(400, 'Nhập lý do mở khóa từ 3–500 ký tự.');
+    return prisma.$transaction(async tx => {
+      const user = await tx.user.findUnique({ where: { id }, include: { role: true, subscription: true } });
+      if (!user) throw problem(404, 'Không tìm thấy tài khoản.');
+      if (id === actorId || !['STORE_OWNER', 'SUPPLIER'].includes(user.role.code)) throw problem(403, 'Chỉ cấp quyền sử dụng cho chủ tạp hóa và chủ vựa.');
+      if (!user.subscription) throw problem(409, 'Tài khoản chưa bắt đầu tháng dùng thử nên chưa cần mở khóa.');
+      const before = publicSubscription(user.subscription);
+      if (before.hasAccess) throw problem(409, 'Gói sử dụng của tài khoản vẫn còn hiệu lực.');
+      const periodStart = new Date();
+      const periodEnd = addCalendarMonth(periodStart);
+      await tx.subscription.update({
+        where: { id: user.subscription.id },
+        data: {
+          status: 'ACTIVE',
+          monthlyPrice: MONTHLY_PRICE,
+          currentPeriodStart: periodStart,
+          currentPeriodEnd: periodEnd,
+        },
+      });
+      await audit(tx, actorId, 'SUBSCRIPTION_UNLOCKED_BY_ADMIN', 'SUBSCRIPTION', user.subscription.id, {
+        userId: id, reason, periodStart, periodEnd, paymentCreated: false,
+      });
       return publicAccount(await tx.user.findUniqueOrThrow({ where: { id }, select: userSelect }));
     }, { isolationLevel: 'Serializable' });
   }
@@ -168,6 +250,46 @@ function createAdminService(prisma, config) {
     ]);
     return { groups: groups.map(g => ({ provider: g.provider, status: g.status, count: g._count, averageMs: Math.round(g._avg.durationMs || 0), inputTokens: g._sum.inputTokens, outputTokens: g._sum.outputTokens })), recommendationRuns: runs, acceptedRuns: accepted, acceptanceRate: runs ? Math.round(accepted / runs * 10000) / 100 : null, daily, configuredProvider: config.aiApiKey && config.aiModel ? (config.aiProvider || 'OPENAI') : null, weatherIntegrated: false };
   }
+  async function holidays() {
+    const rows = await prisma.holidayConfig.findMany({ orderBy: [{ startDate: 'asc' }, { id: 'asc' }] });
+    return { holidays: rows.map(serializeHoliday) };
+  }
+  async function createHoliday(actorId, body) {
+    const { data } = holidayInput(body);
+    return prisma.$transaction(async tx => {
+      const created = await tx.holidayConfig.create({ data });
+      await audit(tx, actorId, 'HOLIDAY_CREATED', 'HOLIDAY', created.id, {
+        name: created.name, startDate: body.startDate, endDate: body.endDate,
+        preparationDays: created.preparationDays, demandMultiplier: created.demandMultiplier.toString(),
+      });
+      return serializeHoliday(created);
+    });
+  }
+  async function updateHoliday(actorId, id, body) {
+    const { data, version } = holidayInput(body, true);
+    return prisma.$transaction(async tx => {
+      const old = await tx.holidayConfig.findUnique({ where: { id } });
+      if (!old) throw problem(404, 'Không tìm thấy cấu hình ngày lễ.');
+      const changed = await tx.holidayConfig.updateMany({ where: { id, version }, data: { ...data, version: { increment: 1 } } });
+      if (!changed.count) throw problem(409, 'Cấu hình vừa được thay đổi. Tải lại trước khi lưu.');
+      const saved = await tx.holidayConfig.findUniqueOrThrow({ where: { id } });
+      await audit(tx, actorId, 'HOLIDAY_UPDATED', 'HOLIDAY', id, {
+        before: serializeHoliday(old), after: serializeHoliday(saved),
+      });
+      return serializeHoliday(saved);
+    });
+  }
+  async function deleteHoliday(actorId, id, body) {
+    if (!Number.isInteger(body?.version)) throw problem(400, 'Tải lại cấu hình trước khi xóa.');
+    return prisma.$transaction(async tx => {
+      const row = await tx.holidayConfig.findUnique({ where: { id } });
+      if (!row) throw problem(404, 'Không tìm thấy cấu hình ngày lễ.');
+      const deleted = await tx.holidayConfig.deleteMany({ where: { id, version: body.version } });
+      if (!deleted.count) throw problem(409, 'Cấu hình vừa được thay đổi. Tải lại trước khi xóa.');
+      await audit(tx, actorId, 'HOLIDAY_DELETED', 'HOLIDAY', id, serializeHoliday(row));
+      return { message: 'Đã xóa cấu hình ngày lễ.' };
+    });
+  }
   async function logs(query) {
     const dates = period(query), { page, take, skip } = pagination(query), action = textFilter(query.action, 60), entityId = textFilter(query.entityId, 50);
     const where = { createdAt: dates.range, ...(action ? { action: { contains: action } } : {}), ...(entityId ? { entityId } : {}) };
@@ -175,86 +297,10 @@ function createAdminService(prisma, config) {
     const actors = await prisma.user.findMany({ where: { id: { in: [...new Set(rows.map(r => r.actorId).filter(Boolean))] } }, select: { id: true, name: true, username: true } });
     return { logs: rows.map(row => ({ ...row, actor: actors.find(a => a.id === row.actorId) || null, details: JSON.parse(row.details) })), total, page, hasMore: skip + take < total };
   }
-  async function listModerationQueue(query = {}) {
-    const { page, skip, take } = pagination(query);
-    const products = await prisma.supplierProduct.findMany({
-      include: { supplier: { select: { businessName: true, user: { select: { name: true, phone: true } } } } },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    const itemsWithModeration = await Promise.all(
-      products.map(async (p) => {
-        const mod = await moderateContent({
-          name: p.name,
-          category: p.category,
-          packaging: p.packaging,
-          wholesalePrice: number(p.wholesalePrice),
-          moq: p.moq,
-        }, config || {});
-
-        return {
-          id: p.id,
-          supplierId: p.supplierId,
-          supplierName: p.supplier.businessName,
-          supplierOwner: p.supplier.user.name,
-          name: p.name,
-          category: p.category,
-          packaging: p.packaging,
-          wholesalePrice: number(p.wholesalePrice),
-          stockQty: p.stockQty,
-          moq: p.moq,
-          isActive: p.isActive,
-          createdAt: p.createdAt,
-          moderation: mod,
-        };
-      })
-    );
-
-    const flagged = itemsWithModeration.filter(item => item.moderation.status === 'FLAGGED' || !item.isActive);
-    const total = flagged.length;
-    const queue = flagged.slice(skip, skip + take);
-
-    return {
-      queue,
-      total,
-      page,
-      hasMore: skip + take < total,
-      summary: {
-        flaggedCount: flagged.length,
-        autoApprovedCount: itemsWithModeration.length - flagged.length,
-        totalCount: itemsWithModeration.length,
-      },
-    };
-  }
-
-  async function moderateAction(actorId, productId, body = {}) {
-    const action = body.action;
-    const reason = textFilter(body.reason, 255);
-    if (!['APPROVE', 'REJECT'].includes(action)) throw problem(400, 'Hành động duyệt không hợp lệ (chỉ APPROVE hoặc REJECT).');
-
-    const product = await prisma.supplierProduct.findUnique({ where: { id: productId } });
-    if (!product) throw problem(404, 'Không tìm thấy sản phẩm.');
-
-    const newActiveState = action === 'APPROVE';
-    await prisma.supplierProduct.update({
-      where: { id: productId },
-      data: { isActive: newActiveState },
-    });
-
-    await audit(prisma, actorId, action === 'APPROVE' ? 'PRODUCT_AI_MODERATION_APPROVED' : 'PRODUCT_AI_MODERATION_REJECTED', 'PRODUCT', productId, {
-      action,
-      reason,
-      productName: product.name,
-    });
-
-    return {
-      success: true,
-      message: action === 'APPROVE' ? 'Đã duyệt sản phẩm thành công.' : 'Đã từ chối và gỡ sản phẩm khỏi sàn sỉ.',
-      productId,
-      action,
-    };
-  }
-
-  return { listUsers, changeAccount, verifications, review, settings, changeRate, settlements, markPaid, analytics, aiMetrics, logs, listModerationQueue, moderateAction };
+  return {
+    listUsers, changeAccount, unlockSubscription, verifications, review, settings, changeRate,
+    settlements, markPaid, analytics, aiMetrics, holidays, createHoliday,
+    updateHoliday, deleteHoliday, logs,
+  };
 }
-module.exports = { createAdminService, idParam, period, csvCell };
+module.exports = { createAdminService, idParam, period, csvCell, holidayInput, serializeHoliday };

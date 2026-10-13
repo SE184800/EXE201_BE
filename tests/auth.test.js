@@ -8,6 +8,7 @@ const request = require('supertest');
 const prisma = require('../config/db');
 const { createApp } = require('../app');
 const { readConfig } = require('../config/env');
+const { createStockService } = require('../services/stockService');
 
 const prefix = `test_${randomUUID().slice(0, 8)}`;
 const password = 'Integration@2026';
@@ -266,7 +267,20 @@ test('kho SQL lưu dữ liệu thật, chat đọc số mới và cô lập tài
   assert.equal(created.body.item.ownerId, users[0].id);
   assert.equal(created.body.item.expiryDate.slice(0, 10), '2027-01-15');
   const id = created.body.item.id;
-  await request(app).post('/api/inventory').set(csrf).set('Cookie', owner.cookie).send(item).expect(409);
+  const restocked = await request(app).post('/api/inventory').set(csrf).set('Cookie', owner.cookie).send(item).expect(201);
+  assert.equal(restocked.body.item.id, id);
+  assert.equal(restocked.body.item.quantity, 30);
+  const restockedWithoutExpiry = await request(app)
+    .post('/api/inventory')
+    .set(csrf)
+    .set('Cookie', owner.cookie)
+    .send({ ...item, quantity: 2, expiryDate: null })
+    .expect(201);
+  assert.equal(restockedWithoutExpiry.body.item.quantity, 32);
+  assert.equal(restockedWithoutExpiry.body.item.expiryDate.slice(0, 10), '2027-01-15');
+  const lotsAfterRestock = await prisma.inventoryLot.findMany({ where: { itemId: id } });
+  assert.equal(lotsAfterRestock.length, 3);
+  assert.ok(lotsAfterRestock.some(lot => lot.quantity === 2 && lot.expiryDate === null));
   const hidden = await request(app).get('/api/inventory').set('Cookie', other.cookie).expect(200);
   assert.equal(hidden.body.items.length, 0);
   await request(app).put(`/api/inventory/${id}`).set(csrf).set('Cookie', other.cookie).send({ ...item, quantity: 99 }).expect(404);
@@ -308,6 +322,73 @@ test('kho SQL lưu dữ liệu thật, chat đọc số mới và cô lập tài
   assert.ok(history.body.movements.some((row) => row.type === 'OPENING'));
   const privateHistory = await request(app).get('/api/inventory/history').set('Cookie', other.cookie).expect(200);
   assert.equal(privateHistory.body.movements.length, 0);
+});
+
+test('nhập Excel tạo sản phẩm, cộng nhiều lô và hủy toàn bộ khi sai đơn vị', async () => {
+  const stock = createStockService(prisma);
+  const name = `${prefix}_excel_import`;
+  const result = await stock.importRows(users[0].id, [
+    {
+      rowNumber: 2,
+      name,
+      unit: 'chai',
+      quantity: 10,
+      purchasePrice: 3500,
+      sellingPrice: 5000,
+      receivedAt: new Date('2026-10-10T05:00:00Z'),
+      expiryDate: new Date('2027-04-10T00:00:00Z'),
+      note: 'Lô thứ nhất',
+    },
+    {
+      rowNumber: 3,
+      name,
+      unit: 'chai',
+      quantity: 5,
+      purchasePrice: 3600,
+      sellingPrice: 5200,
+      receivedAt: new Date('2026-10-11T05:00:00Z'),
+      expiryDate: new Date('2027-05-11T00:00:00Z'),
+      note: 'Lô thứ hai',
+    },
+  ]);
+  assert.deepEqual(result, {
+    createdCount: 1,
+    updatedCount: 1,
+    importedQuantity: 15,
+    rowCount: 2,
+  });
+  const item = await prisma.inventoryItem.findFirstOrThrow({
+    where: { ownerId: users[0].id, name },
+    include: { lots: true, movements: true },
+  });
+  assert.equal(item.quantity, 15);
+  assert.equal(item.purchasePrice, 3600);
+  assert.equal(item.sellingPrice, 5200);
+  assert.equal(item.expiryDate.toISOString().slice(0, 10), '2027-04-10');
+  assert.equal(item.lots.length, 2);
+  assert.equal(item.movements.length, 2);
+  await assert.rejects(
+    stock.importRows(users[0].id, [
+      {
+        rowNumber: 4,
+        name,
+        unit: 'lon',
+        quantity: 7,
+        receivedAt: new Date(),
+        note: '',
+      },
+    ]),
+    /Dòng 4/,
+  );
+  assert.equal(
+    (
+      await prisma.inventoryItem.findUniqueOrThrow({
+        where: { id: item.id },
+      })
+    ).quantity,
+    15,
+  );
+  await prisma.inventoryItem.delete({ where: { id: item.id } });
 });
 
 test('hồ sơ chỉ sửa trường cho phép của chính mình, chặn trùng liên hệ', async () => {
