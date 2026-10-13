@@ -2,12 +2,18 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { randomUUID } = require('node:crypto');
 const { accountAvailable, activeAccountWhere } = require('./platformPolicy');
+const { addCalendarMonth, createSubscriptionService, MONTHLY_PRICE } = require('./subscriptionService');
 
 const COOKIE_NAME = 'sg_restock_session';
 const TOKEN_OPTIONS = {
   algorithm: 'HS256',
   issuer: 'sg-restock-api',
   audience: 'sg-restock-web',
+};
+const RENEWAL_TOKEN_OPTIONS = {
+  algorithm: 'HS256',
+  issuer: 'sg-restock-api',
+  audience: 'sg-restock-renewal',
 };
 // Vẫn so sánh mật khẩu khi username không tồn tại.
 // Keep this precomputed so every Vercel cold start does not spend CPU hashing
@@ -71,6 +77,7 @@ function cookieOptions(config) {
 }
 
 function createAuthService(prisma, config) {
+  const subscriptionService = createSubscriptionService(prisma);
   async function findRegistrationConflict(input) {
     // Use SQL's collation, including when another registration wins the race.
     const duplicates = await Promise.all(['username', 'email', 'phone'].map(async (field) => {
@@ -93,11 +100,20 @@ function createAuthService(prisma, config) {
     const role = await prisma.role.findUnique({ where: { code: input.role } });
     if (!role) throw new Error('Vai trò không tồn tại.');
     const passwordHash = await bcrypt.hash(input.password, 12);
+    const trialStartedAt = new Date();
     try {
       const user = await prisma.user.create({
         data: {
           username: input.username, name: input.name, email: input.email,
           phone: input.phone, dateOfBirth: input.dateOfBirth, passwordHash, roleId: role.id,
+          ...(input.role === 'ADMIN' ? {} : {
+            subscription: {
+              create: {
+                status: 'TRIAL', monthlyPrice: MONTHLY_PRICE,
+                trialStartedAt, trialEndsAt: addCalendarMonth(trialStartedAt),
+              },
+            },
+          }),
         },
         include: { role: true },
       });
@@ -127,6 +143,23 @@ async function login(username, password) {
     );
 
     if (!accountAvailable(user) || !validPassword) return null;
+    const safeUser = publicUser(user);
+    const access = await subscriptionService.access(safeUser);
+    if (!access.hasAccess) {
+      return {
+        subscriptionRequired: true,
+        subscription: access.subscription,
+        renewalToken: jwt.sign(
+          { purpose: 'subscription-renew' },
+          config.jwtSecret,
+          {
+            ...RENEWAL_TOKEN_OPTIONS,
+            subject: String(user.id),
+            expiresIn: 10 * 60,
+          },
+        ),
+      };
+    }
 
     const session = await prisma.$transaction(
       async (tx) => {
@@ -167,10 +200,30 @@ async function login(username, password) {
 
     return {
       token,
-      user: publicUser(user),
+      user: safeUser,
     };
   }); 
 }
+
+  function verifyRenewalToken(token) {
+    if (typeof token !== 'string' || !token) return null;
+    try {
+      const payload = jwt.verify(token, config.jwtSecret, {
+        algorithms: ['HS256'],
+        issuer: RENEWAL_TOKEN_OPTIONS.issuer,
+        audience: RENEWAL_TOKEN_OPTIONS.audience,
+      });
+      if (
+        typeof payload !== 'object' ||
+        payload.purpose !== 'subscription-renew' ||
+        typeof payload.sub !== 'string' ||
+        !/^[1-9]\d*$/.test(payload.sub)
+      ) return null;
+      return Number(payload.sub);
+    } catch {
+      return null;
+    }
+  }
 
   async function authenticate(token) {
     if (!token || typeof token !== 'string') return null;
@@ -206,6 +259,6 @@ async function login(username, password) {
   async function logout(sessionId) {
     await prisma.authSession.deleteMany({ where: { id: sessionId } });
   }
-  return { login, register, authenticate, logout };
+  return { login, register, authenticate, logout, verifyRenewalToken };
 }
 module.exports = { createAuthService, COOKIE_NAME, cookieOptions, publicUser };

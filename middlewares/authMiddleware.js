@@ -3,6 +3,7 @@ const { COOKIE_NAME } = require('../services/authService');
 function createRequireAuth(authService) {
   return async (req, res, next) => {
     try {
+      if (req.auth) return next();
       const auth = await authService.authenticate(req.cookies[COOKIE_NAME]);
       if (!auth)
         return res

@@ -111,8 +111,19 @@ test('store owner can report order in ISSUE_HANDLING step and supplier can revie
     .set('Cookie', buyerCookie)
     .send({
       orderId: order.id,
-      reason: 'Khác',
+      reason: 'OTHER',
       description: 'Báo cáo trùng lặp.',
+    })
+    .expect(409);
+
+  await request(app)
+    .post('/api/complaints')
+    .set(csrf)
+    .set('Cookie', buyerCookie)
+    .send({
+      orderId: order.id,
+      reason: 'INVALID_REASON',
+      description: 'Mã lý do không hợp lệ.',
     })
     .expect(400);
 
@@ -140,6 +151,13 @@ test('store owner can report order in ISSUE_HANDLING step and supplier can revie
 
   assert.equal(updateRes.body.complaint.status, 'IN_REVIEW');
   assert.equal(updateRes.body.complaint.response, 'Đã tiếp nhận, bên mình sẽ cử người giao bù 3 lon trong chiều nay.');
+
+  await request(app)
+    .patch(`/api/complaints/${found.id}`)
+    .set(csrf)
+    .set('Cookie', supplierCookie)
+    .send({ status: 'RESOLVED', response: '' })
+    .expect(400);
 
   // Supplier views order with complaint attached
   const orderList = await request(app)

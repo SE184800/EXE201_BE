@@ -40,6 +40,8 @@ model User {
   restockPlans    RestockPlan[]
   passwordResets  PasswordReset[]
   complaints      OrderComplaint[] @relation("buyerComplaints")
+  receivedQuotes  SupplierQuote[]  @relation("quoteBuyer")
+  subscription    Subscription?
 
   @@index([roleId])
   @@map("users")
@@ -66,13 +68,14 @@ model InventoryItem {
 }
 
 model InventoryLot {
-  id             Int           @id @default(autoincrement())
-  itemId         Int
-  quantity       Int           @default(0)
-  receivedAt     DateTime      @default(now())
-  expiryDate     DateTime?     @db.Date
-  purchasePrice  Int?
-  item           InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  id            Int           @id @default(autoincrement())
+  itemId        Int
+  quantity      Int           @default(0)
+  receivedAt    DateTime      @default(now())
+  expiryDate    DateTime?     @db.Date
+  purchasePrice Int?
+  item          InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
   @@index([itemId, expiryDate, receivedAt])
   @@map("inventory_lots")
 }
@@ -108,6 +111,9 @@ model SupplierProfile {
   reviewedAt              DateTime?
   reviewedBy              Int?
   deliveryFee             Decimal           @default(0) @db.Decimal(18, 2)
+  bankName                String?           @db.NVarChar(100)
+  bankAccountNumber       String?           @db.VarChar(34)
+  bankAccountHolder       String?           @db.NVarChar(100)
   id                      Int               @id @default(autoincrement())
   userId                  Int               @unique
   businessName            String            @db.NVarChar(150)
@@ -118,29 +124,65 @@ model SupplierProfile {
   user                    User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   products                SupplierProduct[]
   orders                  WholesaleOrder[]
-  complaints              OrderComplaint[] @relation("supplierComplaints")
+  complaints              OrderComplaint[]  @relation("supplierComplaints")
+  quotes                  SupplierQuote[]
 
   @@map("supplier_profiles")
 }
 
 model SupplierProduct {
-  category       String               @default("Khác") @db.NVarChar(60)
-  imageUrl       String?              @db.NVarChar(1000)
-  id             Int                  @id @default(autoincrement())
+  category       String                        @default("Khác") @db.NVarChar(60)
+  imageUrl       String?                       @db.NVarChar(1000)
+  id             Int                           @id @default(autoincrement())
   supplierId     Int
-  name           String               @db.NVarChar(150)
-  packaging      String               @db.NVarChar(50)
-  wholesalePrice Decimal              @db.Decimal(18, 2)
+  name           String                        @db.NVarChar(150)
+  packaging      String                        @db.NVarChar(50)
+  wholesalePrice Decimal                       @db.Decimal(18, 2)
   stockQty       Int
   moq            Int
-  isActive       Boolean              @default(true)
-  createdAt      DateTime             @default(now())
-  updatedAt      DateTime             @updatedAt
-  supplier       SupplierProfile      @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  isActive       Boolean                       @default(true)
+  createdAt      DateTime                      @default(now())
+  updatedAt      DateTime                      @updatedAt
+  supplier       SupplierProfile               @relation(fields: [supplierId], references: [id], onDelete: Cascade)
   orderItems     WholesaleOrderItem[]
+  priceHistory   SupplierProductPriceHistory[]
+  quoteLines     SupplierQuoteLine[]
 
   @@index([supplierId, isActive])
   @@map("supplier_products")
+}
+
+model SupplierProductPriceHistory {
+  id            Int             @id @default(autoincrement())
+  productId     Int
+  oldPrice      Decimal         @db.Decimal(18, 2)
+  newPrice      Decimal         @db.Decimal(18, 2)
+  changePercent Decimal         @db.Decimal(9, 2)
+  reason        String?         @db.NVarChar(500)
+  changedBy     Int
+  createdAt     DateTime        @default(now())
+  product       SupplierProduct @relation(fields: [productId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([productId, createdAt])
+  @@map("supplier_product_price_history")
+}
+
+model HolidayConfig {
+  id               Int      @id @default(autoincrement())
+  name             String   @db.NVarChar(150)
+  startDate        DateTime @db.Date
+  endDate          DateTime @db.Date
+  preparationDays  Int      @default(14)
+  demandMultiplier Decimal  @default(1) @db.Decimal(4, 2)
+  categoryKeywords String   @db.NVarChar(1000)
+  description      String?  @db.NVarChar(500)
+  isActive         Boolean  @default(true)
+  version          Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([isActive, startDate, endDate])
+  @@map("holiday_configs")
 }
 
 model WholesaleOrder {
@@ -174,7 +216,21 @@ model WholesaleOrder {
   proposedTotal              Decimal?             @db.Decimal(18, 2)
   agreedTotal                Decimal?             @db.Decimal(18, 2)
   dealResponse               String?              @db.NVarChar(500)
+  depositRate                Decimal              @default(0) @db.Decimal(5, 2)
+  depositAmount              Decimal              @default(0) @db.Decimal(18, 2)
+  depositStatus              String               @default("NONE") @db.VarChar(20)
+  depositReference           String?              @db.VarChar(100)
+  depositBankName            String?              @db.NVarChar(100)
+  depositBankAccountNumber   String?              @db.VarChar(34)
+  depositBankAccountHolder   String?              @db.NVarChar(100)
+  depositSubmittedAt         DateTime?
+  depositPaidAt              DateTime?
+  depositReviewedAt          DateTime?
+  depositRejectionReason     String?              @db.NVarChar(255)
+  depositRefundedAt          DateTime?
+  depositRefundReference     String?              @db.VarChar(100)
   complaint                  OrderComplaint?
+  sourceQuote                SupplierQuote?       @relation("quoteOrder")
 
   @@index([supplierId, status])
   @@index([buyerId])
@@ -183,26 +239,108 @@ model WholesaleOrder {
   @@map("wholesale_orders")
 }
 
+model SupplierQuote {
+  id           Int                 @id @default(autoincrement())
+  supplierId   Int
+  buyerId      Int
+  title        String              @db.NVarChar(150)
+  status       String              @default("SENT") @db.VarChar(20)
+  validUntil   DateTime            @db.Date
+  subtotal     Decimal             @db.Decimal(18, 2)
+  deliveryFee  Decimal             @default(0) @db.Decimal(18, 2)
+  total        Decimal             @db.Decimal(18, 2)
+  depositRate  Decimal             @default(0) @db.Decimal(5, 2)
+  note         String?             @db.NVarChar(500)
+  responseNote String?             @db.NVarChar(500)
+  respondedAt  DateTime?
+  orderId      Int?                @unique
+  version      Int                 @default(0)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  supplier     SupplierProfile     @relation(fields: [supplierId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  buyer        User                @relation("quoteBuyer", fields: [buyerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  order        WholesaleOrder?     @relation("quoteOrder", fields: [orderId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  lines        SupplierQuoteLine[]
+
+  @@index([supplierId, status, createdAt])
+  @@index([buyerId, status, createdAt])
+  @@map("supplier_quotes")
+}
+
+model SupplierQuoteLine {
+  id          Int             @id @default(autoincrement())
+  quoteId     Int
+  productId   Int
+  productName String          @db.NVarChar(150)
+  packaging   String          @db.NVarChar(50)
+  quantity    Int
+  unitPrice   Decimal         @db.Decimal(18, 2)
+  lineTotal   Decimal         @db.Decimal(18, 2)
+  quote       SupplierQuote   @relation(fields: [quoteId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  product     SupplierProduct @relation(fields: [productId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([quoteId])
+  @@index([productId])
+  @@map("supplier_quote_lines")
+}
+
+model Subscription {
+  id                 Int                   @id @default(autoincrement())
+  userId             Int                   @unique
+  status             String                @default("TRIAL") @db.VarChar(20)
+  monthlyPrice       Decimal               @default(19000) @db.Decimal(18, 2)
+  trialStartedAt     DateTime
+  trialEndsAt        DateTime
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+  user               User                  @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  payments           SubscriptionPayment[]
+
+  @@index([status, trialEndsAt])
+  @@index([status, currentPeriodEnd])
+  @@map("subscriptions")
+}
+
+model SubscriptionPayment {
+  id             Int          @id @default(autoincrement())
+  subscriptionId Int
+  requestId      String       @unique @db.VarChar(36)
+  amount         Decimal      @db.Decimal(18, 2)
+  status         String       @default("PAID") @db.VarChar(20)
+  method         String       @default("SIMULATED") @db.VarChar(30)
+  reference      String       @db.VarChar(100)
+  periodStart    DateTime
+  periodEnd      DateTime
+  paidAt         DateTime     @default(now())
+  createdAt      DateTime     @default(now())
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([subscriptionId, paidAt])
+  @@map("subscription_payments")
+}
+
 model OrderComplaint {
-  id          Int      @id @default(autoincrement())
-  orderId     Int      @unique
+  id          Int             @id @default(autoincrement())
+  orderId     Int             @unique
   buyerId     Int
   supplierId  Int
-  reason      String   @db.NVarChar(200)
-  description String   @db.NVarChar(1000)
-  imageUrl    String?  @db.NVarChar(1000)
-  status      String   @default("OPEN") @db.VarChar(20)
-  response    String?  @db.NVarChar(1000)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  order       WholesaleOrder @relation(fields: [orderId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  buyer       User @relation("buyerComplaints", fields: [buyerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  reason      String          @db.NVarChar(200)
+  description String          @db.NVarChar(1000)
+  imageUrl    String?         @db.NVarChar(1000)
+  status      String          @default("OPEN") @db.VarChar(20)
+  response    String?         @db.NVarChar(1000)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  order       WholesaleOrder  @relation(fields: [orderId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  buyer       User            @relation("buyerComplaints", fields: [buyerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   supplier    SupplierProfile @relation("supplierComplaints", fields: [supplierId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
   @@index([buyerId, status])
   @@index([supplierId, status])
   @@map("order_complaints")
 }
-
 
 model WholesaleOrderItem {
   id          Int             @id @default(autoincrement())

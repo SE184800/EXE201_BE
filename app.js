@@ -24,6 +24,9 @@ const { createOrderRoutes } = require('./routes/orderRoutes');
 const { createPasswordRoutes } = require('./routes/passwordRoutes');
 const { createAdminRoutes } = require('./routes/adminRoutes');
 const { createComplaintRoutes } = require('./routes/complaintRoutes');
+const { createSupplierQuoteRoutes, createStoreQuoteRoutes } = require('./routes/quoteRoutes');
+const { createSubscriptionRoutes } = require('./routes/subscriptionRoutes');
+const { createSubscriptionGate } = require('./middlewares/subscriptionMiddleware');
 
 function createApp(prisma, config) {
   const app = express();
@@ -121,6 +124,27 @@ function createApp(prisma, config) {
     createPasswordRoutes(prisma, requireAuth, config)
   );
 
+  app.use('/api/subscription', createSubscriptionRoutes(prisma, requireAuth, authService));
+
+  const subscriptionGate = createSubscriptionGate(prisma);
+  app.use('/api', (req, res, next) => {
+    const protectedRoots = [
+      '/admin',
+      '/users',
+      '/inventory',
+      '/supplier',
+      '/catalog',
+      '/orders',
+      '/quotes',
+      '/complaints',
+      '/restock',
+      '/advisor',
+    ];
+    const isProtected = protectedRoots.some(root => req.path === root || req.path.startsWith(`${root}/`));
+    if (!isProtected) return next();
+    return requireAuth(req, res, () => subscriptionGate(req, res, next));
+  });
+
   app.use('/api/admin', createAdminRoutes(prisma, requireAuth, config));
 
   app.use(
@@ -147,6 +171,8 @@ function createApp(prisma, config) {
     '/api/orders',
     createOrderRoutes(prisma, requireAuth)
   );
+  app.use('/api/quotes', createStoreQuoteRoutes(prisma, requireAuth));
+  app.use('/api/supplier/quotes', createSupplierQuoteRoutes(prisma, requireAuth));
   app.use('/api/complaints', createComplaintRoutes(prisma, requireAuth));
 
   app.use(

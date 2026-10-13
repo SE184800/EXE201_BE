@@ -30,6 +30,16 @@ function createAuthController(authService, config) {
               success: false,
               message: 'Username hoặc mật khẩu không chính xác.',
             });
+        if (result.subscriptionRequired) {
+          res.clearCookie(COOKIE_NAME, cookieOptions(config));
+          return res.status(402).json({
+            success: false,
+            code: 'SUBSCRIPTION_REQUIRED',
+            message: 'Gói dùng thử đã hết hạn. Thanh toán 19.000đ để mở khóa thêm 1 tháng.',
+            renewalToken: result.renewalToken,
+            subscription: result.subscription,
+          });
+        }
         res.cookie(COOKIE_NAME, result.token, {
           ...cookieOptions(config),
           maxAge: config.sessionSeconds * 1000,

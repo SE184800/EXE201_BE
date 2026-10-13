@@ -1,10 +1,40 @@
 const express = require('express');
+const path = require('node:path');
+const multer = require('multer');
 const { requireRole } = require('../middlewares/authMiddleware');
 const { ROLES } = require('../config/roles');
 const { answerInventory } = require('../services/inventoryChat');
 const { expiryInfo } = require('../services/inventoryExpiry');
+const {
+  annotateInventoryImport,
+  parseInventoryWorkbook,
+  serializeImportRow,
+} = require('../services/inventoryImport');
 const { createStockService } = require('../services/stockService');
 const { createStoreRevenueService } = require('../services/storeRevenueService');
+
+const inventoryWorkbookUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 3 * 1024 * 1024, files: 1, fields: 0 },
+  fileFilter: (_req, file, callback) => {
+    callback(
+      path.extname(file.originalname).toLowerCase() === '.xlsx'
+        ? null
+        : Object.assign(new Error('Chỉ hỗ trợ file Excel .xlsx.'), { status: 400 }),
+      path.extname(file.originalname).toLowerCase() === '.xlsx',
+    );
+  },
+});
+
+function receiveInventoryWorkbook(req, res, next) {
+  inventoryWorkbookUpload.single('file')(req, res, (error) => {
+    if (!error) return next();
+    if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ message: 'File Excel tối đa 3 MB.' });
+    }
+    return res.status(error.status || 400).json({ message: error.message || 'File Excel không hợp lệ.' });
+  });
+}
 
 function validateItem(body) {
   if (!body || typeof body !== 'object') return null;
@@ -55,6 +85,66 @@ function createInventoryRoutes(prisma, requireAuth) {
       const rows = await prisma.stockMovement.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: (page - 1) * 20, take: 21 });
       res.json({ movements: rows.slice(0, 20), hasMore: rows.length > 20 });
     } catch (error) { next(error); }
+  });
+  async function readInventoryWorkbook(req) {
+    if (!req.file?.buffer) {
+      const error = new Error('Hãy chọn file Excel .xlsx.');
+      error.status = 400;
+      throw error;
+    }
+    const parsed = await parseInventoryWorkbook(req.file.buffer);
+    const existing = await prisma.inventoryItem.findMany({
+      where: { ownerId: req.auth.user.id },
+      select: { id: true, name: true, unit: true },
+    });
+    const annotated = annotateInventoryImport(parsed.rows, existing);
+    return {
+      rows: annotated.rows,
+      errors: [...parsed.errors, ...annotated.errors],
+    };
+  }
+  router.post('/import/preview', receiveInventoryWorkbook, async (req, res, next) => {
+    try {
+      const result = await readInventoryWorkbook(req);
+      const invalidRows = new Set(result.errors.map((error) => error.rowNumber));
+      res.json({
+        fileName: req.file.originalname,
+        rows: result.rows.map(serializeImportRow),
+        errors: result.errors,
+        summary: {
+          rowCount: result.rows.length,
+          validCount: result.rows.length - invalidRows.size,
+          createdCount: result.rows.filter((row) => row.action === 'CREATE').length,
+          updatedCount: result.rows.filter((row) => row.action === 'ADD').length,
+          totalQuantity: result.rows.reduce((sum, row) => sum + (row.quantity || 0), 0),
+        },
+      });
+    } catch (error) {
+      if (error.status) return res.status(error.status).json({ message: error.message });
+      next(error);
+    }
+  });
+  router.post('/import/commit', receiveInventoryWorkbook, async (req, res, next) => {
+    try {
+      const result = await readInventoryWorkbook(req);
+      if (result.errors.length) {
+        return res.status(422).json({
+          message: 'File Excel còn dòng chưa hợp lệ. Hãy sửa file và kiểm tra lại.',
+          errors: result.errors,
+        });
+      }
+      const imported = await stock.importRows(req.auth.user.id, result.rows);
+      res.status(201).json({
+        message: `Đã nhập ${imported.rowCount} dòng từ Excel.`,
+        result: imported,
+      });
+    } catch (error) {
+      if (error.status) return res.status(error.status).json({ message: error.message });
+      if (error.code === 'P2034') {
+        return res.status(409).json({ message: 'Kho đang thay đổi. Hãy tải lại và nhập lại file.' });
+      }
+      next(error);
+    }
   });
   router.post('/:id/movements', async (req, res, next) => {
     const id = Number(req.params.id);

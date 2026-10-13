@@ -55,7 +55,8 @@ test('chủ vựa thiết lập gian hàng, đăng sản phẩm; tạp hóa th�
   assert.equal(item.id, published.id); assert.equal(item.wholesalePrice, 185050);
   assert.equal(item.supplier.id, profile.id); assert.equal(item.supplier.businessName, `${prefix} Đại lý Minh Phát`);
   assert.equal(item.supplier.deliveryRadiusKm, 12.5);
-  for (const secret of ['passwordHash', 'email', 'phone', 'username', 'userId']) assert.equal(JSON.stringify(result.body).includes(`"${secret}"`), false);
+  // Số điện thoại là thông tin liên hệ kinh doanh được chủ vựa cho phép công bố.
+  for (const secret of ['passwordHash', 'email', 'username', 'userId']) assert.equal(JSON.stringify(result.body).includes(`"${secret}"`), false);
   assert.equal(await prisma.inventoryItem.count({ where: { ownerId: users[1].id } }), 0);
 });
 

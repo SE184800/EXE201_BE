@@ -66,7 +66,24 @@ function createSupplierController(service) {
         const order = await service.updateOrderStatus(req.auth.user.id, orderId, status, req.body?.rejectReason);
         return order ? res.json({ success: true, order }) : res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
       } catch (error) {
-        if (['INVALID_ORDER_STATUS', 'INVALID_ORDER_TRANSITION', 'REJECT_REASON_REQUIRED', 'INSUFFICIENT_STOCK'].includes(error.code)) return res.status(400).json({ success: false, message: error.message });
+        if (['INVALID_ORDER_STATUS', 'INVALID_ORDER_TRANSITION', 'REJECT_REASON_REQUIRED', 'INSUFFICIENT_STOCK', 'DEPOSIT_REQUIRED', 'DEPOSIT_UNRESOLVED'].includes(error.code)) return res.status(400).json({ success: false, message: error.message });
+        return next(error);
+      }
+    },
+    async updateDeposit(req, res, next) {
+      const orderId = idFrom(req.params.orderId);
+      if (!orderId) return res.status(400).json({ success: false, message: 'Mã đơn hàng không hợp lệ.' });
+      try {
+        const order = await service.updateDeposit(
+          req.auth.user.id,
+          orderId,
+          req.body?.action,
+          req.body,
+        );
+        return order
+          ? res.json({ success: true, order })
+          : res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+      } catch (error) {
         return next(error);
       }
     },

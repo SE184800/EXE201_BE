@@ -61,6 +61,7 @@ function createSupplierRoutes(prisma, requireAuth) {
   router.route('/products/:productId').put(controller.updateProduct).delete(controller.deactivateProduct);
   router.get('/orders', controller.listOrders);
   router.patch('/orders/:orderId/status', controller.updateOrderStatus);
+  router.patch('/orders/:orderId/deposit', controller.updateDeposit);
   router.use((error, req, res, next) => {
     if (error.status) return res.status(error.status).json({ message: error.message });
     if (error.code === 'SUPPLIER_PROFILE_REQUIRED') return res.status(409).json({ message: error.message });
