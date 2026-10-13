@@ -1,4 +1,5 @@
 const { Prisma } = require('@prisma/client');
+const { moderateContent } = require('./contentModerationService');
 const { audit, problem, activeAccountWhere, verificationComplete } = require('./platformPolicy');
 const PAGE_SIZE = 20;
 const number = value => Number(value || 0);
@@ -174,6 +175,86 @@ function createAdminService(prisma, config) {
     const actors = await prisma.user.findMany({ where: { id: { in: [...new Set(rows.map(r => r.actorId).filter(Boolean))] } }, select: { id: true, name: true, username: true } });
     return { logs: rows.map(row => ({ ...row, actor: actors.find(a => a.id === row.actorId) || null, details: JSON.parse(row.details) })), total, page, hasMore: skip + take < total };
   }
-  return { listUsers, changeAccount, verifications, review, settings, changeRate, settlements, markPaid, analytics, aiMetrics, logs };
+  async function listModerationQueue(query = {}) {
+    const { page, skip, take } = pagination(query);
+    const products = await prisma.supplierProduct.findMany({
+      include: { supplier: { select: { businessName: true, user: { select: { name: true, phone: true } } } } },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const itemsWithModeration = await Promise.all(
+      products.map(async (p) => {
+        const mod = await moderateContent({
+          name: p.name,
+          category: p.category,
+          packaging: p.packaging,
+          wholesalePrice: number(p.wholesalePrice),
+          moq: p.moq,
+        }, config || {});
+
+        return {
+          id: p.id,
+          supplierId: p.supplierId,
+          supplierName: p.supplier.businessName,
+          supplierOwner: p.supplier.user.name,
+          name: p.name,
+          category: p.category,
+          packaging: p.packaging,
+          wholesalePrice: number(p.wholesalePrice),
+          stockQty: p.stockQty,
+          moq: p.moq,
+          isActive: p.isActive,
+          createdAt: p.createdAt,
+          moderation: mod,
+        };
+      })
+    );
+
+    const flagged = itemsWithModeration.filter(item => item.moderation.status === 'FLAGGED' || !item.isActive);
+    const total = flagged.length;
+    const queue = flagged.slice(skip, skip + take);
+
+    return {
+      queue,
+      total,
+      page,
+      hasMore: skip + take < total,
+      summary: {
+        flaggedCount: flagged.length,
+        autoApprovedCount: itemsWithModeration.length - flagged.length,
+        totalCount: itemsWithModeration.length,
+      },
+    };
+  }
+
+  async function moderateAction(actorId, productId, body = {}) {
+    const action = body.action;
+    const reason = textFilter(body.reason, 255);
+    if (!['APPROVE', 'REJECT'].includes(action)) throw problem(400, 'Hành động duyệt không hợp lệ (chỉ APPROVE hoặc REJECT).');
+
+    const product = await prisma.supplierProduct.findUnique({ where: { id: productId } });
+    if (!product) throw problem(404, 'Không tìm thấy sản phẩm.');
+
+    const newActiveState = action === 'APPROVE';
+    await prisma.supplierProduct.update({
+      where: { id: productId },
+      data: { isActive: newActiveState },
+    });
+
+    await audit(prisma, actorId, action === 'APPROVE' ? 'PRODUCT_AI_MODERATION_APPROVED' : 'PRODUCT_AI_MODERATION_REJECTED', 'PRODUCT', productId, {
+      action,
+      reason,
+      productName: product.name,
+    });
+
+    return {
+      success: true,
+      message: action === 'APPROVE' ? 'Đã duyệt sản phẩm thành công.' : 'Đã từ chối và gỡ sản phẩm khỏi sàn sỉ.',
+      productId,
+      action,
+    };
+  }
+
+  return { listUsers, changeAccount, verifications, review, settings, changeRate, settlements, markPaid, analytics, aiMetrics, logs, listModerationQueue, moderateAction };
 }
 module.exports = { createAdminService, idParam, period, csvCell };

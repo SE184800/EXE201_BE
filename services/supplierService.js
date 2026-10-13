@@ -1,4 +1,5 @@
 const { audit, problem, httpsDocument, verificationComplete } = require('./platformPolicy');
+const { moderateContent } = require('./contentModerationService');
 const ORDER_STATUSES = Object.freeze([
   'PENDING', 'APPROVED', 'REJECTED', 'PREPARING', 'SHIPPING', 'ISSUE_HANDLING', 'DELIVERED',
 ]);
@@ -28,7 +29,15 @@ function hasTwoDecimals(value) {
   return Number.isFinite(value) && Math.abs(value * 100 - Math.round(value * 100)) < 0.00001;
 }
 
-function serializeProduct(product) {
+async function serializeProduct(product) {
+  const mod = await moderateContent({
+    name: product.name,
+    category: product.category,
+    packaging: product.packaging,
+    wholesalePrice: numberValue(product.wholesalePrice),
+    moq: product.moq,
+  });
+
   return {
     category: product.category, imageUrl: product.imageUrl,
     id: product.id,
@@ -40,6 +49,7 @@ function serializeProduct(product) {
     isActive: product.isActive,
     createdAt: product.createdAt,
     updatedAt: product.updatedAt,
+    moderation: mod,
   };
 }
 
@@ -172,7 +182,7 @@ function createSupplierService(prisma) {
   async function listProducts(userId) {
     const profile = await requireProfile(userId);
     const products = await prisma.supplierProduct.findMany({ where: { supplierId: profile.id }, orderBy: { updatedAt: 'desc' } });
-    return products.map(serializeProduct);
+    return Promise.all(products.map(serializeProduct));
   }
 
   async function createProduct(userId, input) {
@@ -280,7 +290,7 @@ function createSupplierService(prisma) {
     ]);
     return {
       profile: serializeProfile(profile),
-      products: products.map(serializeProduct), orders: orders.map(serializeOrder),
+      products: await Promise.all(products.map(serializeProduct)), orders: orders.map(serializeOrder),
       summary: {
         productCount: products.filter((product) => product.isActive).length,
         lowStockCount: products.filter((product) => product.isActive && product.stockQty <= product.moq).length,

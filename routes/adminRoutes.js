@@ -19,6 +19,8 @@ function createAdminRoutes(prisma, requireAuth, config) {
   router.post('/settlements/:id/receive', run(async (req, res) => res.json({ order: await service.markPaid(req.auth.user.id, idParam(req.params.id), req.body || {}) })));
   router.get('/analytics', run(async (req, res) => res.json(await service.analytics(req.query))));
   router.get('/ai', run(async (req, res) => res.json(await service.aiMetrics(req.query))));
+  router.get('/moderation/queue', run(async (req, res) => res.json(await service.listModerationQueue(req.query))));
+  router.post('/moderation/:id/action', run(async (req, res) => res.json(await service.moderateAction(req.auth.user.id, idParam(req.params.id), req.body || {}))));
   router.get('/audit-logs', run(async (req, res) => res.json(await service.logs(req.query))));
   router.use((error, req, res, next) => {
     if (error.status) return res.status(error.status).json({ message: error.message });
