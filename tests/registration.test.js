@@ -73,11 +73,16 @@ for (const [role, workspace, denied] of [
 test('validation trả lỗi đúng từng trường và không tạo user với dữ liệu sai', async () => {
   for (const [field, value] of [
     ['name', 'An123'], ['name', '...'], ['name', 'A'.repeat(101)],
-    ['username', 'ab'], ['email', 'a@@example.com'], ['email', `${'a'.repeat(250)}@example.com`],
+    ['name', '   A   '], ['name', '  A . '],
+    ['username', 'ab'], ['username', 'a b'],
+    ['email', 'a@@example.com'], ['email', `${'a'.repeat(250)}@example.com`],
+    ['email', '   @gmail.com'], ['email', ' a @gmail.com'], ['email', 'a@gmail.com'],
     ['phone', '12345'], ['phone', { value: '0912345678' }], ['role', 'ADMIN'],
     ['dateOfBirth', '1899-12-31'], ['dateOfBirth', '2001-02-29'], ['dateOfBirth', '2100-01-01'],
     ['password', 'Aa1!'.repeat(19)], ['password', `Aa1!${'ế'.repeat(24)}`],
-    ['password', 'Ab1!'], ['password', 'Abcdef12 '], ['confirmPassword', 'wrong'], ['confirmPassword', ''],
+    ['password', 'Ab1!'], ['password', 'Abcdef12 '], ['password', 'Aa1!    '],
+    ['confirmPassword', 'wrong'], ['confirmPassword', ''],
+    ['acceptTerms', false],
   ]) {
     const input = fixture({ [field]: value });
     const response = await register(createApp(prisma, config), input).expect(400);
@@ -86,6 +91,13 @@ test('validation trả lỗi đúng từng trường và không tạo user với
   }
   const response = await register(createApp(prisma, config), {}).expect(400);
   assert.equal(Object.keys(response.body.errors).length, 8);
+});
+
+test('chấp nhận điều khoản và dịch vụ (acceptTerms: true) cho phép đăng ký thành công', async () => {
+  const app = createApp(prisma, config);
+  const input = fixture({ acceptTerms: true });
+  const res = await register(app, input).expect(201);
+  assert.equal(res.body.user.username, input.username);
 });
 
 test('ngày sinh dùng ngày Việt Nam, kiểm tra ngày thật và dữ liệu sai kiểu', () => {

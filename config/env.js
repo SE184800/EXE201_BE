@@ -44,6 +44,7 @@ function readConfig(env = process.env) {
   if (!['GEMINI', 'OPENAI'].includes(aiProvider)) throw new Error('AI_PROVIDER phải là GEMINI hoặc OPENAI.');
   return {
     mailTransport,
+    gmail: { user: env.GMAIL_USER || '', appPassword: env.GMAIL_APP_PASSWORD || '' },
     smtp: { host: env.SMTP_HOST || '', port: Number(env.SMTP_PORT || 587), user: env.SMTP_USER || '', pass: env.SMTP_PASSWORD || '', from: env.SMTP_FROM || '' },
     aiProvider,
     aiApiKey: (aiProvider === 'GEMINI' ? env.GEMINI_API_KEY : env.OPENAI_API_KEY) || '',

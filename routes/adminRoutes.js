@@ -20,6 +20,8 @@ function createAdminRoutes(prisma, requireAuth, config) {
   router.post('/settlements/:id/receive', run(async (req, res) => res.json({ order: await service.markPaid(req.auth.user.id, idParam(req.params.id), req.body || {}) })));
   router.get('/analytics', run(async (req, res) => res.json(await service.analytics(req.query))));
   router.get('/ai', run(async (req, res) => res.json(await service.aiMetrics(req.query))));
+  router.get('/moderation/queue', run(async (req, res) => res.json(await service.listModerationQueue(req.query))));
+  router.post('/moderation/:id/action', run(async (req, res) => res.json(await service.moderateAction(req.auth.user.id, idParam(req.params.id), req.body || {}))));
   router.get('/holidays', run(async (req, res) => res.json(await service.holidays())));
   router.post('/holidays', run(async (req, res) => res.status(201).json({ holiday: await service.createHoliday(req.auth.user.id, req.body || {}) })));
   router.put('/holidays/:id', run(async (req, res) => res.json({ holiday: await service.updateHoliday(req.auth.user.id, idParam(req.params.id), req.body || {}) })));

@@ -6,7 +6,8 @@ const { createRegistrationController } = require('../controllers/registrationCon
 function createAuthRoutes(authService, requireAuth, config) {
   const router = express.Router();
   const controller = createAuthController(authService, config);
-  const register = createRegistrationController(authService);
+  const registration = createRegistrationController(authService, config);
+
   const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 15,
@@ -18,19 +19,27 @@ function createAuthRoutes(authService, requireAuth, config) {
       message: 'Bạn đã thử quá nhiều lần. Vui lòng thử lại sau 15 phút.',
     },
   });
-  router.post('/login', loginLimiter, controller.login);
-  router.post('/register', rateLimit({
+
+  const registrationLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 5,
     standardHeaders: 'draft-8',
     legacyHeaders: false,
     message: {
       success: false,
-      message: 'Bạn đã gửi đăng ký quá nhiều lần. Vui lòng thử lại sau 15 phút.',
+      message: 'Bạn đã gửi yêu cầu đăng ký quá nhiều lần. Vui lòng thử lại sau 15 phút.',
     },
-  }), register);
+  });
+
+  router.post('/login', loginLimiter, controller.login);
+  router.post('/register', registrationLimiter, registration.register);
+  router.post('/register-request-otp', registrationLimiter, registration.requestOtp);
+  router.post('/register-verify-otp', registration.verifyOtp);
+  router.post('/register-resend-otp', registrationLimiter, registration.resendOtp);
+
   router.get('/me', requireAuth, controller.me);
   router.post('/logout', controller.logout);
   return router;
 }
+
 module.exports = { createAuthRoutes };

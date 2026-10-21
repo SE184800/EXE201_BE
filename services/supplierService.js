@@ -29,9 +29,16 @@ function hasTwoDecimals(value) {
   return Number.isFinite(value) && Math.abs(value * 100 - Math.round(value * 100)) < 0.00001;
 }
 
-function serializeProduct(product) {
+async function serializeProduct(product) {
   const latestPrice = product.priceHistory?.[0] || null;
   const changePercent = latestPrice ? numberValue(latestPrice.changePercent) : null;
+  const mod = await moderateContent({
+    name: product.name,
+    category: product.category,
+    packaging: product.packaging,
+    wholesalePrice: numberValue(product.wholesalePrice),
+    moq: product.moq,
+  });
   return {
     category: product.category, imageUrl: product.imageUrl,
     id: product.id,
@@ -48,6 +55,7 @@ function serializeProduct(product) {
     priceChangedAt: latestPrice?.createdAt || null,
     priceChangeReason: latestPrice?.reason || null,
     priceWarning: changePercent !== null && changePercent >= 20,
+    moderation: mod,
   };
 }
 
@@ -175,12 +183,24 @@ function validateProductInput(body = {}) {
     }
   }
   if (name.length < 2 || name.length > 150) errors.name = 'Tên sản phẩm cần từ 2 đến 150 ký tự.';
-  if (!packaging || packaging.length > 50) errors.packaging = 'Nhập quy cách đóng gói, ví dụ thùng, lốc hoặc bao.';
+  if (!packaging || packaging.length > 50) {
+    errors.packaging = 'Nhập quy cách đóng gói, ví dụ thùng, lốc hoặc bao.';
+  } else {
+    const numbersInPackaging = packaging.match(/\d+/g);
+    if (numbersInPackaging && numbersInPackaging.some(numStr => Number(numStr) > 100)) {
+      errors.packaging = 'Số lượng đơn vị trong quy cách đóng gói tối đa là 100 ngoài thực tế.';
+    }
+  }
   if (!hasTwoDecimals(wholesalePrice) || wholesalePrice < 0.01 || wholesalePrice > 1_000_000_000) errors.wholesalePrice = 'Giá sỉ từ 0,01 đến 1 tỷ đồng, tối đa 2 chữ số thập phân.';
-  if (!Number.isInteger(stockQty) || stockQty < 0 || stockQty > 2147483647) errors.stockQty = 'Tồn kho phải là số nguyên từ 0.';
-  if (!Number.isInteger(moq) || moq < 1 || moq > 2147483647) errors.moq = 'MOQ phải là số nguyên từ 1.';
+  if (!Number.isInteger(stockQty) || stockQty < 0 || stockQty > 50000) errors.stockQty = 'Tồn kho phải là số nguyên từ 0 đến 50.000.';
+  const effectiveMoq = Number.isInteger(moq) ? moq : (body.moq === undefined ? 1 : NaN);
+  if (!Number.isInteger(effectiveMoq) || effectiveMoq < 1 || effectiveMoq > 50000) {
+    errors.moq = 'MOQ phải là số nguyên từ 1 đến 50.000.';
+  } else if (Number.isInteger(stockQty) && stockQty > 0 && effectiveMoq > stockQty) {
+    errors.moq = `Số lượng tối thiểu (MOQ: ${effectiveMoq}) không được lớn hơn tồn kho có sẵn (${stockQty}).`;
+  }
   if (body.isActive !== undefined && typeof body.isActive !== 'boolean') errors.isActive = 'Trạng thái đăng bán không hợp lệ.';
-  return Object.keys(errors).length ? { errors } : { data: { name, packaging, wholesalePrice, stockQty, moq, ...extras, ...(body.isActive === undefined ? {} : { isActive: body.isActive }) } };
+  return Object.keys(errors).length ? { errors } : { data: { name, packaging, wholesalePrice, stockQty, moq: effectiveMoq, ...extras, ...(body.isActive === undefined ? {} : { isActive: body.isActive }) } };
 }
 
 function createSupplierService(prisma) {
@@ -224,22 +244,42 @@ function createSupplierService(prisma) {
   async function listProducts(userId) {
     const profile = await requireProfile(userId);
     const products = await prisma.supplierProduct.findMany({
-      where: { supplierId: profile.id },
       include: { priceHistory: { orderBy: { createdAt: 'desc' }, take: 1 } },
+      where: { supplierId: profile.id },
       orderBy: { updatedAt: 'desc' },
     });
-    return products.map(serializeProduct);
+    return Promise.all(products.map(serializeProduct));
   }
 
   async function createProduct(userId, input) {
     const profile = await requireProfile(userId);
     const { priceChangeReason: _priceChangeReason, ...productInput } = input;
+    const mod = await moderateContent({
+      name: productInput.name,
+      category: productInput.category,
+      packaging: productInput.packaging,
+      wholesalePrice: numberValue(productInput.wholesalePrice),
+      moq: productInput.moq,
+    });
+    const isClean = mod.status === 'AUTO_APPROVED';
+    const dataToCreate = {
+      supplierId: profile.id,
+      ...productInput,
+      isActive: isClean ? (productInput.isActive !== undefined ? Boolean(productInput.isActive) : true) : false,
+    };
     const product = await prisma.$transaction(async tx => {
-      const created = await tx.supplierProduct.create({ data: { supplierId: profile.id, ...productInput } });
-      await audit(tx, userId, 'PRODUCT_CREATED', 'PRODUCT', created.id, { name: created.name, price: created.wholesalePrice.toString(), stock: created.stockQty });
+      const created = await tx.supplierProduct.create({ data: dataToCreate });
+      await audit(tx, userId, isClean ? 'PRODUCT_CREATED' : 'PRODUCT_CREATED_' + mod.status, 'PRODUCT', created.id, {
+        name: created.name,
+        price: created.wholesalePrice.toString(),
+        stock: created.stockQty,
+        isActive: created.isActive,
+        moderationStatus: mod.status,
+        moderationReasons: mod.reasons,
+      });
       return created;
     });
-    return serializeProduct(product);
+    return await serializeProduct(product);
   }
 
   async function updateProduct(userId, productId, input, expectedUpdatedAt) {
@@ -247,13 +287,41 @@ function createSupplierService(prisma) {
     const product = await prisma.supplierProduct.findFirst({ where: { id: productId, supplierId: profile.id } });
     if (!product) return null;
     const { priceChangeReason, ...productInput } = input;
+
+    const targetName = productInput.name !== undefined ? productInput.name : product.name;
+    const targetCategory = productInput.category !== undefined ? productInput.category : product.category;
+    const targetPackaging = productInput.packaging !== undefined ? productInput.packaging : product.packaging;
+    const targetPrice = productInput.wholesalePrice !== undefined ? numberValue(productInput.wholesalePrice) : numberValue(product.wholesalePrice);
+    const targetMoq = productInput.moq !== undefined ? productInput.moq : product.moq;
+
+    const mod = await moderateContent({
+      name: targetName,
+      category: targetCategory,
+      packaging: targetPackaging,
+      wholesalePrice: targetPrice,
+      moq: targetMoq,
+    });
+    const isClean = mod.status === 'AUTO_APPROVED';
+
+    if (!isClean && productInput.isActive === true) {
+      const errPrefix = mod.status === 'AUTO_REJECTED'
+        ? 'Không thể mở bán do vi phạm nghiêm trọng'
+        : 'Không thể mở bán do đang chờ Quản trị viên kiểm duyệt';
+      throw problem(400, `${errPrefix} (${mod.reasons.join('; ')}). Vui lòng sửa thông tin hợp lệ.`);
+    }
+
+    const finalProductInput = {
+      ...productInput,
+      ...(!isClean ? { isActive: false } : {}),
+    };
+
     const oldPrice = numberValue(product.wholesalePrice);
-    const priceChanged = oldPrice !== Number(productInput.wholesalePrice);
+    const priceChanged = productInput.wholesalePrice !== undefined && oldPrice !== Number(productInput.wholesalePrice);
     const normalizedPriceReason = priceChanged
       ? (priceChangeReason && priceChangeReason.length >= 3 ? priceChangeReason : 'Chủ vựa cập nhật giá bán')
       : null;
     return prisma.$transaction(async tx => {
-      const changed = await tx.supplierProduct.updateMany({ where: { id: productId, supplierId: profile.id, updatedAt: expectedUpdatedAt }, data: productInput });
+      const changed = await tx.supplierProduct.updateMany({ where: { id: productId, supplierId: profile.id, updatedAt: expectedUpdatedAt }, data: finalProductInput });
       if (!changed.count) throw Object.assign(new Error('Sản phẩm vừa thay đổi.'), { code: 'STALE_PRODUCT' });
       if (priceChanged) {
         const newPrice = Number(productInput.wholesalePrice);
@@ -262,12 +330,13 @@ function createSupplierService(prisma) {
           data: { productId, oldPrice, newPrice, changePercent, reason: normalizedPriceReason, changedBy: userId },
         });
       }
-      await audit(tx, userId, 'PRODUCT_UPDATED', 'PRODUCT', productId, {
+      await audit(tx, userId, isClean ? 'PRODUCT_UPDATED' : 'PRODUCT_UPDATED_' + mod.status, 'PRODUCT', productId, {
         before: { price: product.wholesalePrice.toString(), stock: product.stockQty, active: product.isActive },
-        after: productInput,
+        after: finalProductInput,
         priceChangeReason: normalizedPriceReason,
+        moderationStatus: mod.status,
       });
-      return serializeProduct(await tx.supplierProduct.findUnique({
+      return await serializeProduct(await tx.supplierProduct.findUnique({
         where: { id: productId },
         include: { priceHistory: { orderBy: { createdAt: 'desc' }, take: 1 } },
       }));
@@ -281,7 +350,7 @@ function createSupplierService(prisma) {
     return prisma.$transaction(async tx => {
       const saved = await tx.supplierProduct.update({ where: { id: productId }, data: { isActive: false } });
       await audit(tx, userId, 'PRODUCT_HIDDEN', 'PRODUCT', productId);
-      return serializeProduct(saved);
+      return await serializeProduct(saved);
     });
   }
 

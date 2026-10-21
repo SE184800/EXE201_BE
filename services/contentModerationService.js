@@ -1,11 +1,20 @@
 /**
  * Service Kiểm Duyệt Tự Động Nội Dung Sản Phẩm Sỉ & Bài Đăng Khuyến Mãi (AI Auto-Moderation)
+ * 3 Mức Độ:
+ * - AUTO_APPROVED: Hợp lệ (0 lỗi, sạch)
+ * - NEEDS_REVIEW: Cảnh báo nhẹ (chỉ 1 lỗi nhẹ: thuốc lá/xì gà hợp pháp, giá lệch nhẹ -> Tạm ẩn, chờ Admin duyệt)
+ * - AUTO_REJECTED: Vi phạm nghiêm trọng (từ cấm nặng, ma túy, vũ khí, spam, giá phi lý, HOẶC >= 2 lỗi -> AI tự cấm thẳng)
  */
 
-const FORBIDDEN_KEYWORDS = [
-  'thuốc lá', 'xì gà', 'chất cấm', 'ma túy', 'bóng cười', 'vũ khí',
-  'súng', 'đạn', 'đao kiếm', 'cờ bạc', 'lừa đảo', 'hàng giả', 'hàng nhái',
-  'kích dục', 'độc hại', 'rượu lậu', 'tiền giả'
+const CRITICAL_FORBIDDEN_KEYWORDS = [
+  'chất cấm', 'ma túy', 'bóng cười', 'vũ khí', 'súng', 'đạn', 'đao kiếm',
+  'cờ bạc', 'lừa đảo', 'hàng giả', 'hàng nhái', 'kích dục', 'độc hại',
+  'rượu lậu', 'tiền giả', 'pháo nổ', 'pháo hoa nổ', 'ngà voi', 'sừng tê giác',
+  'cỏ mỹ', 'tê tê'
+];
+
+const RESTRICTED_KEYWORDS = [
+  'thuốc lá', 'xì gà'
 ];
 
 const SPAM_PATTERNS = [
@@ -19,7 +28,7 @@ const SPAM_PATTERNS = [
  * Đánh giá an toàn và kiểm duyệt nội dung sản phẩm sỉ / bài đăng
  * @param {Object} item Thông tin sản phẩm { name, category, packaging, wholesalePrice, moq, description }
  * @param {Object} options Cấu hình AI { apiKey, model, provider, fetcher }
- * @returns {Promise<{ status: 'AUTO_APPROVED'|'FLAGGED', riskScore: number, reasons: string[], isClean: boolean }>}
+ * @returns {Promise<{ status: 'AUTO_APPROVED'|'NEEDS_REVIEW'|'AUTO_REJECTED', riskScore: number, reasons: string[], criticalReasons: string[], isClean: boolean }>}
  */
 async function moderateContent(item = {}, options = {}) {
   const name = typeof item.name === 'string' ? item.name.trim() : '';
@@ -30,42 +39,67 @@ async function moderateContent(item = {}, options = {}) {
   const moq = typeof item.moq === 'number' ? item.moq : Number(item.moq) || 1;
 
   const reasons = [];
+  const criticalReasons = [];
   let riskScore = 0;
 
   const fullText = `${name} ${category} ${packaging} ${description}`.toLowerCase();
 
-  // 1. Tầng 1: Quét Từ Khóa Cấm (Forbidden Keywords)
-  for (const word of FORBIDDEN_KEYWORDS) {
+  // 1. Tầng 1: Quét Từ Khóa Cấm Nặng (Critical Forbidden Keywords) -> Lỗi nặng
+  for (const word of CRITICAL_FORBIDDEN_KEYWORDS) {
     if (fullText.includes(word)) {
-      reasons.push(`Nội dung chứa từ khóa bị cấm: "${word}"`);
-      riskScore += 45;
+      const reason = `Chứa từ cấm nghiêm trọng: "${word}"`;
+      reasons.push(reason);
+      criticalReasons.push(reason);
+      riskScore += 60;
     }
   }
 
-  // Quét pattern gian lận / spam Zalo cá nhân / gạ giao dịch ngoài sàn
+  // Quét pattern gian lận / spam Zalo cá nhân / gạ giao dịch ngoài sàn -> Lỗi nặng
   for (const pattern of SPAM_PATTERNS) {
     if (pattern.test(fullText)) {
-      reasons.push('Nội dung có dấu hiệu gạ giao dịch ngoài sàn / SPAM');
-      riskScore += 35;
+      const reason = 'Có dấu hiệu gạ giao dịch ngoài sàn / SPAM lừa đảo';
+      reasons.push(reason);
+      criticalReasons.push(reason);
+      riskScore += 50;
     }
   }
 
-  // 2. Tầng 2: Quét Giá Bất Thường / Giá Ảo (Anti-Price Gouging & Anti-Fraud)
-  // Giá quá rẻ (dưới 1.000đ cho 1 quy cách sỉ như thùng/bao/lốc) -> Nghi vấn phá giá hoặc giá ảo
-  if (price > 0 && price < 1000) {
-    reasons.push(`Giá sỉ quá thấp (${price.toLocaleString('vi-VN')}đ) - nghi vấn giá ảo / câu view`);
-    riskScore += 40;
+  // Quét từ khóa hàng hóa hạn chế / có điều kiện (Thuốc lá, xì gà) -> Lỗi nhẹ
+  for (const word of RESTRICTED_KEYWORDS) {
+    if (fullText.includes(word)) {
+      reasons.push(`Mặt hàng hạn chế kinh doanh: "${word}" (cần Admin duyệt giấy phép)`);
+      riskScore += 30;
+    }
   }
 
-  // Giá quá đắt bất thường (trên 500.000.000đ)
+  // 2. Tầng 2: Quét Giá Bất Thường & Số Lượng Phi Lý
+  // Giá cực đoan phi thực tế (< 500đ hoặc > 500 triệu) -> Lỗi nặng
+  if (price > 0 && price < 500) {
+    const reason = `Giá sỉ phi lý quá rẻ (${price.toLocaleString('vi-VN')}đ) - nghi vấn giá ảo / phá giá`;
+    reasons.push(reason);
+    criticalReasons.push(reason);
+    riskScore += 50;
+  } else if (price >= 500 && price < 2000) {
+    // Giá rẻ bất thường nhẹ -> Lỗi nhẹ
+    reasons.push(`Giá sỉ thấp bất thường (${price.toLocaleString('vi-VN')}đ) - cần Admin kiểm tra`);
+    riskScore += 25;
+  }
+
   if (price > 500000000) {
-    reasons.push(`Giá sỉ bất thường quá cao (${price.toLocaleString('vi-VN')}đ)`);
-    riskScore += 40;
+    const reason = `Giá sỉ bất thường quá cao (${price.toLocaleString('vi-VN')}đ)`;
+    reasons.push(reason);
+    criticalReasons.push(reason);
+    riskScore += 50;
   }
 
   // MOQ bất thường
-  if (moq <= 0 || moq > 10000) {
-    reasons.push(`Số lượng tối thiểu MOQ (${moq}) không hợp lệ`);
+  if (moq <= 0 || moq > 50000) {
+    const reason = `Số lượng tối thiểu MOQ (${moq}) phi thực tế`;
+    reasons.push(reason);
+    criticalReasons.push(reason);
+    riskScore += 30;
+  } else if (moq > 5000) {
+    reasons.push(`Số lượng tối thiểu MOQ (${moq}) quá lớn - cần Admin xác minh`);
     riskScore += 20;
   }
 
@@ -81,7 +115,7 @@ async function moderateContent(item = {}, options = {}) {
           body: JSON.stringify({
             systemInstruction: {
               parts: [{
-                text: 'Bạn là hệ thống AI kiểm duyệt bài đăng sản phẩm sỉ B2B. Hãy kiểm tra xem sản phẩm có vi phạm pháp luật, hàng giả, hoặc thông tin quảng cáo nhảm nhí hay không. Trả về JSON duy nhất theo dạng: {"isSafe": true|false, "riskScore": 0-100, "reason": "Lý do nếu vi phạm"}'
+                text: 'Bạn là hệ thống AI kiểm duyệt bài đăng sản phẩm sỉ B2B. Hãy kiểm tra xem sản phẩm có vi phạm pháp luật, hàng giả, hoặc thông tin quảng cáo nhảm nhí hay không. Trả về JSON duy nhất theo dạng: {"isSafe": true|false, "isCritical": true|false, "riskScore": 0-100, "reason": "Lý do nếu vi phạm"}'
               }]
             },
             contents: [
@@ -97,7 +131,9 @@ async function moderateContent(item = {}, options = {}) {
           if (rawText) {
             const aiRes = JSON.parse(rawText);
             if (aiRes.isSafe === false) {
-              reasons.push(aiRes.reason || 'AI đánh giá có rủi ro về chất lượng bài đăng');
+              const reason = aiRes.reason || 'AI đánh giá có rủi ro về chất lượng bài đăng';
+              reasons.push(reason);
+              if (aiRes.isCritical) criticalReasons.push(reason);
               riskScore = Math.max(riskScore, aiRes.riskScore || 50);
             }
           }
@@ -109,17 +145,30 @@ async function moderateContent(item = {}, options = {}) {
   }
 
   riskScore = Math.min(100, riskScore);
-  const isClean = riskScore < 30 && reasons.length === 0;
+  const isClean = riskScore < 20 && reasons.length === 0;
+
+  let status = 'AUTO_APPROVED';
+  if (!isClean) {
+    // Mức 3: Nếu có ít nhất 1 lỗi nặng HOẶC từ 2 lỗi vi phạm trở lên
+    if (criticalReasons.length > 0 || reasons.length >= 2) {
+      status = 'AUTO_REJECTED';
+    } else {
+      // Mức 2: Chỉ có 1 lỗi nhẹ
+      status = 'NEEDS_REVIEW';
+    }
+  }
 
   return {
-    status: isClean ? 'AUTO_APPROVED' : 'FLAGGED',
+    status,
     riskScore,
     reasons,
+    criticalReasons,
     isClean,
   };
 }
 
 module.exports = {
   moderateContent,
-  FORBIDDEN_KEYWORDS,
+  CRITICAL_FORBIDDEN_KEYWORDS,
+  RESTRICTED_KEYWORDS,
 };
