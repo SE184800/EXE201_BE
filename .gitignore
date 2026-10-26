@@ -5,3 +5,5 @@ node_modules
 .vercel
 .local-mail/
 .env*.local
+dev-out.log
+dev-err.log
