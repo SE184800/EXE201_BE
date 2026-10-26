@@ -21,6 +21,7 @@ const { createProfileRoutes } = require('./routes/profileRoutes');
 const { createRestockRoutes } = require('./routes/restockRoutes');
 const { createAdvisorRoutes } = require('./routes/advisorRoutes');
 const { createOrderRoutes } = require('./routes/orderRoutes');
+const { createWalletRoutes } = require('./routes/walletRoutes');
 const { createPasswordRoutes } = require('./routes/passwordRoutes');
 const { createAdminRoutes } = require('./routes/adminRoutes');
 const { createComplaintRoutes } = require('./routes/complaintRoutes');
@@ -139,6 +140,7 @@ function createApp(prisma, config) {
       '/complaints',
       '/restock',
       '/advisor',
+      '/wallet',
     ];
     const isProtected = protectedRoots.some(root => req.path === root || req.path.startsWith(`${root}/`));
     if (!isProtected) return next();
@@ -174,6 +176,7 @@ function createApp(prisma, config) {
   app.use('/api/quotes', createStoreQuoteRoutes(prisma, requireAuth));
   app.use('/api/supplier/quotes', createSupplierQuoteRoutes(prisma, requireAuth));
   app.use('/api/complaints', createComplaintRoutes(prisma, requireAuth));
+  app.use('/api/wallet', createWalletRoutes(prisma, requireAuth));
 
   app.use(
     '/api/profile',

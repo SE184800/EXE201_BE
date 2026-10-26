@@ -1,0 +1,1238 @@
+{
+  "wallets": {
+    "1": {
+      "userId": 1,
+      "availableBalance": 9960500,
+      "lockedBalance": 0,
+      "createdAt": "2026-10-26T11:25:19.561Z",
+      "updatedAt": "2026-10-26T12:14:25.385Z"
+    },
+    "2": {
+      "userId": 2,
+      "availableBalance": 10038512,
+      "lockedBalance": 0,
+      "createdAt": "2026-10-26T12:13:24.301Z",
+      "updatedAt": "2026-10-26T12:14:25.400Z"
+    },
+    "9999901": {
+      "userId": 9999901,
+      "availableBalance": 10000000,
+      "lockedBalance": 0,
+      "createdAt": "2026-10-26T11:08:27.329Z",
+      "updatedAt": "2026-10-26T11:08:27.340Z"
+    },
+    "9999902": {
+      "userId": 9999902,
+      "availableBalance": 10000000,
+      "lockedBalance": 0,
+      "createdAt": "2026-10-26T11:08:27.347Z",
+      "updatedAt": "2026-10-26T13:13:22.777Z"
+    },
+    "9999903": {
+      "userId": 9999903,
+      "availableBalance": 800000,
+      "lockedBalance": 0,
+      "createdAt": "2026-10-26T11:08:27.422Z",
+      "updatedAt": "2026-10-26T13:13:22.931Z"
+    },
+    "9999904": {
+      "userId": 9999904,
+      "availableBalance": 196000,
+      "lockedBalance": 0,
+      "createdAt": "2026-10-26T11:08:27.426Z",
+      "updatedAt": "2026-10-26T13:13:22.881Z"
+    },
+    "9999905": {
+      "userId": 9999905,
+      "availableBalance": 50000,
+      "lockedBalance": 0,
+      "createdAt": "2026-10-26T11:08:27.456Z",
+      "updatedAt": "2026-10-26T13:13:22.956Z"
+    }
+  },
+  "transactions": [
+    {
+      "id": "TX-1793020402956-140",
+      "userId": 9999905,
+      "type": "MOCK_RESET",
+      "amount": 0,
+      "balanceBefore": 50000,
+      "balanceAfter": 50000,
+      "description": "Đặt lại số dư thử nghiệm: 50.000 ₫",
+      "createdAt": "2026-10-26T13:13:22.956Z"
+    },
+    {
+      "id": "TX-1793020402931-921",
+      "userId": 9999903,
+      "orderId": 12346,
+      "type": "ESCROW_REFUND",
+      "amount": 100000,
+      "balanceBefore": 700000,
+      "balanceAfter": 800000,
+      "description": "Hoàn cọc",
+      "createdAt": "2026-10-26T13:13:22.931Z"
+    },
+    {
+      "id": "TX-1793020402915-812",
+      "userId": 9999903,
+      "orderId": 12346,
+      "type": "ESCROW_LOCK",
+      "amount": -100000,
+      "balanceBefore": 800000,
+      "balanceAfter": 700000,
+      "description": "Cọc đơn hàng bị hủy",
+      "createdAt": "2026-10-26T13:13:22.915Z"
+    },
+    {
+      "id": "TX-1793020402881-312",
+      "userId": 9999904,
+      "orderId": 12345,
+      "type": "ESCROW_RECEIVED",
+      "amount": 196000,
+      "balanceBefore": 0,
+      "balanceAfter": 196000,
+      "description": "Nhận tiền cọc đơn hàng #12345 (Đã trừ phí sàn: 4.000 ₫)",
+      "createdAt": "2026-10-26T13:13:22.881Z"
+    },
+    {
+      "id": "TX-1793020402881-251",
+      "userId": 9999903,
+      "orderId": 12345,
+      "type": "ESCROW_RELEASE",
+      "amount": 0,
+      "balanceBefore": 800000,
+      "balanceAfter": 800000,
+      "description": "Giải phóng cọc 200.000 ₫ cho đơn hàng #12345 (Đã giao hàng)",
+      "createdAt": "2026-10-26T13:13:22.881Z"
+    },
+    {
+      "id": "TX-1793020402852-125",
+      "userId": 9999903,
+      "orderId": 12345,
+      "type": "ESCROW_LOCK",
+      "amount": -200000,
+      "balanceBefore": 1000000,
+      "balanceAfter": 800000,
+      "description": "Cọc đơn hàng test",
+      "createdAt": "2026-10-26T13:13:22.852Z"
+    },
+    {
+      "id": "TX-1793020402822-616",
+      "userId": 9999904,
+      "type": "MOCK_RESET",
+      "amount": -196000,
+      "balanceBefore": 196000,
+      "balanceAfter": 0,
+      "description": "Đặt lại số dư thử nghiệm: 0 ₫",
+      "createdAt": "2026-10-26T13:13:22.822Z"
+    },
+    {
+      "id": "TX-1793020402802-690",
+      "userId": 9999903,
+      "type": "MOCK_RESET",
+      "amount": 200000,
+      "balanceBefore": 800000,
+      "balanceAfter": 1000000,
+      "description": "Đặt lại số dư thử nghiệm: 1.000.000 ₫",
+      "createdAt": "2026-10-26T13:13:22.802Z"
+    },
+    {
+      "id": "TX-1793020402777-493",
+      "userId": 9999902,
+      "type": "MOCK_RESET",
+      "amount": -5000000,
+      "balanceBefore": 15000000,
+      "balanceAfter": 10000000,
+      "description": "Đặt lại số dư thử nghiệm: 10.000.000 ₫",
+      "createdAt": "2026-10-26T13:13:22.777Z"
+    },
+    {
+      "id": "TX-1793020402706-7",
+      "userId": 9999902,
+      "type": "MOCK_ADD",
+      "amount": 5000000,
+      "balanceBefore": 10000000,
+      "balanceAfter": 15000000,
+      "description": "Nạp thêm 5.000.000 ₫ số dư thử nghiệm",
+      "createdAt": "2026-10-26T13:13:22.754Z"
+    },
+    {
+      "id": "TX-1793020209182-832",
+      "userId": 9999905,
+      "type": "MOCK_RESET",
+      "amount": 0,
+      "balanceBefore": 50000,
+      "balanceAfter": 50000,
+      "description": "Đặt lại số dư thử nghiệm: 50.000 ₫",
+      "createdAt": "2026-10-26T13:10:09.183Z"
+    },
+    {
+      "id": "TX-1793020209154-993",
+      "userId": 9999903,
+      "orderId": 12346,
+      "type": "ESCROW_REFUND",
+      "amount": 100000,
+      "balanceBefore": 700000,
+      "balanceAfter": 800000,
+      "description": "Hoàn cọc",
+      "createdAt": "2026-10-26T13:10:09.154Z"
+    },
+    {
+      "id": "TX-1793020209137-221",
+      "userId": 9999903,
+      "orderId": 12346,
+      "type": "ESCROW_LOCK",
+      "amount": -100000,
+      "balanceBefore": 800000,
+      "balanceAfter": 700000,
+      "description": "Cọc đơn hàng bị hủy",
+      "createdAt": "2026-10-26T13:10:09.137Z"
+    },
+    {
+      "id": "TX-1793020209104-99",
+      "userId": 9999904,
+      "orderId": 12345,
+      "type": "ESCROW_RECEIVED",
+      "amount": 196000,
+      "balanceBefore": 0,
+      "balanceAfter": 196000,
+      "description": "Nhận tiền cọc đơn hàng #12345 (Đã trừ phí sàn: 4.000 ₫)",
+      "createdAt": "2026-10-26T13:10:09.104Z"
+    },
+    {
+      "id": "TX-1793020209104-158",
+      "userId": 9999903,
+      "orderId": 12345,
+      "type": "ESCROW_RELEASE",
+      "amount": 0,
+      "balanceBefore": 800000,
+      "balanceAfter": 800000,
+      "description": "Giải phóng cọc 200.000 ₫ cho đơn hàng #12345 (Đã giao hàng)",
+      "createdAt": "2026-10-26T13:10:09.104Z"
+    },
+    {
+      "id": "TX-1793020209089-379",
+      "userId": 9999903,
+      "orderId": 12345,
+      "type": "ESCROW_LOCK",
+      "amount": -200000,
+      "balanceBefore": 1000000,
+      "balanceAfter": 800000,
+      "description": "Cọc đơn hàng test",
+      "createdAt": "2026-10-26T13:10:09.089Z"
+    },
+    {
+      "id": "TX-1793020209071-549",
+      "userId": 9999904,
+      "type": "MOCK_RESET",
+      "amount": -196000,
+      "balanceBefore": 196000,
+      "balanceAfter": 0,
+      "description": "Đặt lại số dư thử nghiệm: 0 ₫",
+      "createdAt": "2026-10-26T13:10:09.071Z"
+    },
+    {
+      "id": "TX-1793020209052-448",
+      "userId": 9999903,
+      "type": "MOCK_RESET",
+      "amount": 200000,
+      "balanceBefore": 800000,
+      "balanceAfter": 1000000,
+      "description": "Đặt lại số dư thử nghiệm: 1.000.000 ₫",
+      "createdAt": "2026-10-26T13:10:09.052Z"
+    },
+    {
+      "id": "TX-1793020209029-522",
+      "userId": 9999902,
+      "type": "MOCK_RESET",
+      "amount": -5000000,
+      "balanceBefore": 15000000,
+      "balanceAfter": 10000000,
+      "description": "Đặt lại số dư thử nghiệm: 10.000.000 ₫",
+      "createdAt": "2026-10-26T13:10:09.029Z"
+    },
+    {
+      "id": "TX-1793020208976-169",
+      "userId": 9999902,
+      "type": "MOCK_ADD",
+      "amount": 5000000,
+      "balanceBefore": 10000000,
+      "balanceAfter": 15000000,
+      "description": "Nạp thêm 5.000.000 ₫ số dư thử nghiệm",
+      "createdAt": "2026-10-26T13:10:09.005Z"
+    },
+    {
+      "id": "TX-1793018416482-911",
+      "userId": 9999905,
+      "type": "MOCK_RESET",
+      "amount": 0,
+      "balanceBefore": 50000,
+      "balanceAfter": 50000,
+      "description": "Đặt lại số dư thử nghiệm: 50.000 ₫",
+      "createdAt": "2026-10-26T12:40:16.482Z"
+    },
+    {
+      "id": "TX-1793018416461-503",
+      "userId": 9999903,
+      "orderId": 12346,
+      "type": "ESCROW_REFUND",
+      "amount": 100000,
+      "balanceBefore": 700000,
+      "balanceAfter": 800000,
+      "description": "Hoàn cọc",
+      "createdAt": "2026-10-26T12:40:16.461Z"
+    },
+    {
+      "id": "TX-1793018416410-384",
+      "userId": 9999903,
+      "orderId": 12346,
+      "type": "ESCROW_LOCK",
+      "amount": -100000,
+      "balanceBefore": 800000,
+      "balanceAfter": 700000,
+      "description": "Cọc đơn hàng bị hủy",
+      "createdAt": "2026-10-26T12:40:16.410Z"
+    },
+    {
+      "id": "TX-1793018416379-907",
+      "userId": 9999904,
+      "orderId": 12345,
+      "type": "ESCROW_RECEIVED",
+      "amount": 196000,
+      "balanceBefore": 0,
+      "balanceAfter": 196000,
+      "description": "Nhận tiền cọc đơn hàng #12345 (Đã trừ phí sàn: 4.000 ₫)",
+      "createdAt": "2026-10-26T12:40:16.379Z"
+    },
+    {
+      "id": "TX-1793018416379-963",
+      "userId": 9999903,
+      "orderId": 12345,
+      "type": "ESCROW_RELEASE",
+      "amount": 0,
+      "balanceBefore": 800000,
+      "balanceAfter": 800000,
+      "description": "Giải phóng cọc 200.000 ₫ cho đơn hàng #12345 (Đã giao hàng)",
+      "createdAt": "2026-10-26T12:40:16.379Z"
+    },
+    {
+      "id": "TX-1793018416340-945",
+      "userId": 9999903,
+      "orderId": 12345,
+      "type": "ESCROW_LOCK",
+      "amount": -200000,
+      "balanceBefore": 1000000,
+      "balanceAfter": 800000,
+      "description": "Cọc đơn hàng test",
+      "createdAt": "2026-10-26T12:40:16.340Z"
+    },
+    {
+      "id": "TX-1793018416319-294",
+      "userId": 9999904,
+      "type": "MOCK_RESET",
+      "amount": -196000,
+      "balanceBefore": 196000,
+      "balanceAfter": 0,
+      "description": "Đặt lại số dư thử nghiệm: 0 ₫",
+      "createdAt": "2026-10-26T12:40:16.319Z"
+    },
+    {
+      "id": "TX-1793018416283-762",
+      "userId": 9999903,
+      "type": "MOCK_RESET",
+      "amount": 200000,
+      "balanceBefore": 800000,
+      "balanceAfter": 1000000,
+      "description": "Đặt lại số dư thử nghiệm: 1.000.000 ₫",
+      "createdAt": "2026-10-26T12:40:16.283Z"
+    },
+    {
+      "id": "TX-1793018416256-243",
+      "userId": 9999902,
+      "type": "MOCK_RESET",
+      "amount": -5000000,
+      "balanceBefore": 15000000,
+      "balanceAfter": 10000000,
+      "description": "Đặt lại số dư thử nghiệm: 10.000.000 ₫",
+      "createdAt": "2026-10-26T12:40:16.256Z"
+    },
+    {
+      "id": "TX-1793018416163-586",
+      "userId": 9999902,
+      "type": "MOCK_ADD",
+      "amount": 5000000,
+      "balanceBefore": 10000000,
+      "balanceAfter": 15000000,
+      "description": "Nạp thêm 5.000.000 ₫ số dư thử nghiệm",
+      "createdAt": "2026-10-26T12:40:16.223Z"
+    },
+    {
+      "id": "TX-1793017647137-507",
+      "userId": 9999905,
+      "type": "MOCK_RESET",
+      "amount": 0,
+      "balanceBefore": 50000,
+      "balanceAfter": 50000,
+      "description": "Đặt lại số dư thử nghiệm: 50.000 ₫",
+      "createdAt": "2026-10-26T12:27:27.138Z"
+    },
+    {
+      "id": "TX-1793017647121-295",
+      "userId": 9999903,
+      "orderId": 12346,
+      "type": "ESCROW_REFUND",
+      "amount": 100000,
+      "balanceBefore": 700000,
+      "balanceAfter": 800000,
+      "description": "Hoàn cọc",
+      "createdAt": "2026-10-26T12:27:27.121Z"
+    },
+    {
+      "id": "TX-1793017647104-346",
+      "userId": 9999903,
+      "orderId": 12346,
+      "type": "ESCROW_LOCK",
+      "amount": -100000,
+      "balanceBefore": 800000,
+      "balanceAfter": 700000,
+      "description": "Cọc đơn hàng bị hủy",
+      "createdAt": "2026-10-26T12:27:27.104Z"
+    },
+    {
+      "id": "TX-1793017647074-480",
+      "userId": 9999904,
+      "orderId": 12345,
+      "type": "ESCROW_RECEIVED",
+      "amount": 196000,
+      "balanceBefore": 0,
+      "balanceAfter": 196000,
+      "description": "Nhận tiền cọc đơn hàng #12345 (Đã trừ phí sàn: 4.000 ₫)",
+      "createdAt": "2026-10-26T12:27:27.074Z"
+    },
+    {
+      "id": "TX-1793017647074-593",
+      "userId": 9999903,
+      "orderId": 12345,
+      "type": "ESCROW_RELEASE",
+      "amount": 0,
+      "balanceBefore": 800000,
+      "balanceAfter": 800000,
+      "description": "Giải phóng cọc 200.000 ₫ cho đơn hàng #12345 (Đã giao hàng)",
+      "createdAt": "2026-10-26T12:27:27.074Z"
+    },
+    {
+      "id": "TX-1793017647059-529",
+      "userId": 9999903,
+      "orderId": 12345,
+      "type": "ESCROW_LOCK",
+      "amount": -200000,
+      "balanceBefore": 1000000,
+      "balanceAfter": 800000,
+      "description": "Cọc đơn hàng test",
+      "createdAt": "2026-10-26T12:27:27.059Z"
+    },
+    {
+      "id": "TX-1793017647038-97",
+      "userId": 9999904,
+      "type": "MOCK_RESET",
+      "amount": -196000,
+      "balanceBefore": 196000,
+      "balanceAfter": 0,
+      "description": "Đặt lại số dư thử nghiệm: 0 ₫",
+      "createdAt": "2026-10-26T12:27:27.038Z"
+    },
+    {
+      "id": "TX-1793017647008-943",
+      "userId": 9999903,
+      "type": "MOCK_RESET",
+      "amount": 200000,
+      "balanceBefore": 800000,
+      "balanceAfter": 1000000,
+      "description": "Đặt lại số dư thử nghiệm: 1.000.000 ₫",
+      "createdAt": "2026-10-26T12:27:27.009Z"
+    },
+    {
+      "id": "TX-1793017646990-526",
+      "userId": 9999902,
+      "type": "MOCK_RESET",
+      "amount": -5000000,
+      "balanceBefore": 15000000,
+      "balanceAfter": 10000000,
+      "description": "Đặt lại số dư thử nghiệm: 10.000.000 ₫",
+      "createdAt": "2026-10-26T12:27:26.990Z"
+    },
+    {
+      "id": "TX-1793017646940-175",
+      "userId": 9999902,
+      "type": "MOCK_ADD",
+      "amount": 5000000,
+      "balanceBefore": 10000000,
+      "balanceAfter": 15000000,
+      "description": "Nạp thêm 5.000.000 ₫ số dư thử nghiệm",
+      "createdAt": "2026-10-26T12:27:26.968Z"
+    },
+    {
+      "id": "TX-1793016865400-120",
+      "userId": 2,
+      "orderId": 1042,
+      "type": "ESCROW_RECEIVED",
+      "amount": 38512,
+      "balanceBefore": 10000000,
+      "balanceAfter": 10038512,
+      "description": "Nhận tiền cọc đơn hàng #1042 (Đã trừ phí sàn: 988 ₫)",
+      "createdAt": "2026-10-26T12:14:25.400Z"
+    },
+    {
+      "id": "TX-1793016865385-458",
+      "userId": 1,
+      "orderId": 1042,
+      "type": "ESCROW_RELEASE",
+      "amount": 0,
+      "balanceBefore": 9960500,
+      "balanceAfter": 9960500,
+      "description": "Giải phóng cọc 39.500 ₫ cho đơn hàng #1042 (Đã giao hàng)",
+      "createdAt": "2026-10-26T12:14:25.400Z"
+    },
+    {
+      "id": "TX-1793016804301-428",
+      "userId": 2,
+      "type": "INITIAL_MOCK",
+      "amount": 10000000,
+      "balanceBefore": 0,
+      "balanceAfter": 10000000,
+      "description": "Số dư thử nghiệm khởi tạo hệ thống SupplyMind AI",
+      "createdAt": "2026-10-26T12:13:24.301Z"
+    },
+    {
+      "id": "TX-1793016672520-94",
+      "userId": 9999905,
+      "type": "MOCK_RESET",
+      "amount": 0,
+      "balanceBefore": 50000,
+      "balanceAfter": 50000,
+      "description": "Đặt lại số dư thử nghiệm: 50.000 ₫",
+      "createdAt": "2026-10-26T12:11:12.520Z"
+    },
+    {
+      "id": "TX-1793016672508-848",
+      "userId": 9999903,
+      "orderId": 12346,
+      "type": "ESCROW_REFUND",
+      "amount": 100000,
+      "balanceBefore": 700000,
+      "balanceAfter": 800000,
+      "description": "Hoàn cọc",
+      "createdAt": "2026-10-26T12:11:12.508Z"
+    },
+    {
+      "id": "TX-1793016672489-286",
+      "userId": 9999903,
+      "orderId": 12346,
+      "type": "ESCROW_LOCK",
+      "amount": -100000,
+      "balanceBefore": 800000,
+      "balanceAfter": 700000,
+      "description": "Cọc đơn hàng bị hủy",
+      "createdAt": "2026-10-26T12:11:12.489Z"
+    },
+    {
+      "id": "TX-1793016672466-556",
+      "userId": 9999904,
+      "orderId": 12345,
+      "type": "ESCROW_RECEIVED",
+      "amount": 196000,
+      "balanceBefore": 0,
+      "balanceAfter": 196000,
+      "description": "Nhận tiền cọc đơn hàng #12345 (Đã trừ phí sàn: 4.000 ₫)",
+      "createdAt": "2026-10-26T12:11:12.466Z"
+    },
+    {
+      "id": "TX-1793016672466-218",
+      "userId": 9999903,
+      "orderId": 12345,
+      "type": "ESCROW_RELEASE",
+      "amount": 0,
+      "balanceBefore": 800000,
+      "balanceAfter": 800000,
+      "description": "Giải phóng cọc 200.000 ₫ cho đơn hàng #12345 (Đã giao hàng)",
+      "createdAt": "2026-10-26T12:11:12.466Z"
+    },
+    {
+      "id": "TX-1793016672450-35",
+      "userId": 9999903,
+      "orderId": 12345,
+      "type": "ESCROW_LOCK",
+      "amount": -200000,
+      "balanceBefore": 1000000,
+      "balanceAfter": 800000,
+      "description": "Cọc đơn hàng test",
+      "createdAt": "2026-10-26T12:11:12.450Z"
+    },
+    {
+      "id": "TX-1793016672432-307",
+      "userId": 9999904,
+      "type": "MOCK_RESET",
+      "amount": -196000,
+      "balanceBefore": 196000,
+      "balanceAfter": 0,
+      "description": "Đặt lại số dư thử nghiệm: 0 ₫",
+      "createdAt": "2026-10-26T12:11:12.432Z"
+    },
+    {
+      "id": "TX-1793016672416-424",
+      "userId": 9999903,
+      "type": "MOCK_RESET",
+      "amount": 200000,
+      "balanceBefore": 800000,
+      "balanceAfter": 1000000,
+      "description": "Đặt lại số dư thử nghiệm: 1.000.000 ₫",
+      "createdAt": "2026-10-26T12:11:12.416Z"
+    },
+    {
+      "id": "TX-1793016672402-31",
+      "userId": 9999902,
+      "type": "MOCK_RESET",
+      "amount": -5000000,
+      "balanceBefore": 15000000,
+      "balanceAfter": 10000000,
+      "description": "Đặt lại số dư thử nghiệm: 10.000.000 ₫",
+      "createdAt": "2026-10-26T12:11:12.402Z"
+    },
+    {
+      "id": "TX-1793016672361-641",
+      "userId": 9999902,
+      "type": "MOCK_ADD",
+      "amount": 5000000,
+      "balanceBefore": 10000000,
+      "balanceAfter": 15000000,
+      "description": "Nạp thêm 5.000.000 ₫ số dư thử nghiệm",
+      "createdAt": "2026-10-26T12:11:12.385Z"
+    },
+    {
+      "id": "TX-1793016431243-58",
+      "userId": 9999905,
+      "type": "MOCK_RESET",
+      "amount": 0,
+      "balanceBefore": 50000,
+      "balanceAfter": 50000,
+      "description": "Đặt lại số dư thử nghiệm: 50.000 ₫",
+      "createdAt": "2026-10-26T12:07:11.244Z"
+    },
+    {
+      "id": "TX-1793016431222-93",
+      "userId": 9999903,
+      "orderId": 12346,
+      "type": "ESCROW_REFUND",
+      "amount": 100000,
+      "balanceBefore": 700000,
+      "balanceAfter": 800000,
+      "description": "Hoàn cọc",
+      "createdAt": "2026-10-26T12:07:11.222Z"
+    },
+    {
+      "id": "TX-1793016431200-269",
+      "userId": 9999903,
+      "orderId": 12346,
+      "type": "ESCROW_LOCK",
+      "amount": -100000,
+      "balanceBefore": 800000,
+      "balanceAfter": 700000,
+      "description": "Cọc đơn hàng bị hủy",
+      "createdAt": "2026-10-26T12:07:11.200Z"
+    },
+    {
+      "id": "TX-1793016431178-651",
+      "userId": 9999904,
+      "orderId": 12345,
+      "type": "ESCROW_RECEIVED",
+      "amount": 196000,
+      "balanceBefore": 0,
+      "balanceAfter": 196000,
+      "description": "Nhận tiền cọc đơn hàng #12345 (Đã trừ phí sàn: 4.000 ₫)",
+      "createdAt": "2026-10-26T12:07:11.178Z"
+    },
+    {
+      "id": "TX-1793016431178-101",
+      "userId": 9999903,
+      "orderId": 12345,
+      "type": "ESCROW_RELEASE",
+      "amount": 0,
+      "balanceBefore": 800000,
+      "balanceAfter": 800000,
+      "description": "Giải phóng cọc 200.000 ₫ cho đơn hàng #12345 (Đã giao hàng)",
+      "createdAt": "2026-10-26T12:07:11.178Z"
+    },
+    {
+      "id": "TX-1793016431162-676",
+      "userId": 9999903,
+      "orderId": 12345,
+      "type": "ESCROW_LOCK",
+      "amount": -200000,
+      "balanceBefore": 1000000,
+      "balanceAfter": 800000,
+      "description": "Cọc đơn hàng test",
+      "createdAt": "2026-10-26T12:07:11.162Z"
+    },
+    {
+      "id": "TX-1793016431145-735",
+      "userId": 9999904,
+      "type": "MOCK_RESET",
+      "amount": -196000,
+      "balanceBefore": 196000,
+      "balanceAfter": 0,
+      "description": "Đặt lại số dư thử nghiệm: 0 ₫",
+      "createdAt": "2026-10-26T12:07:11.145Z"
+    },
+    {
+      "id": "TX-1793016431134-572",
+      "userId": 9999903,
+      "type": "MOCK_RESET",
+      "amount": 200000,
+      "balanceBefore": 800000,
+      "balanceAfter": 1000000,
+      "description": "Đặt lại số dư thử nghiệm: 1.000.000 ₫",
+      "createdAt": "2026-10-26T12:07:11.135Z"
+    },
+    {
+      "id": "TX-1793016431119-292",
+      "userId": 9999902,
+      "type": "MOCK_RESET",
+      "amount": -5000000,
+      "balanceBefore": 15000000,
+      "balanceAfter": 10000000,
+      "description": "Đặt lại số dư thử nghiệm: 10.000.000 ₫",
+      "createdAt": "2026-10-26T12:07:11.119Z"
+    },
+    {
+      "id": "TX-1793016431079-399",
+      "userId": 9999902,
+      "type": "MOCK_ADD",
+      "amount": 5000000,
+      "balanceBefore": 10000000,
+      "balanceAfter": 15000000,
+      "description": "Nạp thêm 5.000.000 ₫ số dư thử nghiệm",
+      "createdAt": "2026-10-26T12:07:11.100Z"
+    },
+    {
+      "id": "TX-1793014938913-42",
+      "userId": 9999905,
+      "type": "MOCK_RESET",
+      "amount": 0,
+      "balanceBefore": 50000,
+      "balanceAfter": 50000,
+      "description": "Đặt lại số dư thử nghiệm: 50.000 ₫",
+      "createdAt": "2026-10-26T11:42:18.914Z"
+    },
+    {
+      "id": "TX-1793014938897-432",
+      "userId": 9999903,
+      "orderId": 12346,
+      "type": "ESCROW_REFUND",
+      "amount": 100000,
+      "balanceBefore": 700000,
+      "balanceAfter": 800000,
+      "description": "Hoàn cọc",
+      "createdAt": "2026-10-26T11:42:18.897Z"
+    },
+    {
+      "id": "TX-1793014938882-49",
+      "userId": 9999903,
+      "orderId": 12346,
+      "type": "ESCROW_LOCK",
+      "amount": -100000,
+      "balanceBefore": 800000,
+      "balanceAfter": 700000,
+      "description": "Cọc đơn hàng bị hủy",
+      "createdAt": "2026-10-26T11:42:18.882Z"
+    },
+    {
+      "id": "TX-1793014938858-506",
+      "userId": 9999904,
+      "orderId": 12345,
+      "type": "ESCROW_RECEIVED",
+      "amount": 196000,
+      "balanceBefore": 0,
+      "balanceAfter": 196000,
+      "description": "Nhận tiền cọc đơn hàng #12345 (Đã trừ phí sàn: 4.000 ₫)",
+      "createdAt": "2026-10-26T11:42:18.858Z"
+    },
+    {
+      "id": "TX-1793014938858-547",
+      "userId": 9999903,
+      "orderId": 12345,
+      "type": "ESCROW_RELEASE",
+      "amount": 0,
+      "balanceBefore": 800000,
+      "balanceAfter": 800000,
+      "description": "Giải phóng cọc 200.000 ₫ cho đơn hàng #12345 (Đã giao hàng)",
+      "createdAt": "2026-10-26T11:42:18.858Z"
+    },
+    {
+      "id": "TX-1793014938842-289",
+      "userId": 9999903,
+      "orderId": 12345,
+      "type": "ESCROW_LOCK",
+      "amount": -200000,
+      "balanceBefore": 1000000,
+      "balanceAfter": 800000,
+      "description": "Cọc đơn hàng test",
+      "createdAt": "2026-10-26T11:42:18.842Z"
+    },
+    {
+      "id": "TX-1793014938826-798",
+      "userId": 9999904,
+      "type": "MOCK_RESET",
+      "amount": -196000,
+      "balanceBefore": 196000,
+      "balanceAfter": 0,
+      "description": "Đặt lại số dư thử nghiệm: 0 ₫",
+      "createdAt": "2026-10-26T11:42:18.826Z"
+    },
+    {
+      "id": "TX-1793014938812-644",
+      "userId": 9999903,
+      "type": "MOCK_RESET",
+      "amount": 200000,
+      "balanceBefore": 800000,
+      "balanceAfter": 1000000,
+      "description": "Đặt lại số dư thử nghiệm: 1.000.000 ₫",
+      "createdAt": "2026-10-26T11:42:18.812Z"
+    },
+    {
+      "id": "TX-1793014938799-157",
+      "userId": 9999902,
+      "type": "MOCK_RESET",
+      "amount": -5000000,
+      "balanceBefore": 15000000,
+      "balanceAfter": 10000000,
+      "description": "Đặt lại số dư thử nghiệm: 10.000.000 ₫",
+      "createdAt": "2026-10-26T11:42:18.800Z"
+    },
+    {
+      "id": "TX-1793014938754-506",
+      "userId": 9999902,
+      "type": "MOCK_ADD",
+      "amount": 5000000,
+      "balanceBefore": 10000000,
+      "balanceAfter": 15000000,
+      "description": "Nạp thêm 5.000.000 ₫ số dư thử nghiệm",
+      "createdAt": "2026-10-26T11:42:18.778Z"
+    },
+    {
+      "id": "TX-1793014104673-948",
+      "userId": 1,
+      "orderId": 1042,
+      "type": "ESCROW_LOCK",
+      "amount": -39500,
+      "balanceBefore": 10000000,
+      "balanceAfter": 9960500,
+      "description": "Tạm khóa 10% tiền cọc đơn hàng #1042 (Ví hệ thống)",
+      "createdAt": "2026-10-26T11:28:24.673Z"
+    },
+    {
+      "id": "TX-1793013974936-336",
+      "userId": 1,
+      "type": "MOCK_RESET",
+      "amount": -10000000,
+      "balanceBefore": 20000000,
+      "balanceAfter": 10000000,
+      "description": "Đặt lại số dư thử nghiệm: 10.000.000 ₫",
+      "createdAt": "2026-10-26T11:26:14.980Z"
+    },
+    {
+      "id": "TX-1793013971395-345",
+      "userId": 1,
+      "type": "MOCK_ADD",
+      "amount": 5000000,
+      "balanceBefore": 15000000,
+      "balanceAfter": 20000000,
+      "description": "Nạp thêm 5.000.000 ₫ số dư thử nghiệm",
+      "createdAt": "2026-10-26T11:26:11.440Z"
+    },
+    {
+      "id": "TX-1793013963028-258",
+      "userId": 1,
+      "type": "MOCK_ADD",
+      "amount": 5000000,
+      "balanceBefore": 10000000,
+      "balanceAfter": 15000000,
+      "description": "Nạp thêm 5.000.000 ₫ số dư thử nghiệm",
+      "createdAt": "2026-10-26T11:26:03.083Z"
+    },
+    {
+      "id": "TX-1793013919561-607",
+      "userId": 1,
+      "type": "INITIAL_MOCK",
+      "amount": 10000000,
+      "balanceBefore": 0,
+      "balanceAfter": 10000000,
+      "description": "Số dư thử nghiệm khởi tạo hệ thống SupplyMind AI",
+      "createdAt": "2026-10-26T11:25:19.561Z"
+    },
+    {
+      "id": "TX-1793013554097-107",
+      "userId": 9999905,
+      "type": "MOCK_RESET",
+      "amount": 0,
+      "balanceBefore": 50000,
+      "balanceAfter": 50000,
+      "description": "Đặt lại số dư thử nghiệm: 50.000 ₫",
+      "createdAt": "2026-10-26T11:19:14.097Z"
+    },
+    {
+      "id": "TX-1793013554089-690",
+      "userId": 9999903,
+      "orderId": 12346,
+      "type": "ESCROW_REFUND",
+      "amount": 100000,
+      "balanceBefore": 700000,
+      "balanceAfter": 800000,
+      "description": "Hoàn cọc",
+      "createdAt": "2026-10-26T11:19:14.089Z"
+    },
+    {
+      "id": "TX-1793013554083-377",
+      "userId": 9999903,
+      "orderId": 12346,
+      "type": "ESCROW_LOCK",
+      "amount": -100000,
+      "balanceBefore": 800000,
+      "balanceAfter": 700000,
+      "description": "Cọc đơn hàng bị hủy",
+      "createdAt": "2026-10-26T11:19:14.083Z"
+    },
+    {
+      "id": "TX-1793013554070-322",
+      "userId": 9999904,
+      "orderId": 12345,
+      "type": "ESCROW_RECEIVED",
+      "amount": 196000,
+      "balanceBefore": 0,
+      "balanceAfter": 196000,
+      "description": "Nhận tiền cọc đơn hàng #12345 (Đã trừ phí sàn: 4.000 ₫)",
+      "createdAt": "2026-10-26T11:19:14.070Z"
+    },
+    {
+      "id": "TX-1793013554070-892",
+      "userId": 9999903,
+      "orderId": 12345,
+      "type": "ESCROW_RELEASE",
+      "amount": 0,
+      "balanceBefore": 800000,
+      "balanceAfter": 800000,
+      "description": "Giải phóng cọc 200.000 ₫ cho đơn hàng #12345 (Đã giao hàng)",
+      "createdAt": "2026-10-26T11:19:14.070Z"
+    },
+    {
+      "id": "TX-1793013554062-165",
+      "userId": 9999903,
+      "orderId": 12345,
+      "type": "ESCROW_LOCK",
+      "amount": -200000,
+      "balanceBefore": 1000000,
+      "balanceAfter": 800000,
+      "description": "Cọc đơn hàng test",
+      "createdAt": "2026-10-26T11:19:14.062Z"
+    },
+    {
+      "id": "TX-1793013554053-723",
+      "userId": 9999904,
+      "type": "MOCK_RESET",
+      "amount": -196000,
+      "balanceBefore": 196000,
+      "balanceAfter": 0,
+      "description": "Đặt lại số dư thử nghiệm: 0 ₫",
+      "createdAt": "2026-10-26T11:19:14.053Z"
+    },
+    {
+      "id": "TX-1793013554047-511",
+      "userId": 9999903,
+      "type": "MOCK_RESET",
+      "amount": 200000,
+      "balanceBefore": 800000,
+      "balanceAfter": 1000000,
+      "description": "Đặt lại số dư thử nghiệm: 1.000.000 ₫",
+      "createdAt": "2026-10-26T11:19:14.047Z"
+    },
+    {
+      "id": "TX-1793013554039-419",
+      "userId": 9999902,
+      "type": "MOCK_RESET",
+      "amount": -5000000,
+      "balanceBefore": 15000000,
+      "balanceAfter": 10000000,
+      "description": "Đặt lại số dư thử nghiệm: 10.000.000 ₫",
+      "createdAt": "2026-10-26T11:19:14.039Z"
+    },
+    {
+      "id": "TX-1793013554009-552",
+      "userId": 9999902,
+      "type": "MOCK_ADD",
+      "amount": 5000000,
+      "balanceBefore": 10000000,
+      "balanceAfter": 15000000,
+      "description": "Nạp thêm 5.000.000 ₫ số dư thử nghiệm",
+      "createdAt": "2026-10-26T11:19:14.030Z"
+    },
+    {
+      "id": "TX-1793012997114-623",
+      "userId": 9999905,
+      "type": "MOCK_RESET",
+      "amount": 0,
+      "balanceBefore": 50000,
+      "balanceAfter": 50000,
+      "description": "Đặt lại số dư thử nghiệm: 50.000 ₫",
+      "createdAt": "2026-10-26T11:09:57.114Z"
+    },
+    {
+      "id": "TX-1793012997109-197",
+      "userId": 9999903,
+      "orderId": 12346,
+      "type": "ESCROW_REFUND",
+      "amount": 100000,
+      "balanceBefore": 700000,
+      "balanceAfter": 800000,
+      "description": "Hoàn cọc",
+      "createdAt": "2026-10-26T11:09:57.109Z"
+    },
+    {
+      "id": "TX-1793012997102-836",
+      "userId": 9999903,
+      "orderId": 12346,
+      "type": "ESCROW_LOCK",
+      "amount": -100000,
+      "balanceBefore": 800000,
+      "balanceAfter": 700000,
+      "description": "Cọc đơn hàng bị hủy",
+      "createdAt": "2026-10-26T11:09:57.102Z"
+    },
+    {
+      "id": "TX-1793012997094-39",
+      "userId": 9999904,
+      "orderId": 12345,
+      "type": "ESCROW_RECEIVED",
+      "amount": 196000,
+      "balanceBefore": 0,
+      "balanceAfter": 196000,
+      "description": "Nhận tiền cọc đơn hàng #12345 (Đã trừ phí sàn: 4.000 ₫)",
+      "createdAt": "2026-10-26T11:09:57.094Z"
+    },
+    {
+      "id": "TX-1793012997094-506",
+      "userId": 9999903,
+      "orderId": 12345,
+      "type": "ESCROW_RELEASE",
+      "amount": 0,
+      "balanceBefore": 800000,
+      "balanceAfter": 800000,
+      "description": "Giải phóng cọc 200.000 ₫ cho đơn hàng #12345 (Đã giao hàng)",
+      "createdAt": "2026-10-26T11:09:57.094Z"
+    },
+    {
+      "id": "TX-1793012997087-755",
+      "userId": 9999903,
+      "orderId": 12345,
+      "type": "ESCROW_LOCK",
+      "amount": -200000,
+      "balanceBefore": 1000000,
+      "balanceAfter": 800000,
+      "description": "Cọc đơn hàng test",
+      "createdAt": "2026-10-26T11:09:57.087Z"
+    },
+    {
+      "id": "TX-1793012997081-514",
+      "userId": 9999904,
+      "type": "MOCK_RESET",
+      "amount": -196000,
+      "balanceBefore": 196000,
+      "balanceAfter": 0,
+      "description": "Đặt lại số dư thử nghiệm: 0 ₫",
+      "createdAt": "2026-10-26T11:09:57.081Z"
+    },
+    {
+      "id": "TX-1793012997074-123",
+      "userId": 9999903,
+      "type": "MOCK_RESET",
+      "amount": 200000,
+      "balanceBefore": 800000,
+      "balanceAfter": 1000000,
+      "description": "Đặt lại số dư thử nghiệm: 1.000.000 ₫",
+      "createdAt": "2026-10-26T11:09:57.074Z"
+    },
+    {
+      "id": "TX-1793012997067-957",
+      "userId": 9999902,
+      "type": "MOCK_RESET",
+      "amount": -5000000,
+      "balanceBefore": 15000000,
+      "balanceAfter": 10000000,
+      "description": "Đặt lại số dư thử nghiệm: 10.000.000 ₫",
+      "createdAt": "2026-10-26T11:09:57.067Z"
+    },
+    {
+      "id": "TX-1793012997046-981",
+      "userId": 9999902,
+      "type": "MOCK_ADD",
+      "amount": 5000000,
+      "balanceBefore": 10000000,
+      "balanceAfter": 15000000,
+      "description": "Nạp thêm 5.000.000 ₫ số dư thử nghiệm",
+      "createdAt": "2026-10-26T11:09:57.061Z"
+    },
+    {
+      "id": "TX-1793012907456-668",
+      "userId": 9999905,
+      "type": "MOCK_RESET",
+      "amount": -9950000,
+      "balanceBefore": 10000000,
+      "balanceAfter": 50000,
+      "description": "Đặt lại số dư thử nghiệm: 50.000 ₫",
+      "createdAt": "2026-10-26T11:08:27.456Z"
+    },
+    {
+      "id": "TX-1793012907456-368",
+      "userId": 9999905,
+      "type": "INITIAL_MOCK",
+      "amount": 10000000,
+      "balanceBefore": 0,
+      "balanceAfter": 10000000,
+      "description": "Số dư thử nghiệm khởi tạo hệ thống SupplyMind AI",
+      "createdAt": "2026-10-26T11:08:27.456Z"
+    },
+    {
+      "id": "TX-1793012907449-85",
+      "userId": 9999903,
+      "orderId": 12346,
+      "type": "ESCROW_REFUND",
+      "amount": 100000,
+      "balanceBefore": 700000,
+      "balanceAfter": 800000,
+      "description": "Hoàn cọc",
+      "createdAt": "2026-10-26T11:08:27.449Z"
+    },
+    {
+      "id": "TX-1793012907443-435",
+      "userId": 9999903,
+      "orderId": 12346,
+      "type": "ESCROW_LOCK",
+      "amount": -100000,
+      "balanceBefore": 800000,
+      "balanceAfter": 700000,
+      "description": "Cọc đơn hàng bị hủy",
+      "createdAt": "2026-10-26T11:08:27.443Z"
+    },
+    {
+      "id": "TX-1793012907436-219",
+      "userId": 9999904,
+      "orderId": 12345,
+      "type": "ESCROW_RECEIVED",
+      "amount": 196000,
+      "balanceBefore": 0,
+      "balanceAfter": 196000,
+      "description": "Nhận tiền cọc đơn hàng #12345 (Đã trừ phí sàn: 4.000 ₫)",
+      "createdAt": "2026-10-26T11:08:27.436Z"
+    },
+    {
+      "id": "TX-1793012907436-999",
+      "userId": 9999903,
+      "orderId": 12345,
+      "type": "ESCROW_RELEASE",
+      "amount": 0,
+      "balanceBefore": 800000,
+      "balanceAfter": 800000,
+      "description": "Giải phóng cọc 200.000 ₫ cho đơn hàng #12345 (Đã giao hàng)",
+      "createdAt": "2026-10-26T11:08:27.436Z"
+    },
+    {
+      "id": "TX-1793012907430-289",
+      "userId": 9999903,
+      "orderId": 12345,
+      "type": "ESCROW_LOCK",
+      "amount": -200000,
+      "balanceBefore": 1000000,
+      "balanceAfter": 800000,
+      "description": "Cọc đơn hàng test",
+      "createdAt": "2026-10-26T11:08:27.430Z"
+    },
+    {
+      "id": "TX-1793012907426-284",
+      "userId": 9999904,
+      "type": "MOCK_RESET",
+      "amount": -10000000,
+      "balanceBefore": 10000000,
+      "balanceAfter": 0,
+      "description": "Đặt lại số dư thử nghiệm: 0 ₫",
+      "createdAt": "2026-10-26T11:08:27.426Z"
+    },
+    {
+      "id": "TX-1793012907426-417",
+      "userId": 9999904,
+      "type": "INITIAL_MOCK",
+      "amount": 10000000,
+      "balanceBefore": 0,
+      "balanceAfter": 10000000,
+      "description": "Số dư thử nghiệm khởi tạo hệ thống SupplyMind AI",
+      "createdAt": "2026-10-26T11:08:27.426Z"
+    },
+    {
+      "id": "TX-1793012907422-539",
+      "userId": 9999903,
+      "type": "MOCK_RESET",
+      "amount": -9000000,
+      "balanceBefore": 10000000,
+      "balanceAfter": 1000000,
+      "description": "Đặt lại số dư thử nghiệm: 1.000.000 ₫",
+      "createdAt": "2026-10-26T11:08:27.422Z"
+    },
+    {
+      "id": "TX-1793012907422-918",
+      "userId": 9999903,
+      "type": "INITIAL_MOCK",
+      "amount": 10000000,
+      "balanceBefore": 0,
+      "balanceAfter": 10000000,
+      "description": "Số dư thử nghiệm khởi tạo hệ thống SupplyMind AI",
+      "createdAt": "2026-10-26T11:08:27.422Z"
+    },
+    {
+      "id": "TX-1793012907417-596",
+      "userId": 9999902,
+      "type": "MOCK_RESET",
+      "amount": -5000000,
+      "balanceBefore": 15000000,
+      "balanceAfter": 10000000,
+      "description": "Đặt lại số dư thử nghiệm: 10.000.000 ₫",
+      "createdAt": "2026-10-26T11:08:27.417Z"
+    },
+    {
+      "id": "TX-1793012907350-198",
+      "userId": 9999902,
+      "type": "MOCK_ADD",
+      "amount": 5000000,
+      "balanceBefore": 10000000,
+      "balanceAfter": 15000000,
+      "description": "Nạp thêm 5.000.000 ₫ số dư thử nghiệm",
+      "createdAt": "2026-10-26T11:08:27.412Z"
+    },
+    {
+      "id": "TX-1793012907347-957",
+      "userId": 9999902,
+      "type": "INITIAL_MOCK",
+      "amount": 10000000,
+      "balanceBefore": 0,
+      "balanceAfter": 10000000,
+      "description": "Số dư thử nghiệm khởi tạo hệ thống SupplyMind AI",
+      "createdAt": "2026-10-26T11:08:27.347Z"
+    },
+    {
+      "id": "TX-1793012907341-286",
+      "userId": 9999901,
+      "type": "INITIAL_MOCK",
+      "amount": 10000000,
+      "balanceBefore": 0,
+      "balanceAfter": 10000000,
+      "description": "Số dư thử nghiệm khởi tạo hệ thống SupplyMind AI",
+      "createdAt": "2026-10-26T11:08:27.341Z"
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 const { audit, problem, httpsDocument, verificationComplete } = require('./platformPolicy');
 const { moderateContent } = require('./contentModerationService');
+const { walletService } = require('./walletService');
 const ORDER_STATUSES = Object.freeze([
   'PENDING', 'APPROVED', 'REJECTED', 'PREPARING', 'SHIPPING', 'ISSUE_HANDLING', 'DELIVERED',
 ]);
@@ -15,7 +16,7 @@ const TRANSITIONS = Object.freeze({
   APPROVED: ['PREPARING'],
   PREPARING: ['SHIPPING'],
   SHIPPING: ['ISSUE_HANDLING', 'DELIVERED'],
-  ISSUE_HANDLING: ['DELIVERED'],
+  ISSUE_HANDLING: ['DELIVERED', 'REJECTED'],
   REJECTED: [],
   DELIVERED: [],
 });
@@ -94,6 +95,13 @@ function serializeOrder(order) {
     createdAt: order.createdAt,
     updatedAt: order.updatedAt,
     buyer: { id: order.buyer.id, name: order.buyer.name, username: order.buyer.username },
+    supplier: order.supplier ? {
+      id: order.supplier.id,
+      businessName: order.supplier.businessName,
+      warehouseAddress: order.supplier.warehouseAddress || null,
+      deliveryRadiusKm: order.supplier.deliveryRadiusKm ? numberValue(order.supplier.deliveryRadiusKm) : 10,
+      phone: order.supplier.user?.phone || '0908 123 789',
+    } : null,
     items: order.items.map((item) => ({
       id: item.id, productId: item.productId, productName: item.productName,
       packaging: item.packaging, quantity: item.quantity,
@@ -410,7 +418,7 @@ function createSupplierService(prisma) {
           status,
           rejectReason: status === 'REJECTED' ? normalizedRejectReason : null,
           ...(status === 'REJECTED' && order.depositStatus === 'PAID'
-            ? { depositStatus: 'REFUND_PENDING' }
+            ? { depositStatus: 'REFUNDED' }
             : {}),
           ...(status === 'DELIVERED' ? { deliveredAt: new Date(), commissionAmount: order.commissionRate === null ? null : order.subtotal.mul(order.commissionRate).div(100).toDecimalPlaces(2) } : {}),
         },
@@ -425,8 +433,32 @@ function createSupplierService(prisma) {
           if (result.count !== 1) throw Object.assign(new Error('Sản phẩm “' + item.productName + '” không đủ tồn kho hoặc đã ẩn.'), { code: 'INSUFFICIENT_STOCK' });
         }
       }
+      if (status === 'REJECTED' && ['APPROVED', 'PREPARING', 'SHIPPING', 'ISSUE_HANDLING'].includes(order.status)) {
+        for (const item of order.items) {
+          await transaction.supplierProduct.updateMany({
+            where: { id: item.productId, supplierId: profile.id },
+            data: { stockQty: { increment: item.quantity } },
+          });
+        }
+      }
       await audit(transaction, userId, 'ORDER_STATUS_CHANGED', 'ORDER', order.id, { before: order.status, after: status, rejectReason: status === 'REJECTED' ? normalizedRejectReason : null });
     }, { isolationLevel: 'Serializable' });
+
+    if (status === 'DELIVERED' && numberValue(order.depositAmount || 0) > 0 && order.depositStatus === 'PAID') {
+      try {
+        walletService.releaseEscrow(order.buyerId, profile.userId, order.id, numberValue(order.depositAmount), order.commissionRate ? numberValue(order.commissionRate) : 0);
+      } catch (err) {
+        console.error('Lỗi giải phóng cọc ví:', err.message);
+      }
+    }
+    if (status === 'REJECTED' && numberValue(order.depositAmount || 0) > 0 && order.depositStatus === 'PAID') {
+      try {
+        walletService.refundEscrow(order.buyerId, order.id, numberValue(order.depositAmount), `Hoàn trả cọc do chủ vựa từ chối đơn #${order.id}: ${normalizedRejectReason}`);
+      } catch (err) {
+        console.error('Lỗi hoàn cọc ví:', err.message);
+      }
+    }
+
     return serializeOrder(await prisma.wholesaleOrder.findUnique({
       where: { id: order.id }, include: { buyer: true, items: true, complaint: true },
     }));
@@ -489,6 +521,11 @@ function createSupplierService(prisma) {
           depositRefundedAt: new Date(),
           depositRefundReference: reference,
         };
+        try {
+          walletService.refundEscrow(order.buyerId, order.id, numberValue(order.depositAmount), `Hoàn tiền cọc đơn #${order.id} (Mã GD: ${reference})`);
+        } catch (err) {
+          console.error('Lỗi hoàn cọc ví:', err.message);
+        }
       }
       const changed = await tx.wholesaleOrder.updateMany({
         where: { id: order.id, supplierId: profile.id, depositStatus: expectedDepositStatus },

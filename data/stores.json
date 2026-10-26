@@ -1,0 +1,24 @@
+{
+  "stores": {
+    "1": {
+      "userId": 1,
+      "storeName": "Tiệm Tạp Hóa An Khang",
+      "storeAddress": "123 Đường Số 4, Phường Bình Trị Đông B, Quận Bình Tân, TP. Hồ Chí Minh",
+      "storePhone": "0908123456",
+      "businessType": "Tạp hóa tổng hợp",
+      "isConfigured": true,
+      "createdAt": "2026-10-26T13:10:03.557Z",
+      "updatedAt": "2026-10-26T13:10:03.558Z"
+    },
+    "9999": {
+      "userId": 9999,
+      "storeName": "Tạp Hóa Thành Công",
+      "storeAddress": "456 Lê Văn Sỹ, Phường 14, Quận 3, TP. Hồ Chí Minh",
+      "storePhone": "0912345678",
+      "businessType": "Tạp hóa tổng hợp",
+      "isConfigured": true,
+      "createdAt": "2026-10-26T13:10:03.562Z",
+      "updatedAt": "2026-10-26T13:13:22.660Z"
+    }
+  }
+}
