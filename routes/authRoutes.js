@@ -2,11 +2,13 @@ const express = require('express');
 const { rateLimit } = require('express-rate-limit');
 const { createAuthController } = require('../controllers/authController');
 const { createRegistrationController } = require('../controllers/registrationController');
+const { createForgotPasswordController } = require('../controllers/forgotPasswordController');
 
 function createAuthRoutes(authService, requireAuth, config) {
   const router = express.Router();
   const controller = createAuthController(authService, config);
   const registration = createRegistrationController(authService, config);
+  const forgotPassword = createForgotPasswordController(config);
 
   const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -36,7 +38,7 @@ function createAuthRoutes(authService, requireAuth, config) {
         legacyHeaders: false,
         message: {
           success: false,
-          message: 'Bạn đã gửi yêu cầu đăng ký quá nhiều lần. Vui lòng thử lại sau 15 phút.',
+          message: 'Bạn đã gửi yêu cầu quá nhiều lần. Vui lòng thử lại sau 15 phút.',
         },
       });
 
@@ -45,6 +47,12 @@ function createAuthRoutes(authService, requireAuth, config) {
   router.post('/register-request-otp', registrationLimiter, registration.requestOtp);
   router.post('/register-verify-otp', registration.verifyOtp);
   router.post('/register-resend-otp', registrationLimiter, registration.resendOtp);
+
+  // Forgot password & reset password via OTP
+  router.post('/forgot-password-request-otp', registrationLimiter, forgotPassword.requestOtp);
+  router.post('/forgot-password-verify-otp', forgotPassword.verifyOtp);
+  router.post('/forgot-password-resend-otp', registrationLimiter, forgotPassword.resendOtp);
+  router.post('/forgot-password-reset', forgotPassword.resetPassword);
 
   router.get('/me', requireAuth, controller.me);
   router.post('/logout', controller.logout);

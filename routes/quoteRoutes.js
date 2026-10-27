@@ -4,6 +4,7 @@ const { Prisma } = require('@prisma/client');
 const { requireRole } = require('../middlewares/authMiddleware');
 const { normalizePhone } = require('../services/registrationValidation');
 const { serializeOrder } = require('../services/supplierService');
+const systemConfigService = require('../services/systemConfigService');
 const { activeAccountWhere, accountAvailable, audit } = require('../services/platformPolicy');
 
 const DAY = 86400000;
@@ -75,6 +76,7 @@ const quoteInclude = {
 function createSupplierQuoteRoutes(prisma, requireAuth) {
   const router = express.Router();
   router.use(requireAuth, requireRole('SUPPLIER'));
+  router.get('/config', (req, res) => res.json(systemConfigService.getConfig().escrowDeposit));
 
   router.get('/prospects', async (req, res, next) => {
     const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
@@ -116,6 +118,10 @@ function createSupplierQuoteRoutes(prisma, requireAuth) {
     const note = typeof body.note === 'string' ? body.note.trim() : '';
     const { buyerId, validUntil, deliveryFee, depositRate, lines } = body;
     const today = vnDate(new Date());
+    const maxAllowedDeposit = systemConfigService.getConfig().escrowDeposit?.maxDepositRate ?? 50;
+    if (typeof depositRate === 'number' && depositRate > maxAllowedDeposit) {
+      return res.status(400).json({ message: `Tỷ lệ ký quỹ (${depositRate}%) vượt quá mức trần tối đa của sàn (${maxAllowedDeposit}%). Vui lòng điều chỉnh lại.` });
+    }
     if (!Number.isInteger(buyerId) || buyerId < 1 || buyerId > 2147483647 || title.length < 2 || title.length > 150 ||
       !dateOnly(validUntil) || validUntil < today || new Date(validUntil) - new Date(today) > 90 * DAY ||
       !hasTwoDecimals(deliveryFee) || deliveryFee < 0 || deliveryFee > 1000000000 ||
@@ -195,6 +201,7 @@ function createSupplierQuoteRoutes(prisma, requireAuth) {
 function createStoreQuoteRoutes(prisma, requireAuth) {
   const router = express.Router();
   router.use(requireAuth, requireRole('STORE_OWNER'));
+  router.get('/config', (req, res) => res.json(systemConfigService.getConfig().escrowDeposit));
 
   router.get('/', async (req, res, next) => {
     const page = req.query.page === undefined ? 1 : Number(req.query.page);

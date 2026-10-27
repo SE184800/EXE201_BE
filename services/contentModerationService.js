@@ -4,17 +4,21 @@
  * - AUTO_APPROVED: Hợp lệ (0 lỗi, sạch)
  * - NEEDS_REVIEW: Cảnh báo nhẹ (chỉ 1 lỗi nhẹ: thuốc lá/xì gà hợp pháp, giá lệch nhẹ -> Tạm ẩn, chờ Admin duyệt)
  * - AUTO_REJECTED: Vi phạm nghiêm trọng (từ cấm nặng, ma túy, vũ khí, spam, giá phi lý, HOẶC >= 2 lỗi -> AI tự cấm thẳng)
+ * 
+ * Hỗ trợ nạp cấu hình động từ Admin: từ cấm tùy chỉnh, từ khóa hạn chế, ngưỡng giá & MOQ, bật/tắt AI.
  */
 
-const CRITICAL_FORBIDDEN_KEYWORDS = [
+const systemConfigService = require('./systemConfigService');
+
+const DEFAULT_CRITICAL_FORBIDDEN_KEYWORDS = [
   'chất cấm', 'ma túy', 'bóng cười', 'vũ khí', 'súng', 'đạn', 'đao kiếm',
   'cờ bạc', 'lừa đảo', 'hàng giả', 'hàng nhái', 'kích dục', 'độc hại',
   'rượu lậu', 'tiền giả', 'pháo nổ', 'pháo hoa nổ', 'ngà voi', 'sừng tê giác',
   'cỏ mỹ', 'tê tê'
 ];
 
-const RESTRICTED_KEYWORDS = [
-  'thuốc lá', 'xì gà'
+const DEFAULT_RESTRICTED_KEYWORDS = [
+  'thuốc lá', 'xì gà', 'rượu mạnh'
 ];
 
 const SPAM_PATTERNS = [
@@ -31,6 +35,36 @@ const SPAM_PATTERNS = [
  * @returns {Promise<{ status: 'AUTO_APPROVED'|'NEEDS_REVIEW'|'AUTO_REJECTED', riskScore: number, reasons: string[], criticalReasons: string[], isClean: boolean }>}
  */
 async function moderateContent(item = {}, options = {}) {
+  const sysConfig = systemConfigService.getConfig();
+  const aiConfig = sysConfig?.aiModeration || {};
+
+  // Nếu Admin tắt tính năng AI duyệt bài tự động
+  if (aiConfig.autoModerationEnabled === false) {
+    return {
+      status: 'AUTO_APPROVED',
+      riskScore: 0,
+      reasons: [],
+      criticalReasons: [],
+      isClean: true,
+      disabled: true,
+    };
+  }
+
+  const forbiddenWords = Array.isArray(aiConfig.criticalForbiddenKeywords) && aiConfig.criticalForbiddenKeywords.length > 0
+    ? aiConfig.criticalForbiddenKeywords
+    : DEFAULT_CRITICAL_FORBIDDEN_KEYWORDS;
+
+  const restrictedWords = Array.isArray(aiConfig.restrictedKeywords) && aiConfig.restrictedKeywords.length > 0
+    ? aiConfig.restrictedKeywords
+    : DEFAULT_RESTRICTED_KEYWORDS;
+
+  const minPrice = typeof aiConfig.minSuspiciousPrice === 'number' ? aiConfig.minSuspiciousPrice : 500;
+  const warningLowPrice = typeof aiConfig.warningLowPrice === 'number' ? aiConfig.warningLowPrice : 2000;
+  const maxPrice = typeof aiConfig.maxSuspiciousPrice === 'number' ? aiConfig.maxSuspiciousPrice : 500000000;
+  const maxMoq = typeof aiConfig.maxMoq === 'number' ? aiConfig.maxMoq : 50000;
+  const warningMoq = typeof aiConfig.warningMoq === 'number' ? aiConfig.warningMoq : 5000;
+  const strictness = aiConfig.strictness || 'STANDARD';
+
   const name = typeof item.name === 'string' ? item.name.trim() : '';
   const category = typeof item.category === 'string' ? item.category.trim() : '';
   const packaging = typeof item.packaging === 'string' ? item.packaging.trim() : '';
@@ -44,9 +78,9 @@ async function moderateContent(item = {}, options = {}) {
 
   const fullText = `${name} ${category} ${packaging} ${description}`.toLowerCase();
 
-  // 1. Tầng 1: Quét Từ Khóa Cấm Nặng (Critical Forbidden Keywords) -> Lỗi nặng
-  for (const word of CRITICAL_FORBIDDEN_KEYWORDS) {
-    if (fullText.includes(word)) {
+  // 1. Tầng 1: Quét Từ Khóa Cấm Nặng (Critical Forbidden Keywords do Admin cấu hình) -> Lỗi nặng
+  for (const word of forbiddenWords) {
+    if (word && fullText.includes(word.toLowerCase())) {
       const reason = `Chứa từ cấm nghiêm trọng: "${word}"`;
       reasons.push(reason);
       criticalReasons.push(reason);
@@ -64,41 +98,39 @@ async function moderateContent(item = {}, options = {}) {
     }
   }
 
-  // Quét từ khóa hàng hóa hạn chế / có điều kiện (Thuốc lá, xì gà) -> Lỗi nhẹ
-  for (const word of RESTRICTED_KEYWORDS) {
-    if (fullText.includes(word)) {
+  // Quét từ khóa hàng hóa hạn chế / có điều kiện (do Admin cấu hình) -> Lỗi nhẹ
+  for (const word of restrictedWords) {
+    if (word && fullText.includes(word.toLowerCase())) {
       reasons.push(`Mặt hàng hạn chế kinh doanh: "${word}" (cần Admin duyệt giấy phép)`);
       riskScore += 30;
     }
   }
 
-  // 2. Tầng 2: Quét Giá Bất Thường & Số Lượng Phi Lý
-  // Giá cực đoan phi thực tế (< 500đ hoặc > 500 triệu) -> Lỗi nặng
-  if (price > 0 && price < 500) {
-    const reason = `Giá sỉ phi lý quá rẻ (${price.toLocaleString('vi-VN')}đ) - nghi vấn giá ảo / phá giá`;
+  // 2. Tầng 2: Quét Giá Bất Thường & Số Lượng Phi Lý (theo cấu hình Admin)
+  if (price > 0 && price < minPrice) {
+    const reason = `Giá sỉ phi lý quá rẻ (${price.toLocaleString('vi-VN')}đ) - dưới ngưỡng tối thiểu sàn (${minPrice.toLocaleString('vi-VN')}đ)`;
     reasons.push(reason);
     criticalReasons.push(reason);
     riskScore += 50;
-  } else if (price >= 500 && price < 2000) {
-    // Giá rẻ bất thường nhẹ -> Lỗi nhẹ
+  } else if (price >= minPrice && price < warningLowPrice) {
     reasons.push(`Giá sỉ thấp bất thường (${price.toLocaleString('vi-VN')}đ) - cần Admin kiểm tra`);
     riskScore += 25;
   }
 
-  if (price > 500000000) {
-    const reason = `Giá sỉ bất thường quá cao (${price.toLocaleString('vi-VN')}đ)`;
+  if (price > maxPrice) {
+    const reason = `Giá sỉ bất thường quá cao (${price.toLocaleString('vi-VN')}đ) - vượt mức trần tối đa sàn (${maxPrice.toLocaleString('vi-VN')}đ)`;
     reasons.push(reason);
     criticalReasons.push(reason);
     riskScore += 50;
   }
 
   // MOQ bất thường
-  if (moq <= 0 || moq > 50000) {
-    const reason = `Số lượng tối thiểu MOQ (${moq}) phi thực tế`;
+  if (moq <= 0 || moq > maxMoq) {
+    const reason = `Số lượng tối thiểu MOQ (${moq}) phi thực tế (vượt mức ${maxMoq})`;
     reasons.push(reason);
     criticalReasons.push(reason);
     riskScore += 30;
-  } else if (moq > 5000) {
+  } else if (moq > warningMoq) {
     reasons.push(`Số lượng tối thiểu MOQ (${moq}) quá lớn - cần Admin xác minh`);
     riskScore += 20;
   }
@@ -144,13 +176,22 @@ async function moderateContent(item = {}, options = {}) {
     }
   }
 
+  // Điều chỉnh mức độ nghiêm ngặt (Strictness Level)
+  if (strictness === 'STRICT') {
+    riskScore = Math.round(riskScore * 1.25);
+  } else if (strictness === 'LENIENT') {
+    riskScore = Math.round(riskScore * 0.8);
+  }
+
   riskScore = Math.min(100, riskScore);
-  const isClean = riskScore < 20 && reasons.length === 0;
+  const cleanThreshold = strictness === 'STRICT' ? 10 : 20;
+  const isClean = riskScore < cleanThreshold && reasons.length === 0;
 
   let status = 'AUTO_APPROVED';
   if (!isClean) {
-    // Mức 3: Nếu có ít nhất 1 lỗi nặng HOẶC từ 2 lỗi vi phạm trở lên
-    if (criticalReasons.length > 0 || reasons.length >= 2) {
+    const rejectThreshold = strictness === 'STRICT' ? 1 : 2;
+    // Mức 3: Nếu có ít nhất 1 lỗi nặng HOẶC đạt ngưỡng lỗi vi phạm
+    if (criticalReasons.length > 0 || reasons.length >= rejectThreshold) {
       status = 'AUTO_REJECTED';
     } else {
       // Mức 2: Chỉ có 1 lỗi nhẹ
@@ -169,6 +210,6 @@ async function moderateContent(item = {}, options = {}) {
 
 module.exports = {
   moderateContent,
-  CRITICAL_FORBIDDEN_KEYWORDS,
-  RESTRICTED_KEYWORDS,
+  CRITICAL_FORBIDDEN_KEYWORDS: DEFAULT_CRITICAL_FORBIDDEN_KEYWORDS,
+  RESTRICTED_KEYWORDS: DEFAULT_RESTRICTED_KEYWORDS,
 };

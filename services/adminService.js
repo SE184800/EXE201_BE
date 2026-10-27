@@ -1,5 +1,6 @@
 const { Prisma } = require('@prisma/client');
 const { moderateContent } = require('./contentModerationService');
+const systemConfigService = require('./systemConfigService');
 const { audit, problem, activeAccountWhere, verificationComplete } = require('./platformPolicy');
 const { addCalendarMonth, MONTHLY_PRICE } = require('./subscriptionService');
 const PAGE_SIZE = 20;
@@ -391,10 +392,77 @@ function createAdminService(prisma, config) {
       action,
     };
   }
+  async function getSystemConfig() {
+    return systemConfigService.getConfig();
+  }
+
+  async function updateSystemConfig(actorId, body) {
+    const updated = systemConfigService.updateConfig(actorId, body);
+    try {
+      await audit(prisma, actorId, 'SYSTEM_CONFIG_UPDATED', 'SETTING', 'SYSTEM', {
+        strictness: updated.aiModeration?.strictness,
+        autoModerationEnabled: updated.aiModeration?.autoModerationEnabled,
+        forbiddenWordsCount: updated.aiModeration?.criticalForbiddenKeywords?.length,
+        restrictedWordsCount: updated.aiModeration?.restrictedKeywords?.length,
+        defaultDepositRate: updated.escrowDeposit?.defaultDepositRate,
+        maxDepositRate: updated.escrowDeposit?.maxDepositRate,
+      });
+    } catch {
+      // audit failure shouldn't block config update
+    }
+    return updated;
+  }
+
+  async function resetSystemConfig(actorId) {
+    const reset = systemConfigService.resetConfig(actorId);
+    try {
+      await audit(prisma, actorId, 'SYSTEM_CONFIG_RESET', 'SETTING', 'SYSTEM', {
+        action: 'RESET_TO_DEFAULT',
+      });
+    } catch {
+      // ignore
+    }
+    return reset;
+  }
+
+  async function addForbiddenWord(actorId, word) {
+    const updated = systemConfigService.addKeyword('forbidden', word);
+    try {
+      await audit(prisma, actorId, 'FORBIDDEN_KEYWORD_ADDED', 'SETTING', word, { word });
+    } catch {}
+    return updated;
+  }
+
+  async function removeForbiddenWord(actorId, word) {
+    const updated = systemConfigService.removeKeyword('forbidden', word);
+    try {
+      await audit(prisma, actorId, 'FORBIDDEN_KEYWORD_REMOVED', 'SETTING', word, { word });
+    } catch {}
+    return updated;
+  }
+
+  async function addRestrictedWord(actorId, word) {
+    const updated = systemConfigService.addKeyword('restricted', word);
+    try {
+      await audit(prisma, actorId, 'RESTRICTED_KEYWORD_ADDED', 'SETTING', word, { word });
+    } catch {}
+    return updated;
+  }
+
+  async function removeRestrictedWord(actorId, word) {
+    const updated = systemConfigService.removeKeyword('restricted', word);
+    try {
+      await audit(prisma, actorId, 'RESTRICTED_KEYWORD_REMOVED', 'SETTING', word, { word });
+    } catch {}
+    return updated;
+  }
+
   return {
     listUsers, changeAccount, unlockSubscription, verifications, review, settings, changeRate,
     settlements, markPaid, analytics, aiMetrics, holidays, createHoliday,
     updateHoliday, deleteHoliday, logs, listModerationQueue, moderateAction,
+    getSystemConfig, updateSystemConfig, resetSystemConfig,
+    addForbiddenWord, removeForbiddenWord, addRestrictedWord, removeRestrictedWord,
   };
 }
 module.exports = { createAdminService, idParam, period, csvCell, holidayInput, serializeHoliday };

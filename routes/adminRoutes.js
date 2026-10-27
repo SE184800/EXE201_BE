@@ -27,6 +27,13 @@ function createAdminRoutes(prisma, requireAuth, config) {
   router.put('/holidays/:id', run(async (req, res) => res.json({ holiday: await service.updateHoliday(req.auth.user.id, idParam(req.params.id), req.body || {}) })));
   router.delete('/holidays/:id', run(async (req, res) => res.json(await service.deleteHoliday(req.auth.user.id, idParam(req.params.id), req.body || {}))));
   router.get('/audit-logs', run(async (req, res) => res.json(await service.logs(req.query))));
+  router.get('/system-config', run(async (req, res) => res.json(await service.getSystemConfig())));
+  router.put('/system-config', run(async (req, res) => res.json(await service.updateSystemConfig(req.auth.user.id, req.body || {}))));
+  router.post('/system-config/reset', run(async (req, res) => res.json(await service.resetSystemConfig(req.auth.user.id))));
+  router.post('/system-config/forbidden-words', run(async (req, res) => res.json(await service.addForbiddenWord(req.auth.user.id, req.body?.word))));
+  router.delete('/system-config/forbidden-words', run(async (req, res) => res.json(await service.removeForbiddenWord(req.auth.user.id, req.body?.word || req.query?.word))));
+  router.post('/system-config/restricted-words', run(async (req, res) => res.json(await service.addRestrictedWord(req.auth.user.id, req.body?.word))));
+  router.delete('/system-config/restricted-words', run(async (req, res) => res.json(await service.removeRestrictedWord(req.auth.user.id, req.body?.word || req.query?.word))));
   router.use((error, req, res, next) => {
     if (error.status) return res.status(error.status).json({ message: error.message });
     if (error.code === 'P2034') return res.status(409).json({ message: 'Dữ liệu đang được xử lý đồng thời. Tải lại và thử lại.' });
