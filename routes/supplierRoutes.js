@@ -61,6 +61,8 @@ function createSupplierRoutes(prisma, requireAuth) {
   router.route('/products/:productId').put(controller.updateProduct).delete(controller.deactivateProduct);
   router.get('/orders', controller.listOrders);
   router.patch('/orders/:orderId/status', controller.updateOrderStatus);
+  router.put('/orders/:orderId/driver-info', controller.updateDriverInfo);
+  router.patch('/orders/:orderId/driver-info', controller.updateDriverInfo);
   router.patch('/orders/:orderId/deposit', controller.updateDeposit);
   router.use((error, req, res, next) => {
     if (error.status) return res.status(error.status).json({ message: error.message });

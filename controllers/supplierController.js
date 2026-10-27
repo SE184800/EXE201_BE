@@ -61,12 +61,24 @@ function createSupplierController(service) {
     async updateOrderStatus(req, res, next) {
       const orderId = idFrom(req.params.orderId);
       const status = req.body?.status;
+      const driverInfo = req.body?.driverInfo;
       if (!orderId) return res.status(400).json({ success: false, message: 'Mã đơn hàng không hợp lệ.' });
       try {
-        const order = await service.updateOrderStatus(req.auth.user.id, orderId, status, req.body?.rejectReason);
+        const order = await service.updateOrderStatus(req.auth.user.id, orderId, status, req.body?.rejectReason, driverInfo);
         return order ? res.json({ success: true, order }) : res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
       } catch (error) {
-        if (['INVALID_ORDER_STATUS', 'INVALID_ORDER_TRANSITION', 'REJECT_REASON_REQUIRED', 'INSUFFICIENT_STOCK', 'DEPOSIT_REQUIRED', 'DEPOSIT_UNRESOLVED'].includes(error.code)) return res.status(400).json({ success: false, message: error.message });
+        if (['INVALID_ORDER_STATUS', 'INVALID_ORDER_TRANSITION', 'REJECT_REASON_REQUIRED', 'INSUFFICIENT_STOCK', 'DEPOSIT_REQUIRED', 'DEPOSIT_UNRESOLVED'].includes(error.code) || error.status === 400) return res.status(400).json({ success: false, message: error.message });
+        return next(error);
+      }
+    },
+    async updateDriverInfo(req, res, next) {
+      const orderId = idFrom(req.params.orderId);
+      if (!orderId) return res.status(400).json({ success: false, message: 'Mã đơn hàng không hợp lệ.' });
+      try {
+        const order = await service.updateDriverInfo(req.auth.user.id, orderId, req.body);
+        return order ? res.json({ success: true, order }) : res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+      } catch (error) {
+        if (error.status === 400) return res.status(400).json({ success: false, message: error.message });
         return next(error);
       }
     },

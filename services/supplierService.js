@@ -1,6 +1,7 @@
 const { audit, problem, httpsDocument, verificationComplete } = require('./platformPolicy');
 const { moderateContent } = require('./contentModerationService');
 const { walletService } = require('./walletService');
+const deliveryService = require('./deliveryService');
 const ORDER_STATUSES = Object.freeze([
   'PENDING', 'APPROVED', 'REJECTED', 'PREPARING', 'SHIPPING', 'ISSUE_HANDLING', 'DELIVERED',
 ]);
@@ -91,6 +92,7 @@ function serializeOrder(order) {
     depositRefundReference: order.depositRefundReference || null,
     note: order.note,
     rejectReason: order.rejectReason,
+    driverInfo: deliveryService.getDriverInfo(order.id),
     complaint: order.complaint ? { id: order.complaint.id, reason: order.complaint.reason, description: order.complaint.description, imageUrl: order.complaint.imageUrl || null, status: order.complaint.status, response: order.complaint.response } : null,
     createdAt: order.createdAt,
     updatedAt: order.updatedAt,
@@ -394,7 +396,7 @@ function createSupplierService(prisma) {
     return { orders: orders.slice(0, 20).map(serializeOrder), total, page, hasMore: orders.length > 20 };
   }
 
-  async function updateOrderStatus(userId, orderId, status, rejectReason) {
+  async function updateOrderStatus(userId, orderId, status, rejectReason, driverInfo) {
     if (!ORDER_STATUSES.includes(status)) {
       const error = new Error('Trạng thái đơn hàng không hợp lệ.');
       error.code = 'INVALID_ORDER_STATUS';
@@ -409,6 +411,9 @@ function createSupplierService(prisma) {
       const error = new Error(`Không thể chuyển đơn từ ${STATUS_LABELS[order.status]} sang ${STATUS_LABELS[status]}.`);
       error.code = 'INVALID_ORDER_TRANSITION';
       throw error;
+    }
+    if (driverInfo) {
+      deliveryService.saveDriverInfo(order.id, driverInfo);
     }
     const normalizedRejectReason = typeof rejectReason === 'string' ? rejectReason.trim() : '';
     if (status === 'APPROVED' && numberValue(order.depositAmount || 0) > 0 && order.depositStatus !== 'PAID') {
@@ -482,6 +487,17 @@ function createSupplierService(prisma) {
     return serializeOrder(await prisma.wholesaleOrder.findUnique({
       where: { id: order.id }, include: { buyer: true, items: true, complaint: true },
     }));
+  }
+
+  async function updateDriverInfo(userId, orderId, driverInfo) {
+    const profile = await requireProfile(userId);
+    const order = await prisma.wholesaleOrder.findFirst({
+      where: { id: orderId, supplierId: profile.id },
+      include: { buyer: true, items: true, complaint: true },
+    });
+    if (!order) return null;
+    deliveryService.saveDriverInfo(order.id, driverInfo);
+    return serializeOrder(order);
   }
 
   async function updateDeposit(userId, orderId, action, body = {}) {
@@ -593,7 +609,7 @@ function createSupplierService(prisma) {
 
   return {
     getProfile, upsertProfile, submitVerification, listProducts, createProduct, updateProduct, deactivateProduct,
-    listOrders, updateOrderStatus, updateDeposit, dashboard,
+    listOrders, updateOrderStatus, updateDriverInfo, updateDeposit, dashboard,
   };
 }
 

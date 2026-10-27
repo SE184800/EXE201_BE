@@ -46,8 +46,8 @@ function createOrderRoutes(prisma, requireAuth) {
       return saved;
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
-  router.use(requireAuth, requireRole('STORE_OWNER'));
-  router.get('/', async (req, res, next) => {
+  router.use(requireAuth);
+  router.get('/', requireRole('STORE_OWNER'), async (req, res, next) => {
     try {
       const { page, status } = orderQuery(req.query);
       const where = { buyerId: req.auth.user.id, ...(status ? { status } : {}) };
@@ -58,7 +58,7 @@ function createOrderRoutes(prisma, requireAuth) {
       res.json({ orders: orders.slice(0, 20).map(serialize), total, page, hasMore: orders.length > 20 });
     } catch (error) { next(error); }
   });
-  router.post('/', async (req, res, next) => {
+  router.post('/', requireRole('STORE_OWNER'), async (req, res, next) => {
     const body = req.body || {};
     const recipientName = typeof body.recipientName === 'string' ? body.recipientName.trim() : '';
     const recipientPhone = normalizePhone(body.recipientPhone);
@@ -151,7 +151,7 @@ function createOrderRoutes(prisma, requireAuth) {
       next(error);
     }
   });
-  router.post('/:id/deposit', async (req, res, next) => {
+  router.post('/:id/deposit', requireRole('STORE_OWNER'), async (req, res, next) => {
     const id = Number(req.params.id);
     const reference = typeof req.body?.reference === 'string' ? req.body.reference.trim() : '';
     if (!Number.isInteger(id) || id < 1 || id > 2147483647) return res.status(400).json({ message: 'Mã đơn hàng không hợp lệ.' });
@@ -161,7 +161,7 @@ function createOrderRoutes(prisma, requireAuth) {
       res.json({ order: serialize(order) });
     } catch (error) { next(error); }
   });
-  router.post('/:id/deposit/wallet', async (req, res, next) => {
+  router.post('/:id/deposit/wallet', requireRole('STORE_OWNER'), async (req, res, next) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id < 1 || id > 2147483647) return res.status(400).json({ message: 'Mã đơn hàng không hợp lệ.' });
     try {
@@ -190,7 +190,7 @@ function createOrderRoutes(prisma, requireAuth) {
       res.json({ order: serialize(updated) });
     } catch (error) { next(error); }
   });
-  router.post('/:id/deposit/sandbox', async (req, res, next) => {
+  router.post('/:id/deposit/sandbox', requireRole('STORE_OWNER'), async (req, res, next) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id < 1 || id > 2147483647) return res.status(400).json({ message: 'Mã đơn hàng không hợp lệ.' });
     try {
@@ -210,8 +210,8 @@ function createOrderRoutes(prisma, requireAuth) {
       const buyerId = req.auth.user.id;
       const current = await prisma.wholesaleOrder.findFirst({ where: { id, buyerId }, include });
       if (!current) throw problem(404, 'Không tìm thấy đơn hàng.');
-      if (!['SHIPPING', 'ISSUE_HANDLING'].includes(current.status)) {
-        throw problem(400, 'Chỉ có thể hẹn dời lịch khi đơn hàng đang trên đường vận chuyển hoặc tiếp nhận xử lý.');
+      if (!['PREPARING', 'SHIPPING', 'ISSUE_HANDLING'].includes(current.status)) {
+        throw problem(400, 'Chỉ có thể hẹn dời lịch khi đơn hàng đang chuẩn bị, trên đường vận chuyển hoặc tiếp nhận xử lý.');
       }
       const count = (current.note?.match(/\[YÊU CẦU DỜI LỊCH GIAO/g) || []).length;
       if (count >= 2) {
