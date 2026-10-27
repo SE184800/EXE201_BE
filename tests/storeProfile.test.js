@@ -58,3 +58,39 @@ test('storeService: get and save store profile', () => {
   assert.equal(fetched.storeName, 'Tạp Hóa Thành Công');
   assert.equal(fetched.storeAddress, '456 Lê Văn Sỹ, Phường 14, Quận 3, TP. Hồ Chí Minh');
 });
+
+test('storeService: prevent duplicate storePhone and storeAddress across stores', () => {
+  const anotherUser = 8888;
+
+  // Trùng phone với user 1 ('0908123456')
+  assert.throws(
+    () => {
+      saveStoreProfile(anotherUser, {
+        storeName: 'Tạp Hóa ABC',
+        storeAddress: '999 Hai Bà Trưng, Phường Tân Định, Quận 1, TP. Hồ Chí Minh',
+        storePhone: '0908123456',
+      });
+    },
+    (err) => {
+      assert.ok(err.errors?.storePhone);
+      assert.match(err.errors.storePhone, /đã được sử dụng bởi một tiệm tạp hóa khác/);
+      return true;
+    }
+  );
+
+  // Trùng address với user 1
+  assert.throws(
+    () => {
+      saveStoreProfile(anotherUser, {
+        storeName: 'Tạp Hóa ABC',
+        storeAddress: '123 Đường Số 4, Phường Bình Trị Đông B, Quận Bình Tân, TP. Hồ Chí Minh',
+        storePhone: '0933999888',
+      });
+    },
+    (err) => {
+      assert.ok(err.errors?.storeAddress);
+      assert.match(err.errors.storeAddress, /đã được đăng ký bởi một tiệm tạp hóa khác/);
+      return true;
+    }
+  );
+});

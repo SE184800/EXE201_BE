@@ -1,6 +1,5 @@
 const USERNAME_PATTERN = /^[a-zA-Z0-9._-]{3,50}$/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-const NAME_PATTERN = /^[\p{L}\p{M} .'-]{2,100}$/u;
 
 function normalizePhone(value) {
   const compact = typeof value === 'string' ? value.replace(/[\s().-]/g, '') : '';
@@ -17,6 +16,41 @@ function todayInVietnam(now = new Date()) {
   return `${value('year')}-${value('month')}-${value('day')}`;
 }
 
+function getBirthDateRange(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en', {
+    timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(now);
+  const getPart = (type) => parts.find((part) => part.type === type).value;
+  const currentYear = Number(getPart('year'));
+  const currentMonth = getPart('month');
+  const currentDay = getPart('day');
+
+  const maxYear = currentYear - 18;
+  const minYear = currentYear - 100;
+
+  function safeDate(year, month, day) {
+    if (month === '02' && day === '29') {
+      const isLeap = (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
+      if (!isLeap) day = '28';
+    }
+    return `${year}-${month}-${day}`;
+  }
+
+  const maxDate = safeDate(maxYear, currentMonth, currentDay);
+  const minDate = safeDate(minYear, currentMonth, currentDay);
+  const [maxY, maxM, maxD] = maxDate.split('-');
+  const [minY, minM, minD] = minDate.split('-');
+
+  return {
+    minDate,
+    maxDate,
+    minDateDisplay: `${minD}/${minM}/${minY}`,
+    maxDateDisplay: `${maxD}/${maxM}/${maxY}`,
+    minYear,
+    maxYear,
+  };
+}
+
 // Keep rules and messages aligned with FE src/validation/registration.ts.
 function validateRegistrationInput(body, now = new Date()) {
   const input = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
@@ -31,13 +65,15 @@ function validateRegistrationInput(body, now = new Date()) {
   const confirmPassword = string('confirmPassword');
   const errors = {};
 
-  const nameLetters = name.replace(/[\s.'-]/gu, '');
-  if (!NAME_PATTERN.test(name) || !/\p{L}/u.test(name) || nameLetters.length < 2)
-    errors.name = 'Họ tên cần 2–100 ký tự (không tính khoảng trắng), gồm chữ cái, dấu chấm, nháy hoặc gạch ngang.';
+  // 1. Họ tên cho phép ký tự đặc biệt, độ dài 2-100 ký tự (không tính khoảng trắng)
+  const nameWithoutSpaces = name.replace(/\s/g, '');
+  if (nameWithoutSpaces.length < 2 || name.length > 100)
+    errors.name = 'Họ tên cần 2–100 ký tự (không tính khoảng trắng).';
 
+  // 2. Tên đăng nhập dùng 3-50 ký tự không tính khoảng trắng
   const usernameChars = username.replace(/\s/g, '');
   if (!USERNAME_PATTERN.test(username) || usernameChars.length < 3 || usernameChars.length > 50 || /\s/.test(username))
-    errors.username = 'Username dùng 3–50 ký tự không tính khoảng trắng, gồm chữ không dấu, số, chấm, gạch dưới hoặc gạch ngang.';
+    errors.username = 'Tên đăng nhập cần 3–50 ký tự (không tính khoảng trắng).';
 
   const localPart = email.split('@')[0] || '';
   if (!EMAIL_PATTERN.test(email) || email.length > 255 || !/^[\x21-\x7E]+$/.test(email) || /\s/.test(email) || localPart.replace(/\s/g, '').length < 2)
@@ -49,11 +85,13 @@ function validateRegistrationInput(body, now = new Date()) {
   if (!['STORE_OWNER', 'SUPPLIER'].includes(role))
     errors.role = 'Chọn vai trò Chủ tạp hóa hoặc Chủ vựa.';
 
+  // 3. Ngày tháng năm sinh trong khoảng 18 đến 100 tuổi tính từ thời điểm hiện tại
+  const { minDate, maxDate, minDateDisplay, maxDateDisplay } = getBirthDateRange(now);
   const birth = new Date(`${dateOfBirth}T00:00:00.000Z`);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateOfBirth) || Number.isNaN(birth.valueOf()) ||
-      dateOfBirth < '1900-01-01' || dateOfBirth > todayInVietnam(now) ||
+      dateOfBirth < minDate || dateOfBirth > maxDate ||
       birth.toISOString().slice(0, 10) !== dateOfBirth)
-    errors.dateOfBirth = 'Chọn ngày sinh có thật, từ 01/01/1900 đến hôm nay.';
+    errors.dateOfBirth = `Vui lòng chọn ngày sinh trong khoảng ${minDateDisplay} đến ${maxDateDisplay} (từ 18 đến 100 tuổi).`;
 
   const passwordWithoutSpaces = password.replace(/\s/g, '');
   if (new TextEncoder().encode(password).length > 72)
@@ -74,4 +112,4 @@ function validateRegistrationInput(body, now = new Date()) {
   return { data: { name, username, email, phone, role, dateOfBirth: birth, password } };
 }
 
-module.exports = { validateRegistrationInput, normalizePhone, todayInVietnam };
+module.exports = { validateRegistrationInput, normalizePhone, todayInVietnam, getBirthDateRange };

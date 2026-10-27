@@ -1,6 +1,6 @@
 const express = require('express');
 const { audit } = require('../services/platformPolicy');
-const { normalizePhone, todayInVietnam } = require('../services/registrationValidation');
+const { normalizePhone, todayInVietnam, getBirthDateRange } = require('../services/registrationValidation');
 const { getStoreProfile, saveStoreProfile } = require('../services/storeService');
 
 const select = {
@@ -16,7 +16,7 @@ const select = {
 
 const serialize = (user) => {
   const roleCode = user.role?.code || user.role;
-  const storeProfile = (roleCode === 'STORE_OWNER' || !roleCode) ? getStoreProfile(user.id) : null;
+  const storeProfile = (roleCode === 'STORE_OWNER' || !roleCode) ? getStoreProfile(user.id, user.phone) : null;
   return {
     ...user,
     role: roleCode,
@@ -30,8 +30,9 @@ function validateProfile(body) {
   const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
   const phone = normalizePhone(body.phone);
   const birth = typeof body.dateOfBirth === 'string' ? body.dateOfBirth : '';
-  if (!/^[\p{L}\p{M} .'-]{2,100}$/u.test(name) || !/\p{L}/u.test(name)) {
-    return { message: 'Họ và tên không hợp lệ. Vui lòng chỉ nhập chữ và ít nhất là 2 chữ cái và nhiều nhất là 100 chữ cái' };
+  const nameWithoutSpaces = name.replace(/\s/g, '');
+  if (nameWithoutSpaces.length < 2 || name.length > 100) {
+    return { message: 'Họ tên cần 2–100 ký tự (không tính khoảng trắng).' };
   }
   if (body.email !== null && typeof body.email !== 'string') return { message: 'Email không hợp lệ.' };
   if (body.phone !== null && typeof body.phone !== 'string') return { message: 'Số điện thoại không hợp lệ.' };
@@ -42,9 +43,10 @@ function validateProfile(body) {
   if (phone && !/^0\d{9}$/.test(phone)) return { message: 'Số điện thoại cần 10 số bắt đầu bằng 0 hoặc dùng +84.' };
   let dateOfBirth = null;
   if (birth) {
+    const { minDate, maxDate, minDateDisplay, maxDateDisplay } = getBirthDateRange();
     dateOfBirth = new Date(`${birth}T00:00:00.000Z`);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(birth) || Number.isNaN(dateOfBirth.valueOf()) || birth < '1900-01-01' || birth > todayInVietnam() || dateOfBirth.toISOString().slice(0, 10) !== birth) {
-      return { message: 'Ngày sinh phải có thật, từ 01/01/1900 đến hôm nay.' };
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(birth) || Number.isNaN(dateOfBirth.valueOf()) || birth < minDate || birth > maxDate || dateOfBirth.toISOString().slice(0, 10) !== birth) {
+      return { message: `Vui lòng chọn ngày sinh trong khoảng ${minDateDisplay} đến ${maxDateDisplay} (từ 18 đến 100 tuổi).` };
     }
   }
   return { data: { name, email: email || null, phone: phone || null, dateOfBirth } };
@@ -56,7 +58,8 @@ function createProfileRoutes(prisma, requireAuth) {
 
   // Dedicated store profile endpoints
   router.get('/store', (req, res) => {
-    const storeProfile = getStoreProfile(req.auth.user.id);
+    const userPhone = req.auth.user?.phone || '';
+    const storeProfile = getStoreProfile(req.auth.user.id, userPhone);
     res.json({ storeProfile });
   });
 
@@ -95,7 +98,13 @@ function createProfileRoutes(prisma, requireAuth) {
           storeName: req.body.storeName,
           storeAddress: req.body.storeAddress,
           storePhone: req.body.storePhone || validation.data.phone,
+          taxCode: req.body.taxCode,
           businessType: req.body.businessType,
+          locationType: req.body.locationType,
+          alleyDetail: req.body.alleyDetail,
+          latitude: req.body.latitude,
+          longitude: req.body.longitude,
+          isAddressVerified: req.body.isAddressVerified,
         });
       }
 

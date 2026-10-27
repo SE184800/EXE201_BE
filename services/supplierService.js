@@ -141,12 +141,20 @@ function validateProfileInput(body = {}) {
   if (businessName.length < 2 || businessName.length > 150) errors.businessName = 'Tên gian hàng cần từ 2 đến 150 ký tự.';
   if (warehouseAddress.length < 5 || warehouseAddress.length > 255) errors.warehouseAddress = 'Địa chỉ kho cần từ 5 đến 255 ký tự.';
   if (!hasTwoDecimals(deliveryRadiusKm) || deliveryRadiusKm < 0.01 || deliveryRadiusKm > 500) errors.deliveryRadiusKm = 'Bán kính giao hàng từ 0,01 đến 500 km, tối đa 2 chữ số thập phân.';
+  let phone = undefined;
+  if (body.phone !== undefined) {
+    phone = typeof body.phone === 'string' ? body.phone.trim().replace(/\s+/g, '') : '';
+    if (phone && !/^0\d{9}$/.test(phone)) {
+      errors.phone = 'Số điện thoại cần 10 số bắt đầu bằng 0.';
+    }
+  }
   return Object.keys(errors).length ? { errors } : {
     data: {
       businessName,
       warehouseAddress,
       deliveryRadiusKm,
       ...extras,
+      ...(phone !== undefined ? { phone } : {}),
       ...(body.deliveryFee === undefined ? {} : { deliveryFee: body.deliveryFee }),
       ...(body.bankName === undefined && body.bankAccountNumber === undefined && body.bankAccountHolder === undefined
         ? {}
@@ -213,16 +221,28 @@ function validateProductInput(body = {}) {
 
 function createSupplierService(prisma) {
   async function getProfile(userId) {
-    return prisma.supplierProfile.findUnique({ where: { userId } });
+    return prisma.supplierProfile.findUnique({
+      where: { userId },
+      include: { user: { select: { phone: true, name: true, email: true } } },
+    });
   }
 
   async function upsertProfile(userId, input) {
+    const { phone, ...profileData } = input;
     return prisma.$transaction(async tx => {
+      if (phone) {
+        await tx.user.update({ where: { id: userId }, data: { phone } });
+      }
       const old = await tx.supplierProfile.findUnique({ where: { userId } });
       const identityFields = ['businessName', 'warehouseAddress', 'region', 'taxCode', 'legalRepresentative', 'verificationDocumentUrl'];
-      const changedIdentity = old && identityFields.some(key => input[key] !== undefined && input[key] !== old[key]);
-      const profile = await tx.supplierProfile.upsert({ where: { userId }, create: { userId, ...input }, update: { ...input, ...(changedIdentity ? { verificationStatus: 'DRAFT', verificationNote: null, reviewedAt: null, reviewedBy: null, submittedAt: null, verificationVersion: { increment: 1 } } : {}) } });
-      await audit(tx, userId, 'SUPPLIER_PROFILE_UPDATED', 'SUPPLIER', profile.id, { changedFields: Object.keys(input), verificationReset: Boolean(changedIdentity), businessName: profile.businessName });
+      const changedIdentity = old && identityFields.some(key => profileData[key] !== undefined && profileData[key] !== old[key]);
+      const profile = await tx.supplierProfile.upsert({
+        where: { userId },
+        create: { userId, ...profileData },
+        update: { ...profileData, ...(changedIdentity ? { verificationStatus: 'DRAFT', verificationNote: null, reviewedAt: null, reviewedBy: null, submittedAt: null, verificationVersion: { increment: 1 } } : {}) },
+        include: { user: { select: { phone: true, name: true, email: true } } },
+      });
+      await audit(tx, userId, 'SUPPLIER_PROFILE_UPDATED', 'SUPPLIER', profile.id, { changedFields: Object.keys(profileData), verificationReset: Boolean(changedIdentity), businessName: profile.businessName });
       return profile;
     }, { isolationLevel: 'Serializable' });
   }
@@ -587,6 +607,7 @@ function serializeProfile(profile) {
     id, businessName, warehouseAddress, region, taxCode, legalRepresentative,
     verificationDocumentUrl, verificationStatus, verificationNote, verificationVersion,
     submittedAt, reviewedAt, bankName, bankAccountNumber, bankAccountHolder,
+    phone: profile.user?.phone || profile.phone || null,
     deliveryRadiusKm: numberValue(profile.deliveryRadiusKm),
     deliveryFee: numberValue(profile.deliveryFee),
   };

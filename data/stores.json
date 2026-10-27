@@ -10,15 +10,37 @@
       "createdAt": "2026-10-26T13:10:03.557Z",
       "updatedAt": "2026-10-26T13:10:03.558Z"
     },
+    "1218": {
+      "userId": 1218,
+      "storeName": "Demo",
+      "storeAddress": "221 Đường Trịnh Đình Trọng, Tân Phú, TP.Hồ Chí Minh",
+      "storePhone": "0379864870",
+      "taxCode": "014314814108",
+      "businessType": "Tạp hóa tổng hợp",
+      "locationType": "ALLEY",
+      "alleyDetail": "Hẻm xe ba gác (≥ 3m)",
+      "latitude": 10.7755828,
+      "longitude": 106.6463709,
+      "isAddressVerified": true,
+      "isConfigured": true,
+      "createdAt": "2026-10-27T14:25:58.593Z",
+      "updatedAt": "2026-10-27T14:27:46.802Z"
+    },
     "9999": {
       "userId": 9999,
       "storeName": "Tạp Hóa Thành Công",
       "storeAddress": "456 Lê Văn Sỹ, Phường 14, Quận 3, TP. Hồ Chí Minh",
       "storePhone": "0912345678",
+      "taxCode": null,
       "businessType": "Tạp hóa tổng hợp",
+      "locationType": "STREET_FRONT",
+      "alleyDetail": null,
+      "latitude": null,
+      "longitude": null,
+      "isAddressVerified": false,
       "isConfigured": true,
       "createdAt": "2026-10-26T13:10:03.562Z",
-      "updatedAt": "2026-10-26T13:13:22.660Z"
+      "updatedAt": "2026-10-27T14:40:20.237Z"
     }
   }
 }

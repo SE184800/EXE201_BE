@@ -300,7 +300,18 @@ function createAdminService(prisma, config) {
   async function listModerationQueue(query = {}) {
     const { page, skip, take } = pagination(query);
     const products = await prisma.supplierProduct.findMany({
-      include: { supplier: { select: { businessName: true, user: { select: { name: true, phone: true } } } } },
+      include: {
+        supplier: {
+          select: {
+            businessName: true,
+            warehouseAddress: true,
+            deliveryRadiusKm: true,
+            verificationStatus: true,
+            taxCode: true,
+            user: { select: { name: true, phone: true, email: true, username: true } }
+          }
+        }
+      },
       orderBy: { createdAt: 'desc' },
     });
 
