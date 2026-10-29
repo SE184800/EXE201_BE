@@ -160,7 +160,9 @@ function validateStoreInput(body = {}, currentUserId = null) {
     errors.storePhone = 'Số điện thoại cần 10 số bắt đầu bằng 0.';
   }
 
-  if (taxCode && !/^[A-Za-z0-9-]{10,14}$/.test(taxCode)) {
+  if (!taxCode) {
+    errors.taxCode = 'Vui lòng cung cấp mã số thuế của cơ sở kinh doanh.';
+  } else if (!/^[A-Za-z0-9-]{10,14}$/.test(taxCode)) {
     errors.taxCode = 'Mã số thuế gồm 10–14 ký tự (chữ, số hoặc gạch ngang).';
   }
 

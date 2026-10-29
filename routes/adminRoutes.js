@@ -7,6 +7,7 @@ function createAdminRoutes(prisma, requireAuth, config) {
   const run = handler => async (req, res, next) => { try { await handler(req, res); } catch (error) { next(error); } };
   router.get('/users', run(async (req, res) => res.json(await service.listUsers(req.query))));
   router.patch('/users/:id/status', run(async (req, res) => res.json({ user: await service.changeAccount(req.auth.user.id, idParam(req.params.id), req.body || {}) })));
+  router.delete('/users/:id', run(async (req, res) => res.json(await service.deleteUser(req.auth.user.id, idParam(req.params.id)))));
   router.post('/users/:id/subscription/unlock', run(async (req, res) => res.json({ user: await service.unlockSubscription(req.auth.user.id, idParam(req.params.id), req.body || {}) })));
   router.get('/verifications', run(async (req, res) => res.json(await service.verifications(req.query))));
   router.patch('/verifications/:id', run(async (req, res) => res.json(await service.review(req.auth.user.id, idParam(req.params.id), req.body || {}))));

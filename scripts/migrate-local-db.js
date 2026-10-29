@@ -2,7 +2,7 @@ require('dotenv').config();
 const prisma = require('../config/db');
 
 async function migrateLocalDb() {
-  console.log('🔄 Đang bổ sung các cột mới vào SQL Server (DB Local)...');
+  console.log('[MIGRATE] Đang bổ sung các cột mới vào SQL Server (DB Local)...');
 
   try {
     // Bổ sung các cột thương lượng giá sỉ cho bảng wholesale_orders
@@ -15,9 +15,9 @@ async function migrateLocalDb() {
           ALTER TABLE [dbo].[wholesale_orders] ADD [dealResponse] NVARCHAR(500) NULL;
       END
     `);
-    console.log('✅ Đã bổ sung các cột dealStatus, proposedTotal, agreedTotal, dealResponse vào wholesale_orders.');
+    console.log('[OK] Đã bổ sung các cột dealStatus, proposedTotal, agreedTotal, dealResponse vào wholesale_orders.');
   } catch (e) {
-    console.log('⚠️ Đã kiểm tra cột wholesale_orders:', e.message);
+    console.log('[WARN] Đã kiểm tra cột wholesale_orders:', e.message);
   }
 
   try {
@@ -28,9 +28,9 @@ async function migrateLocalDb() {
           ALTER TABLE [dbo].[stock_movements] ADD [unitSalePrice] INT NULL;
       END
     `);
-    console.log('✅ Đã bổ sung cột unitSalePrice vào stock_movements.');
+    console.log('[OK] Đã bổ sung cột unitSalePrice vào stock_movements.');
   } catch (e) {
-    console.log('⚠️ Đã kiểm tra cột stock_movements:', e.message);
+    console.log('[WARN] Đã kiểm tra cột stock_movements:', e.message);
   }
 
   try {
@@ -54,9 +54,9 @@ async function migrateLocalDb() {
           );
       END
     `);
-    console.log('✅ Đã tạo bảng order_complaints trên CSDL.');
+    console.log('[OK] Đã tạo bảng order_complaints trên CSDL.');
   } catch (e) {
-    console.log('⚠️ Đã kiểm tra bảng order_complaints:', e.message);
+    console.log('[WARN] Đã kiểm tra bảng order_complaints:', e.message);
   }
 
   try {
@@ -75,12 +75,12 @@ async function migrateLocalDb() {
           );
       END
     `);
-    console.log('✅ Đã tạo bảng inventory_lots trên CSDL.');
+    console.log('[OK] Đã tạo bảng inventory_lots trên CSDL.');
   } catch (e) {
-    console.log('⚠️ Đã kiểm tra bảng inventory_lots:', e.message);
+    console.log('[WARN] Đã kiểm tra bảng inventory_lots:', e.message);
   }
 
-  console.log('🎉 Hoàn tất cập nhật CSDL local khớp 100% với schema.prisma!');
+  console.log('[SUCCESS] Hoàn tất cập nhật CSDL local khớp 100% với schema.prisma!');
 }
 
 migrateLocalDb()

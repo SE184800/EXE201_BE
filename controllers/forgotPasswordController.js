@@ -199,6 +199,22 @@ function createForgotPasswordController(config = {}) {
         });
       }
 
+      // Check whether new password matches old password
+      const currentUser = await prisma.user.findUnique({
+        where: { id: userPayload.userId },
+        select: { id: true, passwordHash: true },
+      });
+
+      if (currentUser && currentUser.passwordHash) {
+        const isSameAsOld = await bcrypt.compare(pass, currentUser.passwordHash);
+        if (isSameAsOld) {
+          return res.status(400).json({
+            success: false,
+            message: 'Mật khẩu mới không được trùng với mật khẩu cũ. Vui lòng đặt mật khẩu khác.',
+          });
+        }
+      }
+
       const passwordHash = await bcrypt.hash(pass, 12);
 
       await prisma.user.update({

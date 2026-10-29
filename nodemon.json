@@ -1,0 +1,21 @@
+{
+  "watch": [
+    "routes",
+    "services",
+    "controllers",
+    "middlewares",
+    "config",
+    "app.js",
+    "server.js"
+  ],
+  "ignore": [
+    "data/*",
+    "public/*",
+    "node_modules/*",
+    ".local-mail/*",
+    "tests/*",
+    "*.json",
+    "*.tmp.*"
+  ],
+  "ext": "js,mjs,cjs"
+}

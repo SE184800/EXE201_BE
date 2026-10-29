@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const prisma = require('../config/db');
 
 async function main() {
-  console.log('🚀 Đang khởi tạo dữ liệu mẫu đầy đủ cho 3 Actor (Store Owner, Supplier, Admin)...');
+  console.log('[INIT] Đang khởi tạo dữ liệu mẫu đầy đủ cho 3 Actor (Store Owner, Supplier, Admin)...');
 
   const rawPassword = process.env.SEED_PASSWORD && process.env.SEED_PASSWORD.length >= 12
     ? process.env.SEED_PASSWORD
@@ -68,7 +68,7 @@ async function main() {
     },
   });
 
-  console.log(`✅ Đã sẵn sàng 3 tài khoản (Mật khẩu: ${rawPassword}):`);
+  console.log(`[OK] Đã sẵn sàng 3 tài khoản (Mật khẩu: ${rawPassword}):`);
   console.log(`   - Store Owner: taphoa`);
   console.log(`   - Supplier:    chuvua`);
   console.log(`   - Admin:       admin`);
@@ -142,7 +142,7 @@ async function main() {
       });
     }
   }
-  console.log(`✅ Đã tạo ${Object.keys(supplierProducts).length} sản phẩm sỉ cho Chủ vựa`);
+  console.log(`[OK] Đã tạo ${Object.keys(supplierProducts).length} sản phẩm sỉ cho Chủ vựa`);
 
   // 5. Kho Hàng Của Chủ Tạp Hóa (Store Owner Inventory & Lots & Sales History)
   const storeItemsData = [
@@ -236,7 +236,7 @@ async function main() {
       }
     }
   }
-  console.log(`✅ Đã tạo kho hàng & Lịch sử bán hàng 14 ngày cho Chủ Tạp Hóa (phục vụ AI Dự báo)`);
+  console.log(`[OK] Đã tạo kho hàng & Lịch sử bán hàng 14 ngày cho Chủ Tạp Hóa (phục vụ AI Dự báo)`);
 
   // 6. Kế Hoạch Nhập Hàng Gợi Ý Bởi AI (Restock Plan)
   await prisma.restockPlan.deleteMany({ where: { ownerId: storeOwner.id } });
@@ -276,7 +276,7 @@ async function main() {
       },
     },
   });
-  console.log(`✅ Đã tạo Kế hoạch nhập hàng mẫu (Restock Plan ID: ${restockPlan.id})`);
+  console.log(`[OK] Đã tạo Kế hoạch nhập hàng mẫu (Restock Plan ID: ${restockPlan.id})`);
 
   // 7. Đơn Đặt Hàng Sỉ (Wholesale Orders between Store Owner & Supplier)
   try {
@@ -371,9 +371,9 @@ async function main() {
       },
     });
 
-    console.log(`✅ Đã tạo 3 Đơn hàng sỉ mẫu (PENDING, SHIPPING, DELIVERED)`);
+    console.log(`[OK] Đã tạo 3 Đơn hàng sỉ mẫu (PENDING, SHIPPING, DELIVERED)`);
   } catch (e) {
-    console.log(`⚠️ Đã khởi tạo đơn hàng sỉ ở chế độ tương thích.`);
+    console.log(`[WARN] Đã khởi tạo đơn hàng sỉ ở chế độ tương thích.`);
   }
 
   // 8. Cấu hình Nền tảng Admin & Lịch sử Nhật ký (Platform Settings & Audit Logs)
@@ -402,23 +402,23 @@ async function main() {
     ],
   });
 
-  console.log(`✅ Đã cập nhật Cấu hình Admin (Tỷ lệ chiết khấu sàn: 2.5%) & Nhật ký Audit Logs`);
+  console.log(`[OK] Đã cập nhật Cấu hình Admin (Tỷ lệ chiết khấu sàn: 2.5%) & Nhật ký Audit Logs`);
 
-  console.log('\n🎉 ========================================================');
-  console.log('🎉 TẠO DỮ LIỆU MẪU DEMO THÀNH CÔNG CHO 3 ACTOR!');
-  console.log('🎉 --------------------------------------------------------');
-  console.log('👉 1. Store Owner (Chủ Tạp Hóa): username "taphoa", password "' + rawPassword + '"');
+  console.log('\n========================================================');
+  console.log('TẠO DỮ LIỆU MẪU DEMO THÀNH CÔNG CHO 3 ACTOR!');
+  console.log('--------------------------------------------------------');
+  console.log('1. Store Owner (Chủ Tạp Hóa): username "taphoa", password "' + rawPassword + '"');
   console.log('     -> Đã có kho hàng, lịch sử bán 14 ngày, đề xuất AI, đơn sỉ.');
-  console.log('👉 2. Supplier (Chủ Vựa Sỉ):      username "chuvua", password "' + rawPassword + '"');
+  console.log('2. Supplier (Chủ Vựa Sỉ):      username "chuvua", password "' + rawPassword + '"');
   console.log('     -> Đã có hồ sơ gian hàng đã duyệt, 7 sản phẩm sỉ, đơn hàng chờ giao.');
-  console.log('👉 3. Admin (Quản Trị Viên):     username "admin",  password "' + rawPassword + '"');
+  console.log('3. Admin (Quản Trị Viên):     username "admin",  password "' + rawPassword + '"');
   console.log('     -> Đã có cấu hình chiết khấu 2.5%, thống kê giao dịch & nhật ký audit.');
   console.log('========================================================\n');
 }
 
 main()
   .catch((e) => {
-    console.error('❌ Lỗi tạo dữ liệu mẫu:', e);
+    console.error('[ERROR] Lỗi tạo dữ liệu mẫu:', e);
     process.exit(1);
   })
   .finally(async () => {

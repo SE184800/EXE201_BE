@@ -2,7 +2,7 @@ require('dotenv').config();
 const prisma = require('../config/db');
 
 async function syncAllDb() {
-  console.log('🔄 Đang kiểm tra và đồng bộ toàn bộ 18 Bảng & Cột lên SQL Server...');
+  console.log('[SYNC] Đang kiểm tra và đồng bộ toàn bộ 18 Bảng & Cột lên SQL Server...');
 
   const sqlStatements = [
     // 1. roles
@@ -347,11 +347,11 @@ async function syncAllDb() {
     try {
       await prisma.$executeRawUnsafe(statement);
     } catch (err) {
-      console.log('⚠️ Bảng/Cột đã sẵn sàng:', err.message);
+      console.log('[WARN] Bảng/Cột đã sẵn sàng:', err.message);
     }
   }
 
-  console.log('🎉 THÀNH CÔNG: ĐÃ ĐỒNG BỘ TOÀN BỘ 18 BẢNG VÀ TẤT CẢ CỘT TRÊN CSDL!');
+  console.log('[SUCCESS] THÀNH CÔNG: ĐÃ ĐỒNG BỘ TOÀN BỘ 18 BẢNG VÀ TẤT CẢ CỘT TRÊN CSDL!');
 }
 
 syncAllDb()

@@ -6,6 +6,8 @@ const { normalizePhone } = require('../services/registrationValidation');
 const { serializeOrder } = require('../services/supplierService');
 const systemConfigService = require('../services/systemConfigService');
 const { activeAccountWhere, accountAvailable, audit } = require('../services/platformPolicy');
+const consignmentService = require('../services/consignmentService');
+const inventorySupplierService = require('../services/inventorySupplierService');
 
 const DAY = 86400000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -24,6 +26,7 @@ function quoteStatus(quote) {
 }
 
 function serializeQuote(quote) {
+  const consignment = consignmentService.getQuoteConsignment(quote.id);
   return {
     id: quote.id,
     title: quote.title,
@@ -41,6 +44,11 @@ function serializeQuote(quote) {
     version: quote.version,
     createdAt: quote.createdAt,
     updatedAt: quote.updatedAt,
+    isConsignment: Boolean(consignment?.isConsignment),
+    settlementPrice: consignment?.settlementPrice || 0,
+    autoRestock: consignment?.autoRestock !== false,
+    autoExchangeExpiry: consignment?.autoExchangeExpiry !== false,
+    termsNote: consignment?.termsNote || null,
     supplier: quote.supplier ? {
       id: quote.supplier.id,
       businessName: quote.supplier.businessName,
@@ -122,6 +130,8 @@ function createSupplierQuoteRoutes(prisma, requireAuth) {
     if (typeof depositRate === 'number' && depositRate > maxAllowedDeposit) {
       return res.status(400).json({ message: `Tỷ lệ ký quỹ (${depositRate}%) vượt quá mức trần tối đa của sàn (${maxAllowedDeposit}%). Vui lòng điều chỉnh lại.` });
     }
+    const isConsignment = Boolean(body.isConsignment);
+    const minUnitPrice = isConsignment ? 0 : 0.01;
     if (!Number.isInteger(buyerId) || buyerId < 1 || buyerId > 2147483647 || title.length < 2 || title.length > 150 ||
       !dateOnly(validUntil) || validUntil < today || new Date(validUntil) - new Date(today) > 90 * DAY ||
       !hasTwoDecimals(deliveryFee) || deliveryFee < 0 || deliveryFee > 1000000000 ||
@@ -129,7 +139,7 @@ function createSupplierQuoteRoutes(prisma, requireAuth) {
       !Array.isArray(lines) || lines.length < 1 || lines.length > 50 ||
       lines.some(line => !line || !Number.isInteger(line.productId) || line.productId < 1 || line.productId > 2147483647 ||
         !Number.isInteger(line.quantity) || line.quantity < 1 || line.quantity > 2147483647 ||
-        !hasTwoDecimals(line.unitPrice) || line.unitPrice < 0.01 || line.unitPrice > 1000000000 ||
+        !hasTwoDecimals(line.unitPrice) || line.unitPrice < minUnitPrice || line.unitPrice > 1000000000 ||
         typeof line.expectedUpdatedAt !== 'string' || !Number.isFinite(Date.parse(line.expectedUpdatedAt))) ||
       new Set(lines.map(line => line.productId)).size !== lines.length) {
       return res.status(400).json({ message: 'Kiểm tra cửa hàng, hạn báo giá, phí giao, tỷ lệ cọc và 1–50 mặt hàng.' });
@@ -166,7 +176,16 @@ function createSupplierQuoteRoutes(prisma, requireAuth) {
           },
           include: quoteInclude,
         });
-        await audit(tx, req.auth.user.id, 'QUOTE_SENT', 'QUOTE', created.id, { buyerId, total: total.toString(), depositRate: String(depositRate), lines: snapshots.length });
+        await audit(tx, req.auth.user.id, 'QUOTE_SENT', 'QUOTE', created.id, { buyerId, total: total.toString(), depositRate: String(depositRate), lines: snapshots.length, isConsignment });
+        if (isConsignment) {
+          consignmentService.setQuoteConsignment(created.id, {
+            isConsignment: true,
+            settlementPrice: typeof body.settlementPrice === 'number' && body.settlementPrice >= 0 ? body.settlementPrice : 0,
+            autoRestock: body.autoRestock !== false,
+            autoExchangeExpiry: body.autoExchangeExpiry !== false,
+            termsNote: typeof body.termsNote === 'string' ? body.termsNote.trim() : 'Cam kết đổi trả 100% khi cận date và giao bù hàng khi hết.',
+          });
+        }
         return created;
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
       res.status(201).json({ quote: serializeQuote(quote) });
@@ -278,6 +297,52 @@ function createStoreQuoteRoutes(prisma, requireAuth) {
         });
         const changed = await tx.supplierQuote.updateMany({ where: { id: quote.id, status: 'SENT', version: quote.version }, data: { status: 'ACCEPTED', respondedAt: new Date(), orderId: created.id, version: { increment: 1 } } });
         if (!changed.count) throw problem(409, 'Báo giá vừa được xử lý. Tải lại danh sách.');
+
+        // If this was a consignment / marketing trial quote, auto-sync into store inventory
+        const consignment = consignmentService.getQuoteConsignment(quote.id);
+        if (consignment?.isConsignment) {
+          for (const line of quote.lines) {
+            try {
+              const existing = await tx.inventoryItem.findFirst({ where: { ownerId: req.auth.user.id, name: line.productName } });
+              let invItemId = existing?.id;
+              if (existing) {
+                await tx.inventoryItem.updateMany({
+                  where: { id: existing.id, ownerId: req.auth.user.id },
+                  data: { quantity: existing.quantity + line.quantity }
+                });
+              } else {
+                const createdItem = await tx.inventoryItem.create({
+                  data: {
+                    ownerId: req.auth.user.id,
+                    name: line.productName,
+                    unit: line.packaging || 'cái',
+                    quantity: line.quantity,
+                    purchasePrice: 0,
+                    sellingPrice: Number(line.unitPrice) > 0 ? Number(line.unitPrice) : Math.round((Number(consignment.settlementPrice) || 20000) * 1.25),
+                    lowThreshold: Math.max(1, Math.floor(line.quantity * 0.2)),
+                  }
+                });
+                invItemId = createdItem.id;
+              }
+              if (invItemId) {
+                inventorySupplierService.setSupplier(invItemId, quote.supplier.businessName);
+                consignmentService.setItemConsignment(invItemId, {
+                  isConsignment: true,
+                  settlementPrice: consignment.settlementPrice || 0,
+                  autoRestock: consignment.autoRestock !== false,
+                  autoExchangeExpiry: consignment.autoExchangeExpiry !== false,
+                  supplierName: quote.supplier.businessName,
+                  supplierId: quote.supplier.id,
+                  supplierPhone: quote.supplier.user?.phone || null,
+                  termsNote: consignment.termsNote,
+                });
+              }
+            } catch (syncErr) {
+              console.error('Không thể tự động đồng bộ hàng ký gửi vào kho:', syncErr.message);
+            }
+          }
+        }
+
         await audit(tx, req.auth.user.id, 'QUOTE_ACCEPTED', 'QUOTE', quote.id, { orderId: created.id, depositAmount: depositAmount.toString() });
         await audit(tx, req.auth.user.id, 'ORDER_CREATED_FROM_QUOTE', 'ORDER', created.id, { quoteId: quote.id, supplierId: quote.supplierId });
         return created;

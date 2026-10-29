@@ -6,6 +6,8 @@ const { requireRole } = require('../middlewares/authMiddleware');
 const { ROLES } = require('../config/roles');
 const { createSupplierService } = require('../services/supplierService');
 const { createSupplierController } = require('../controllers/supplierController');
+const consignmentService = require('../services/consignmentService');
+const { validateDriverInput } = require('../services/deliveryService');
 
 const uploadsDir = path.join(__dirname, '../public/uploads');
 if (!fs.existsSync(uploadsDir)) {
@@ -44,6 +46,7 @@ function createSupplierRoutes(prisma, requireAuth) {
   router.get('/dashboard', controller.dashboard);
   router.route('/profile').get(controller.getProfile).put(controller.saveProfile);
   router.post('/verification', controller.submitVerification);
+  router.post('/quick-verify', controller.quickVerify);
   router.post('/upload-image', (req, res, next) => {
     upload.single('image')(req, res, (err) => {
       if (err instanceof multer.MulterError) {
@@ -64,6 +67,54 @@ function createSupplierRoutes(prisma, requireAuth) {
   router.put('/orders/:orderId/driver-info', controller.updateDriverInfo);
   router.patch('/orders/:orderId/driver-info', controller.updateDriverInfo);
   router.patch('/orders/:orderId/deposit', controller.updateDeposit);
+
+  router.get('/consignments/requests', async (req, res, next) => {
+    try {
+      const profile = await prisma.supplierProfile.findUnique({ where: { userId: req.auth.user.id } });
+      const requests = consignmentService.getConsignmentRequests({
+        supplierId: profile?.id,
+        supplierName: profile?.businessName,
+      });
+      res.json({ requests });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/consignments/requests/:id/dispatch', async (req, res, next) => {
+    const { id } = req.params;
+    const { driverInfo, newExpiryDate, supplierNotes } = req.body || {};
+    try {
+      const request = consignmentService.getRequestById(id);
+      if (!request) return res.status(404).json({ message: 'Không tìm thấy yêu cầu tiếp thị.' });
+
+      if (driverInfo) {
+        const errors = validateDriverInput(driverInfo);
+        if (errors.length > 0) return res.status(400).json({ message: errors[0] });
+      }
+
+      const updated = consignmentService.dispatchConsignmentRequest(id, {
+        driverInfo,
+        newExpiryDate,
+        supplierNotes,
+      });
+      res.json({ message: 'Đã phân công tài xế và lên chuyến xe giao bù/thu hồi!', request: updated });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/consignments/requests/:id/reject', async (req, res, next) => {
+    const { id } = req.params;
+    const { reason } = req.body || {};
+    try {
+      const updated = consignmentService.updateRequestStatus(id, 'REJECTED', reason);
+      res.json({ message: 'Đã từ chối yêu cầu.', request: updated });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.use((error, req, res, next) => {
     if (error.status) return res.status(error.status).json({ message: error.message });
     if (error.code === 'SUPPLIER_PROFILE_REQUIRED') return res.status(409).json({ message: error.message });

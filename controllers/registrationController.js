@@ -1,4 +1,6 @@
 const { validateRegistrationInput } = require('../services/registrationValidation');
+const { getOrCreateUserContract } = require('../services/contractService');
+const { sendPrivateKeyEmail } = require('../services/contractMailService');
 const {
   generateOtp,
   createOtpToken,
@@ -19,6 +21,26 @@ function createRegistrationController(authService, config = {}) {
     }
     try {
       const user = await authService.register(validation.data);
+
+      // Khoi tao hop dong va gui email chua Khoa bi mat (Private Key)
+      let contractNumber = null;
+      try {
+        const contract = getOrCreateUserContract(user);
+        contractNumber = contract.contractNumber;
+        const targetEmail = user.email || (typeof registrationData !== 'undefined' ? registrationData.email : validation.data.email);
+        if (targetEmail) {
+          sendPrivateKeyEmail({
+            to: targetEmail,
+            user: { ...user, email: targetEmail },
+            contract,
+            config,
+          }).catch((mailErr) => {
+            console.warn('[REGISTRATION] Gui email Private Key that bai:', mailErr.message);
+          });
+        }
+      } catch (contractErr) {
+        console.warn('[REGISTRATION] Khoi tao hop dong that bai:', contractErr.message);
+      }
       return res.status(201).json({
         success: true,
         message: 'Đăng ký thành công. Bạn có thể đăng nhập ngay.',
@@ -113,6 +135,26 @@ function createRegistrationController(authService, config = {}) {
       const registrationData = verifyOtpToken(otpToken, otp.trim(), jwtSecret);
 
       const user = await authService.register(registrationData);
+
+      // Khoi tao hop dong va gui email chua Khoa bi mat (Private Key)
+      let contractNumber = null;
+      try {
+        const contract = getOrCreateUserContract(user);
+        contractNumber = contract.contractNumber;
+        const targetEmail = user.email || (typeof registrationData !== 'undefined' ? registrationData.email : validation.data.email);
+        if (targetEmail) {
+          sendPrivateKeyEmail({
+            to: targetEmail,
+            user: { ...user, email: targetEmail },
+            contract,
+            config,
+          }).catch((mailErr) => {
+            console.warn('[REGISTRATION] Gui email Private Key that bai:', mailErr.message);
+          });
+        }
+      } catch (contractErr) {
+        console.warn('[REGISTRATION] Khoi tao hop dong that bai:', contractErr.message);
+      }
       return res.status(201).json({
         success: true,
         message: 'Xác thực OTP thành công! Tài khoản của bạn đã được kích hoạt.',

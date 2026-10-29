@@ -1,3 +1,5 @@
+const fs = require('node:fs');
+const path = require('node:path');
 const { Prisma } = require('@prisma/client');
 const { moderateContent } = require('./contentModerationService');
 const systemConfigService = require('./systemConfigService');
@@ -69,6 +71,70 @@ function serializeHoliday(row) {
     demandMultiplier: number(row.demandMultiplier),
   };
 }
+function cleanupUserLocalData(userId) {
+  const key = String(userId);
+  const dataDir = path.join(__dirname, '../data');
+
+  try {
+    const storesFile = path.join(dataDir, 'stores.json');
+    if (fs.existsSync(storesFile)) {
+      const stores = JSON.parse(fs.readFileSync(storesFile, 'utf8'));
+      if (stores.stores && stores.stores[key]) {
+        delete stores.stores[key];
+        fs.writeFileSync(storesFile, JSON.stringify(stores, null, 2), 'utf8');
+      }
+    }
+  } catch {}
+
+  try {
+    const contractsFile = path.join(dataDir, 'contracts.json');
+    if (fs.existsSync(contractsFile)) {
+      const contracts = JSON.parse(fs.readFileSync(contractsFile, 'utf8'));
+      if (contracts.contracts && contracts.contracts[key]) {
+        delete contracts.contracts[key];
+        fs.writeFileSync(contractsFile, JSON.stringify(contracts, null, 2), 'utf8');
+      }
+    }
+  } catch {}
+
+  try {
+    const walletsFile = path.join(dataDir, 'wallets.json');
+    if (fs.existsSync(walletsFile)) {
+      const wallets = JSON.parse(fs.readFileSync(walletsFile, 'utf8'));
+      let changed = false;
+      if (wallets.wallets && wallets.wallets[key]) {
+        delete wallets.wallets[key];
+        changed = true;
+      }
+      if (Array.isArray(wallets.transactions)) {
+        const filtered = wallets.transactions.filter((t) => t.userId !== Number(userId));
+        if (filtered.length !== wallets.transactions.length) {
+          wallets.transactions = filtered;
+          changed = true;
+        }
+      }
+      if (changed) {
+        fs.writeFileSync(walletsFile, JSON.stringify(wallets, null, 2), 'utf8');
+      }
+    }
+  } catch {}
+
+  try {
+    const crFile = path.join(dataDir, 'consignment_requests.json');
+    if (fs.existsSync(crFile)) {
+      const crs = JSON.parse(fs.readFileSync(crFile, 'utf8'));
+      if (Array.isArray(crs)) {
+        const filtered = crs.filter(
+          (r) => r.storeId !== Number(userId) && r.supplierId !== Number(userId)
+        );
+        if (filtered.length !== crs.length) {
+          fs.writeFileSync(crFile, JSON.stringify(filtered, null, 2), 'utf8');
+        }
+      }
+    }
+  } catch {}
+}
+
 function holidayInput(body, requireVersion = false) {
   body = body && typeof body === 'object' ? body : {};
   const name = typeof body.name === 'string' ? body.name.trim().replace(/\s+/g, ' ') : '';
@@ -457,8 +523,158 @@ function createAdminService(prisma, config) {
     return updated;
   }
 
+  async function deleteUser(actorId, id) {
+    if (!Number.isInteger(id) || id <= 0) throw problem(400, 'Mã tài khoản không hợp lệ.');
+    if (id === actorId) throw problem(400, 'Không thể tự xóa tài khoản quản trị đang đăng nhập.');
+
+    const result = await prisma.$transaction(async (tx) => {
+      const user = await tx.user.findUnique({
+        where: { id },
+        include: { role: true, supplierProfile: true },
+      });
+      if (!user) throw problem(404, 'Không tìm thấy tài khoản người dùng.');
+      if (user.role.code === 'ADMIN') throw problem(403, 'Không được phép xóa tài khoản Quản trị viên.');
+
+      const supplierProfile = user.supplierProfile;
+      if (supplierProfile) {
+        const suppId = supplierProfile.id;
+
+        // Delete WholesaleOrders for supplier
+        const suppOrders = await tx.wholesaleOrder.findMany({
+          where: { supplierId: suppId },
+          select: { id: true },
+        });
+        const suppOrderIds = suppOrders.map((o) => o.id);
+        if (suppOrderIds.length > 0) {
+          await tx.orderComplaint.deleteMany({ where: { orderId: { in: suppOrderIds } } });
+          await tx.wholesaleOrderItem.deleteMany({ where: { orderId: { in: suppOrderIds } } });
+          await tx.wholesaleOrder.deleteMany({ where: { id: { in: suppOrderIds } } });
+        }
+
+        // Delete SupplierQuotes for supplier
+        const suppQuotes = await tx.supplierQuote.findMany({
+          where: { supplierId: suppId },
+          select: { id: true },
+        });
+        const suppQuoteIds = suppQuotes.map((q) => q.id);
+        if (suppQuoteIds.length > 0) {
+          await tx.supplierQuoteLine.deleteMany({ where: { quoteId: { in: suppQuoteIds } } });
+          await tx.supplierQuote.deleteMany({ where: { id: { in: suppQuoteIds } } });
+        }
+
+        // Delete SupplierProducts
+        const suppProducts = await tx.supplierProduct.findMany({
+          where: { supplierId: suppId },
+          select: { id: true },
+        });
+        const suppProductIds = suppProducts.map((p) => p.id);
+        if (suppProductIds.length > 0) {
+          await tx.supplierProductPriceHistory.deleteMany({
+            where: { productId: { in: suppProductIds } },
+          });
+          await tx.supplierQuoteLine.deleteMany({
+            where: { productId: { in: suppProductIds } },
+          });
+          await tx.wholesaleOrderItem.deleteMany({
+            where: { productId: { in: suppProductIds } },
+          });
+          await tx.supplierProduct.deleteMany({ where: { id: { in: suppProductIds } } });
+        }
+
+        await tx.orderComplaint.deleteMany({ where: { supplierId: suppId } });
+        await tx.supplierProfile.delete({ where: { id: suppId } });
+      }
+
+      // Buyer orders & complaints & quotes
+      const buyerOrders = await tx.wholesaleOrder.findMany({
+        where: { buyerId: id },
+        select: { id: true },
+      });
+      const buyerOrderIds = buyerOrders.map((o) => o.id);
+      if (buyerOrderIds.length > 0) {
+        await tx.orderComplaint.deleteMany({ where: { orderId: { in: buyerOrderIds } } });
+        await tx.wholesaleOrderItem.deleteMany({ where: { orderId: { in: buyerOrderIds } } });
+        await tx.wholesaleOrder.deleteMany({ where: { id: { in: buyerOrderIds } } });
+      }
+      await tx.orderComplaint.deleteMany({ where: { buyerId: id } });
+
+      const buyerQuotes = await tx.supplierQuote.findMany({
+        where: { buyerId: id },
+        select: { id: true },
+      });
+      const buyerQuoteIds = buyerQuotes.map((q) => q.id);
+      if (buyerQuoteIds.length > 0) {
+        await tx.supplierQuoteLine.deleteMany({ where: { quoteId: { in: buyerQuoteIds } } });
+        await tx.supplierQuote.deleteMany({ where: { id: { in: buyerQuoteIds } } });
+      }
+
+      // Restock plans
+      const restockPlans = await tx.restockPlan.findMany({
+        where: { ownerId: id },
+        select: { id: true },
+      });
+      const planIds = restockPlans.map((p) => p.id);
+      if (planIds.length > 0) {
+        await tx.restockPlanLine.deleteMany({ where: { planId: { in: planIds } } });
+        await tx.restockPlan.deleteMany({ where: { id: { in: planIds } } });
+      }
+
+      // Inventory items
+      const items = await tx.inventoryItem.findMany({
+        where: { ownerId: id },
+        select: { id: true },
+      });
+      const itemIds = items.map((i) => i.id);
+      if (itemIds.length > 0) {
+        await tx.inventoryLot.deleteMany({ where: { itemId: { in: itemIds } } });
+        await tx.stockMovement.deleteMany({ where: { itemId: { in: itemIds } } });
+        await tx.inventoryItem.deleteMany({ where: { id: { in: itemIds } } });
+      }
+
+      // Recommendations & AI events
+      await tx.recommendationRun.deleteMany({ where: { ownerId: id } });
+      await tx.aiUsageEvent.deleteMany({ where: { userId: id } });
+
+      // Subscriptions
+      const subs = await tx.subscription.findMany({
+        where: { userId: id },
+        select: { id: true },
+      });
+      const subIds = subs.map((s) => s.id);
+      if (subIds.length > 0) {
+        await tx.subscriptionPayment.deleteMany({ where: { subscriptionId: { in: subIds } } });
+        await tx.subscription.deleteMany({ where: { id: { in: subIds } } });
+      }
+
+      // Auth sessions & password resets
+      await tx.authSession.deleteMany({ where: { userId: id } });
+      await tx.passwordReset.deleteMany({ where: { userId: id } });
+
+      // Audit logs
+      await tx.auditLog.updateMany({ where: { actorId: id }, data: { actorId: null } });
+
+      // Delete user
+      await tx.user.delete({ where: { id } });
+
+      await audit(tx, actorId, 'USER_DELETED_BY_ADMIN', 'USER', id, {
+        deletedUsername: user.username,
+        name: user.name,
+        role: user.role.code,
+      });
+
+      return {
+        success: true,
+        message: `Đã xóa tài khoản "${user.name}" (@${user.username}) thành công khỏi nền tảng.`,
+        deletedUser: { id: user.id, username: user.username, name: user.name },
+      };
+    });
+
+    cleanupUserLocalData(id);
+    return result;
+  }
+
   return {
-    listUsers, changeAccount, unlockSubscription, verifications, review, settings, changeRate,
+    listUsers, changeAccount, deleteUser, unlockSubscription, verifications, review, settings, changeRate,
     settlements, markPaid, analytics, aiMetrics, holidays, createHoliday,
     updateHoliday, deleteHoliday, logs, listModerationQueue, moderateAction,
     getSystemConfig, updateSystemConfig, resetSystemConfig,

@@ -27,10 +27,51 @@ function createSupplierController(service) {
     async submitVerification(req, res, next) {
       try { res.json({ profile: await service.submitVerification(req.auth.user.id) }); } catch (error) { next(error); }
     },
+    async quickVerify(req, res, next) {
+      try {
+        const profile = await service.quickVerify(req.auth.user.id);
+        return res.json({ success: true, profile });
+      } catch (error) {
+        return next(error);
+      }
+    },
     async listProducts(req, res, next) {
       try { return res.json({ success: true, products: await service.listProducts(req.auth.user.id) }); } catch (error) { return next(error); }
     },
     async createProduct(req, res, next) {
+      const items = Array.isArray(req.body)
+        ? req.body
+        : (Array.isArray(req.body?.products) ? req.body.products : null);
+
+      if (items) {
+        if (items.length === 0) {
+          return res.status(400).json({ success: false, message: 'Danh sách sản phẩm trống.' });
+        }
+        const validatedList = [];
+        for (let i = 0; i < items.length; i++) {
+          const validation = validateProductInput(items[i]);
+          if (!validation.data) {
+            return res.status(400).json({
+              success: false,
+              message: `Mặt hàng thứ ${i + 1} ("${items[i]?.name || ''}") chưa hợp lệ.`,
+              errors: validation.errors,
+              index: i,
+            });
+          }
+          validatedList.push(validation.data);
+        }
+        try {
+          const createdList = [];
+          for (const item of validatedList) {
+            const product = await service.createProduct(req.auth.user.id, item);
+            createdList.push(product);
+          }
+          return res.status(201).json({ success: true, products: createdList, count: createdList.length });
+        } catch (error) {
+          return next(error);
+        }
+      }
+
       const validation = validateProductInput(req.body);
       if (!validation.data) return res.status(400).json({ success: false, message: 'Thông tin sản phẩm chưa hợp lệ.', errors: validation.errors });
       try { return res.status(201).json({ success: true, product: await service.createProduct(req.auth.user.id, validation.data) }); } catch (error) { return next(error); }

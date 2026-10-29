@@ -261,6 +261,27 @@ function createSupplierService(prisma) {
     }, { isolationLevel: 'Serializable' });
   }
 
+  async function quickVerify(userId) {
+    return prisma.$transaction(async tx => {
+      const profile = await tx.supplierProfile.findUnique({ where: { userId } });
+      if (!profile) throw problem(404, 'Bạn cần thiết lập thông tin gian hàng trước.');
+      const changed = await tx.supplierProfile.update({
+        where: { id: profile.id },
+        data: {
+          verificationStatus: 'APPROVED',
+          verificationNote: 'Gian hàng đã được kích hoạt mở bán trên Nguồn sỉ.',
+          reviewedAt: new Date(),
+          verificationVersion: { increment: 1 },
+        },
+      });
+      await audit(tx, userId, 'SUPPLIER_QUICK_VERIFIED', 'SUPPLIER', profile.id, {
+        businessName: profile.businessName,
+        status: 'APPROVED',
+      });
+      return serializeProfile(changed);
+    }, { isolationLevel: 'Serializable' });
+  }
+
   async function requireProfile(userId) {
     const profile = await getProfile(userId);
     if (!profile) {
@@ -608,7 +629,7 @@ function createSupplierService(prisma) {
   }
 
   return {
-    getProfile, upsertProfile, submitVerification, listProducts, createProduct, updateProduct, deactivateProduct,
+    getProfile, upsertProfile, submitVerification, quickVerify, listProducts, createProduct, updateProduct, deactivateProduct,
     listOrders, updateOrderStatus, updateDriverInfo, updateDeposit, dashboard,
   };
 }

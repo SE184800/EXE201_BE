@@ -9,6 +9,7 @@ const headerAliases = {
   quantity: ['so luong nhap', 'so luong', 'sl nhap', 'sl', 'so luong ton'],
   purchasePrice: ['gia nhap', 'gia von', 'don gia nhap'],
   sellingPrice: ['gia ban', 'don gia ban'],
+  supplierName: ['nha cung cap', 'ncc', 'ten nha cung cap', 'ten ncc', 'nguon hang', 'don vi cung cap', 'nha phan phoi', 'dai ly'],
   receivedAt: ['ngay nhap', 'ngay nhan hang', 'ngay giao dich'],
   expiryDate: ['han su dung', 'hsd', 'ngay het han'],
   note: ['ghi chu', 'mo ta'],
@@ -188,6 +189,9 @@ function parseInventorySheetData(data) {
     if (receivedAt.error) rowErrors.push(`Ngày nhập: ${receivedAt.error}`);
     if (expiryDate.error) rowErrors.push(`Hạn sử dụng: ${expiryDate.error}`);
 
+    const rawSupplier = unwrapCell(cellAt(source.cells, columns, 'supplierName'));
+    const supplierName = rawSupplier === null || rawSupplier === undefined ? '' : String(rawSupplier).trim().slice(0, 150);
+
     const rawNote = unwrapCell(cellAt(source.cells, columns, 'note'));
     const note = rawNote === null || rawNote === undefined ? '' : String(rawNote).trim();
     if (note.length > 200) rowErrors.push('Ghi chú tối đa 200 ký tự.');
@@ -211,6 +215,7 @@ function parseInventorySheetData(data) {
       quantity: quantity.value,
       purchasePrice: purchasePrice.value,
       sellingPrice: sellingPrice.value,
+      supplierName: supplierName || null,
       receivedAt: received,
       expiryDate: expiryDate.value,
       note,
@@ -245,6 +250,7 @@ function serializeImportRow(row) {
   const isoDate = (value) => (value instanceof Date ? value.toISOString().slice(0, 10) : null);
   return {
     ...row,
+    supplierName: row.supplierName || null,
     receivedAt: isoDate(row.receivedAt),
     expiryDate: isoDate(row.expiryDate),
   };

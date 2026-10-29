@@ -1,0 +1,10 @@
+{
+  "888888": {
+    "isConsignment": true,
+    "settlementPrice": 20000,
+    "autoRestock": true,
+    "autoExchangeExpiry": true,
+    "termsNote": "Cam kết đổi trả 100% khi cận date và giao bù hàng khi hết.",
+    "updatedAt": "2026-10-29T05:48:07.613Z"
+  }
+}

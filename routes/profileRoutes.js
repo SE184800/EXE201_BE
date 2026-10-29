@@ -12,6 +12,7 @@ const select = {
   dateOfBirth: true,
   createdAt: true,
   role: { select: { code: true } },
+  supplierProfile: true,
 };
 
 const serialize = (user) => {
@@ -21,6 +22,7 @@ const serialize = (user) => {
     ...user,
     role: roleCode,
     storeProfile,
+    supplierProfile: user.supplierProfile || null,
   };
 };
 
@@ -108,6 +110,31 @@ function createProfileRoutes(prisma, requireAuth) {
         });
       }
 
+      // If supplier info is included in profile update, also save it
+      let updatedSupplierProfile = null;
+      if (req.body.businessName || req.body.warehouseAddress) {
+        const bName = (req.body.businessName || '').trim().replace(/\s+/g, ' ');
+        const wAddr = (req.body.warehouseAddress || '').trim().replace(/\s+/g, ' ');
+        const tCode = req.body.taxCode ? req.body.taxCode.trim().replace(/\s+/g, '') : null;
+        updatedSupplierProfile = await prisma.supplierProfile.upsert({
+          where: { userId: req.auth.user.id },
+          create: {
+            userId: req.auth.user.id,
+            businessName: bName || 'Kho Sỉ',
+            warehouseAddress: wAddr || '',
+            taxCode: tCode,
+            deliveryRadiusKm: typeof req.body.deliveryRadiusKm === 'number' ? req.body.deliveryRadiusKm : 10,
+            deliveryFee: typeof req.body.deliveryFee === 'number' ? req.body.deliveryFee : 0,
+          },
+          update: {
+            ...(bName ? { businessName: bName } : {}),
+            ...(wAddr ? { warehouseAddress: wAddr } : {}),
+            ...(tCode !== undefined ? { taxCode: tCode } : {}),
+            ...(typeof req.body.deliveryRadiusKm === 'number' ? { deliveryRadiusKm: req.body.deliveryRadiusKm } : {}),
+          },
+        });
+      }
+
       const profile = await prisma.$transaction(async (tx) => {
         const saved = await tx.user.update({ where: { id: req.auth.user.id }, data: validation.data, select });
         await audit(tx, req.auth.user.id, 'PERSONAL_PROFILE_UPDATED', 'USER', req.auth.user.id, { changedFields: Object.keys(validation.data) });
@@ -118,8 +145,11 @@ function createProfileRoutes(prisma, requireAuth) {
       if (updatedStoreProfile) {
         serialized.storeProfile = updatedStoreProfile;
       }
+      if (updatedSupplierProfile) {
+        serialized.supplierProfile = updatedSupplierProfile;
+      }
 
-      res.json({ profile: serialized, message: 'Đã cập nhật thông tin cá nhân và cửa hàng.' });
+      res.json({ profile: serialized, message: 'Đã cập nhật thông tin cá nhân và cơ sở kinh doanh thành công.' });
     } catch (error) {
       if (error.code === 'P2002') return res.status(409).json({ message: 'Email hoặc số điện thoại đã được tài khoản khác sử dụng.' });
       next(error);

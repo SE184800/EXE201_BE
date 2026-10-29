@@ -231,7 +231,8 @@ async function sendOtpMail({ to, name, otp, config, type = "registration" }) {
   console.log('====================================================');
 
   const gmailUser = (config?.gmail?.user || process.env.GMAIL_USER || '').trim();
-  const gmailPass = (config?.gmail?.appPassword || process.env.GMAIL_APP_PASSWORD || '').trim().replace(/\s+/g, '');
+  const rawPass = (config?.gmail?.appPassword || process.env.GMAIL_APP_PASSWORD || '');
+  const gmailPass = rawPass.split('#')[0].replace(/\s+/g, '').trim();
 
   if (gmailUser && gmailPass) {
     try {
