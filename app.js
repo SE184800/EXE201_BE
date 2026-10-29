@@ -26,6 +26,7 @@ const { createAdminRoutes } = require('./routes/adminRoutes');
 const { createComplaintRoutes } = require('./routes/complaintRoutes');
 const { createSupplierQuoteRoutes, createStoreQuoteRoutes } = require('./routes/quoteRoutes');
 const { createSubscriptionRoutes } = require('./routes/subscriptionRoutes');
+const { createWalletRoutes, createAdminWalletRoutes } = require('./routes/walletRoutes');
 const { createSubscriptionGate } = require('./middlewares/subscriptionMiddleware');
 
 function createApp(prisma, config) {
@@ -139,6 +140,7 @@ function createApp(prisma, config) {
       '/complaints',
       '/restock',
       '/advisor',
+      '/wallet',
     ];
     const isProtected = protectedRoots.some(root => req.path === root || req.path.startsWith(`${root}/`));
     if (!isProtected) return next();
@@ -188,6 +190,16 @@ function createApp(prisma, config) {
   app.use(
     '/api/advisor',
     createAdvisorRoutes(prisma, requireAuth, config)
+  );
+
+  app.use(
+    '/api/wallet',
+    createWalletRoutes(prisma, requireAuth, config)
+  );
+
+  app.use(
+    '/api/admin/wallet',
+    createAdminWalletRoutes(prisma, requireAuth)
   );
 
   // =========================

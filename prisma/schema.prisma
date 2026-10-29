@@ -42,6 +42,12 @@ model User {
   complaints      OrderComplaint[] @relation("buyerComplaints")
   receivedQuotes  SupplierQuote[]  @relation("quoteBuyer")
   subscription    Subscription?
+  wallet          Wallet?
+  walletTransactions         WalletTransaction[] @relation("walletTransactions")
+  depositRequests           DepositRequest[]    @relation("depositRequests")
+  withdrawalRequests        WithdrawalRequest[] @relation("withdrawalRequests")
+  orderPayments             OrderPayment[]      @relation("orderPayments")
+  receivedOrderPayments     OrderPayment[]      @relation("orderPaymentSupplier")
 
   @@index([roleId])
   @@map("users")
@@ -231,6 +237,9 @@ model WholesaleOrder {
   depositRefundReference     String?              @db.VarChar(100)
   complaint                  OrderComplaint?
   sourceQuote                SupplierQuote?       @relation("quoteOrder")
+  orderPayment               OrderPayment?
+  refunds                    Refund[]
+  walletTransactions         WalletTransaction[]
 
   @@index([supplierId, status])
   @@index([buyerId])
@@ -469,4 +478,147 @@ model RestockPlanLine {
 
   @@unique([planId, sourceItemId])
   @@map("restock_plan_lines")
+}
+
+// =====================
+// WALLET MANAGEMENT MODULE
+// =====================
+
+// One wallet per user. `balance` is spendable money, `heldBalance` is money
+// frozen by a pending withdrawal request.
+model Wallet {
+  id          Int      @id @default(autoincrement())
+  userId      Int      @unique
+  balance     Decimal  @default(0) @db.Decimal(18, 2)
+  heldBalance Decimal  @default(0) @db.Decimal(18, 2)
+  currency    String   @default("VND") @db.VarChar(10)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  transactions  WalletTransaction[]
+
+  @@map("wallets")
+}
+
+// Append-only ledger. Never deleted so money can always be audited.
+model WalletTransaction {
+  id          Int      @id @default(autoincrement())
+  walletId    Int
+  userId      Int
+  // DEPOSIT | WITHDRAWAL_HOLD | WITHDRAWAL_RELEASE | WITHDRAWAL_PAYOUT | ORDER_PAYMENT | ORDER_RECEIVE | REFUND | REFUND_RECEIVED | ADJUSTMENT
+  type        String   @db.VarChar(30)
+  direction   String   @db.VarChar(10)
+  amount      Decimal  @db.Decimal(18, 2)
+  balanceAfter Decimal @db.Decimal(18, 2)
+  reference   String   @unique @db.VarChar(100)
+  status      String   @default("COMPLETED") @db.VarChar(20)
+  // REAL | SANDBOX. Sandbox rows are simulated money used for demos.
+  method      String   @default("REAL") @db.VarChar(20)
+  orderId     Int?
+  note        String?  @db.NVarChar(500)
+  createdAt   DateTime @default(now())
+  wallet      Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user        User     @relation("walletTransactions", fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  order       WholesaleOrder? @relation(fields: [orderId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([walletId, createdAt])
+  @@index([userId, createdAt])
+  @@index([orderId])
+  @@map("wallet_transactions")
+}
+
+// Manual deposit request confirmed by an administrator.
+model DepositRequest {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  amount      Decimal  @db.Decimal(18, 2)
+  method      String   @default("BANK_TRANSFER") @db.VarChar(30)
+  // REAL | SANDBOX. Sandbox requests are simulated and settle instantly.
+  isSandbox   Boolean  @default(false)
+  bankName    String?  @db.NVarChar(100)
+  bankAccountNumber String? @db.VarChar(34)
+  bankAccountHolder String? @db.NVarChar(100)
+  reference   String?  @db.VarChar(100)
+  status      String   @default("PENDING") @db.VarChar(20)
+  note        String?  @db.NVarChar(500)
+  adminNote   String?  @db.NVarChar(500)
+  reviewedBy  Int?
+  reviewedAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User     @relation("depositRequests", fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId, status, createdAt])
+  @@index([status, createdAt])
+  @@map("deposit_requests")
+}
+
+// Withdrawal request. Money is held in `Wallet.heldBalance` while pending.
+model WithdrawalRequest {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  amount      Decimal  @db.Decimal(18, 2)
+  // REAL | SANDBOX. Sandbox withdrawals settle instantly without review.
+  isSandbox   Boolean  @default(false)
+  bankName    String   @db.NVarChar(100)
+  bankAccountNumber String @db.VarChar(34)
+  bankAccountHolder String @db.NVarChar(100)
+  note        String?  @db.NVarChar(500)
+  status      String   @default("PENDING") @db.VarChar(20)
+  adminNote   String?  @db.NVarChar(500)
+  reference   String?  @db.VarChar(100)
+  reviewedBy  Int?
+  reviewedAt  DateTime?
+  completedBy Int?
+  completedAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User     @relation("withdrawalRequests", fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId, status, createdAt])
+  @@index([status, createdAt])
+  @@map("withdrawal_requests")
+}
+
+// Payment of a wholesale order made with the buyer wallet.
+// The unique orderId guarantees an order can only be paid once.
+model OrderPayment {
+  id          Int      @id @default(autoincrement())
+  orderId     Int      @unique
+  buyerId     Int
+  supplierUserId Int
+  amount      Decimal  @db.Decimal(18, 2)
+  commissionAmount Decimal? @db.Decimal(18, 2)
+  supplierAmount Decimal? @db.Decimal(18, 2)
+  status      String   @default("PAID") @db.VarChar(20)
+  reference   String   @unique @db.VarChar(100)
+  paidAt      DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  order       WholesaleOrder @relation(fields: [orderId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  buyer       User     @relation("orderPayments", fields: [buyerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  supplier    User     @relation("orderPaymentSupplier", fields: [supplierUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  refund      Refund?
+
+  @@index([buyerId, paidAt])
+  @@index([supplierUserId, paidAt])
+  @@map("order_payments")
+}
+
+// Refund of a paid order. The unique orderPaymentId prevents double refunds.
+model Refund {
+  id            Int      @id @default(autoincrement())
+  orderId       Int
+  orderPaymentId Int     @unique
+  amount        Decimal  @db.Decimal(18, 2)
+  reason        String   @db.NVarChar(500)
+  status        String   @default("COMPLETED") @db.VarChar(20)
+  reference     String   @unique @db.VarChar(100)
+  createdBy     Int?
+  createdAt     DateTime @default(now())
+  order       WholesaleOrder @relation(fields: [orderId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  orderPayment  OrderPayment @relation(fields: [orderPaymentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([orderId])
+  @@map("refunds")
 }
