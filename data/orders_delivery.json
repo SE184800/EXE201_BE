@@ -1,1 +1,13 @@
-{}
+{
+  "1045": {
+    "orderId": 1045,
+    "driverName": "Khoa toilet",
+    "driverPhone": "0379864870",
+    "vehicleType": "Xe máy giao hàng",
+    "licensePlate": "59X1-13385",
+    "estimatedDeliveryTime": "Trong 30 - 45 phút tới",
+    "deliveryNotes": null,
+    "assignedAt": "2026-10-29T12:04:04.836Z",
+    "updatedAt": "2026-10-29T12:04:49.982Z"
+  }
+}

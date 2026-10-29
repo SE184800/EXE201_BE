@@ -2,10 +2,10 @@
   "wallets": {
     "1": {
       "userId": 1,
-      "availableBalance": 9960500,
-      "lockedBalance": 0,
+      "availableBalance": 9866000.05,
+      "lockedBalance": 74500,
       "createdAt": "2026-10-26T11:25:19.561Z",
-      "updatedAt": "2026-10-26T12:14:25.385Z"
+      "updatedAt": "2026-10-29T12:05:16.787Z"
     },
     "2": {
       "userId": 2,
@@ -30,10 +30,10 @@
     },
     "1221": {
       "userId": 1221,
-      "availableBalance": 10000000,
+      "availableBalance": 10019499.95,
       "lockedBalance": 0,
       "createdAt": "2026-10-29T05:03:17.279Z",
-      "updatedAt": "2026-10-29T05:03:17.279Z"
+      "updatedAt": "2026-10-29T12:05:16.922Z"
     },
     "9999901": {
       "userId": 9999901,
@@ -72,6 +72,50 @@
     }
   },
   "transactions": [
+    {
+      "id": "TX-1793275516922-795",
+      "userId": 1221,
+      "orderId": 1045,
+      "type": "ESCROW_RECEIVED",
+      "amount": 19499.95,
+      "balanceBefore": 10000000,
+      "balanceAfter": 10019499.95,
+      "description": "Nhận tiền cọc đơn hàng #1045 (Đã trừ phí sàn: 500 ₫)",
+      "createdAt": "2026-10-29T12:05:16.922Z"
+    },
+    {
+      "id": "TX-1793275516787-388",
+      "userId": 1,
+      "orderId": 1045,
+      "type": "ESCROW_RELEASE",
+      "amount": 0,
+      "balanceBefore": 9866000.05,
+      "balanceAfter": 9866000.05,
+      "description": "Giải phóng cọc 19.999,95 ₫ cho đơn hàng #1045 (Đã giao hàng)",
+      "createdAt": "2026-10-29T12:05:16.922Z"
+    },
+    {
+      "id": "TX-1793275148346-161",
+      "userId": 1,
+      "orderId": 1046,
+      "type": "ESCROW_LOCK",
+      "amount": -74500,
+      "balanceBefore": 9940500.05,
+      "balanceAfter": 9866000.05,
+      "description": "Tạm khóa 10% tiền cọc đơn hàng #1046 (Ví hệ thống)",
+      "createdAt": "2026-10-29T11:59:08.346Z"
+    },
+    {
+      "id": "TX-1793275147820-27",
+      "userId": 1,
+      "orderId": 1045,
+      "type": "ESCROW_LOCK",
+      "amount": -19999.95,
+      "balanceBefore": 9960500,
+      "balanceAfter": 9940500.05,
+      "description": "Tạm khóa 10% tiền cọc đơn hàng #1045 (Ví hệ thống)",
+      "createdAt": "2026-10-29T11:59:07.820Z"
+    },
     {
       "id": "TX-1793252903225-503",
       "userId": 9999905,
