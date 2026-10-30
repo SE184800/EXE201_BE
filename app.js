@@ -177,7 +177,6 @@ function createApp(prisma, config) {
   app.use('/api/quotes', createStoreQuoteRoutes(prisma, requireAuth));
   app.use('/api/supplier/quotes', createSupplierQuoteRoutes(prisma, requireAuth));
   app.use('/api/complaints', createComplaintRoutes(prisma, requireAuth));
-  app.use('/api/wallet', createWalletRoutes(prisma, requireAuth));
   app.use('/api/contracts', createContractRoutes(prisma, requireAuth));
 
   app.use(

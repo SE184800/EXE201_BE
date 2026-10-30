@@ -519,7 +519,6 @@ function createSupplierService(prisma) {
           });
         }
       }
-      }
       await audit(transaction, userId, 'ORDER_STATUS_CHANGED', 'ORDER', order.id, { before: order.status, after: status, rejectReason: status === 'REJECTED' ? normalizedRejectReason : null });
     }, { isolationLevel: 'Serializable' });
 
