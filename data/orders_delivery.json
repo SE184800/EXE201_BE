@@ -20,5 +20,97 @@
     "deliveryNotes": null,
     "assignedAt": "2026-10-29T13:19:36.282Z",
     "updatedAt": "2026-10-29T13:19:36.282Z"
+  },
+  "1059": {
+    "orderId": 1059,
+    "driverName": "Nguyễn Văn Tuấn",
+    "driverPhone": "0912345678",
+    "vehicleType": "Xe ba gác chở hàng",
+    "licensePlate": "59X1-888.99",
+    "estimatedDeliveryTime": "Ngày 30/10/2026 · Buổi sáng (08:00 - 10:30)",
+    "deliveryNotes": "Tài xế quen, hỗ trợ khuân vác vào tiệm.",
+    "assignedAt": "2026-10-30T03:05:42.773Z",
+    "updatedAt": "2026-10-30T03:05:42.773Z",
+    "paymentInfo": {
+      "method": "COD",
+      "amount": 670000,
+      "status": "CONFIRMED",
+      "storePaidAt": "2026-10-30T03:07:31.262Z",
+      "updatedAt": "2026-10-30T03:07:42.527Z",
+      "supplierConfirmedAt": "2026-10-30T03:07:42.525Z",
+      "confirmedBy": 2
+    }
+  },
+  "1060": {
+    "orderId": 1060,
+    "packingChecklist": [
+      1055
+    ],
+    "packingUpdatedAt": "2026-10-30T03:13:37.502Z",
+    "driverName": "Lê Văn Tài",
+    "driverPhone": "0988776655",
+    "vehicleType": "Xe ba gác",
+    "licensePlate": "51-T2 123.45",
+    "estimatedDeliveryTime": "Ngày 30/10/2026 · Buổi trưa (11:00 - 12:30)",
+    "deliveryNotes": "Hàng nặng, cần người đỡ khi dỡ hàng",
+    "assignedAt": "2026-10-30T03:13:50.408Z",
+    "updatedAt": "2026-10-30T03:13:50.408Z",
+    "paymentInfo": {
+      "method": "COD",
+      "amount": 670000,
+      "status": "CONFIRMED",
+      "storePaidAt": "2026-10-30T03:15:16.585Z",
+      "updatedAt": "2026-10-30T03:15:23.864Z",
+      "supplierConfirmedAt": "2026-10-30T03:15:23.863Z",
+      "confirmedBy": 2
+    }
+  },
+  "1061": {
+    "orderId": 1061,
+    "packingChecklist": [
+      1056
+    ],
+    "packingUpdatedAt": "2026-10-30T03:32:02.372Z",
+    "driverName": "Lê Văn Tài",
+    "driverPhone": "0988776655",
+    "vehicleType": "Xe ba gác",
+    "licensePlate": "51-T2 123.45",
+    "estimatedDeliveryTime": "Ngày 30/10/2026 · Buổi sáng (08:00 - 10:30)",
+    "deliveryNotes": "Hàng nặng, cần người đỡ khi dỡ hàng",
+    "assignedAt": "2026-10-30T03:32:11.628Z",
+    "updatedAt": "2026-10-30T03:32:11.628Z",
+    "paymentInfo": {
+      "method": "COD",
+      "amount": 670000,
+      "status": "CONFIRMED",
+      "storePaidAt": "2026-10-30T03:32:42.383Z",
+      "updatedAt": "2026-10-30T03:32:50.348Z",
+      "supplierConfirmedAt": "2026-10-30T03:32:50.348Z",
+      "confirmedBy": 2
+    }
+  },
+  "1062": {
+    "orderId": 1062,
+    "packingChecklist": [
+      1057
+    ],
+    "packingUpdatedAt": "2026-10-30T03:37:25.773Z",
+    "driverName": "Lê Văn Tài",
+    "driverPhone": "0988776655",
+    "vehicleType": "Xe ba gác",
+    "licensePlate": "51-T2 123.45",
+    "estimatedDeliveryTime": "Ngày 31/10/2026 · Đầu chiều (13:30 - 15:30)",
+    "deliveryNotes": "Hàng nặng, cần người đỡ khi dỡ hàng",
+    "assignedAt": "2026-10-30T03:38:48.239Z",
+    "updatedAt": "2026-10-30T03:38:48.239Z",
+    "paymentInfo": {
+      "method": "COD",
+      "amount": 670000,
+      "status": "CONFIRMED",
+      "storePaidAt": "2026-10-30T03:41:53.826Z",
+      "updatedAt": "2026-10-30T03:42:11.594Z",
+      "supplierConfirmedAt": "2026-10-30T03:42:11.593Z",
+      "confirmedBy": 2
+    }
   }
 }

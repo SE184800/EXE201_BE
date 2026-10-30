@@ -6,8 +6,8 @@
     "vehicleType": "Xe ba gác",
     "licensePlate": "51-T2 123.45",
     "deliveryNotes": "Hàng nặng, cần người đỡ khi dỡ hàng",
-    "supplierId": null,
-    "lastUsedAt": "2026-10-30T02:33:53.359Z"
+    "supplierId": 2,
+    "lastUsedAt": "2026-10-30T03:38:48.252Z"
   },
   {
     "id": "drv-1",
@@ -15,7 +15,9 @@
     "driverPhone": "0912345678",
     "vehicleType": "Xe ba gác chở hàng",
     "licensePlate": "59X1-888.99",
-    "deliveryNotes": "Tài xế quen, hỗ trợ khuân vác vào tiệm."
+    "deliveryNotes": "Tài xế quen, hỗ trợ khuân vác vào tiệm.",
+    "supplierId": 2,
+    "lastUsedAt": "2026-10-30T03:05:42.781Z"
   },
   {
     "id": "drv-2",
