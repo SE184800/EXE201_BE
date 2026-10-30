@@ -1,7 +1,7 @@
 const { audit, problem, httpsDocument, verificationComplete } = require('./platformPolicy');
 const { moderateContent } = require('./contentModerationService');
-const { walletService } = require('./walletService');
 const deliveryService = require('./deliveryService');
+const { settleOrderToSupplier, refundPaidOrder, walletService } = require('./walletService');
 const ORDER_STATUSES = Object.freeze([
   'PENDING', 'APPROVED', 'REJECTED', 'PREPARING', 'SHIPPING', 'ISSUE_HANDLING', 'DELIVERED', 'COMPLETED',
 ]);
@@ -105,6 +105,16 @@ function serializeOrder(order) {
       deliveryRadiusKm: order.supplier.deliveryRadiusKm ? numberValue(order.supplier.deliveryRadiusKm) : 10,
       phone: order.supplier.user?.phone || '0908 123 789',
     } : null,
+    // Wallet payment state. null when the order was not paid with a wallet.
+    walletPayment: order.orderPayment
+      ? {
+          id: order.orderPayment.id,
+          status: order.orderPayment.status,
+          amount: numberValue(order.orderPayment.amount),
+          paidAt: order.orderPayment.paidAt,
+          refunded: Boolean(order.orderPayment.refund),
+        }
+      : null,
     items: order.items.map((item) => ({
       id: item.id, productId: item.productId, productName: item.productName,
       packaging: item.packaging, quantity: item.quantity,
@@ -412,7 +422,7 @@ function createSupplierService(prisma) {
     const where = { supplierId: profile.id, ...(status ? { status } : {}) };
     const [orders, total] = await Promise.all([prisma.wholesaleOrder.findMany({
       where,
-      include: { buyer: true, items: true, complaint: true },
+      include: { buyer: true, items: true, complaint: true, orderPayment: { include: { refund: { select: { id: true } } } } },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 21, skip: (page - 1) * 20,
     }), prisma.wholesaleOrder.count({ where })]);
     return { orders: orders.slice(0, 20).map(serializeOrder), total, page, hasMore: orders.length > 20 };
@@ -482,13 +492,33 @@ function createSupplierService(prisma) {
           if (result.count !== 1) throw Object.assign(new Error('Sản phẩm “' + item.productName + '” không đủ tồn kho hoặc đã ẩn.'), { code: 'INSUFFICIENT_STOCK' });
         }
       }
-      if (status === 'REJECTED' && ['APPROVED', 'PREPARING', 'SHIPPING', 'ISSUE_HANDLING'].includes(order.status)) {
-        for (const item of order.items) {
-          await transaction.supplierProduct.updateMany({
-            where: { id: item.productId, supplierId: profile.id },
-            data: { stockQty: { increment: item.quantity } },
+      // Money paid with the buyer wallet reaches the supplier once the
+      // order is delivered or completed, so the wallet follows the existing order flow.
+      if (status === 'DELIVERED' || status === 'COMPLETED') {
+        try {
+          await settleOrderToSupplier(transaction, order);
+        } catch (err) {
+          console.error('Loi quyet toan vi:', err.message);
+        }
+      }
+      if (status === 'REJECTED') {
+        if (['APPROVED', 'PREPARING', 'SHIPPING', 'ISSUE_HANDLING'].includes(order.status)) {
+          for (const item of order.items) {
+            await transaction.supplierProduct.updateMany({
+              where: { id: item.productId, supplierId: profile.id },
+              data: { stockQty: { increment: item.quantity } },
+            });
+          }
+        }
+        const payment = await transaction.orderPayment.findUnique({ where: { orderId: order.id } });
+        if (payment && !payment.refund) {
+          await refundPaidOrder(transaction, {
+            orderId: order.id,
+            actorId: userId,
+            reason: normalizedRejectReason || 'Chu vua tu choi don hang.',
           });
         }
+      }
       }
       await audit(transaction, userId, 'ORDER_STATUS_CHANGED', 'ORDER', order.id, { before: order.status, after: status, rejectReason: status === 'REJECTED' ? normalizedRejectReason : null });
     }, { isolationLevel: 'Serializable' });
@@ -509,7 +539,7 @@ function createSupplierService(prisma) {
     }
 
     return serializeOrder(await prisma.wholesaleOrder.findUnique({
-      where: { id: order.id }, include: { buyer: true, items: true, complaint: true },
+      where: { id: order.id }, include: { buyer: true, items: true, complaint: true, orderPayment: { include: { refund: { select: { id: true } } } } },
     }));
   }
 
@@ -599,7 +629,7 @@ function createSupplierService(prisma) {
       });
       return serializeOrder(await tx.wholesaleOrder.findUniqueOrThrow({
         where: { id: order.id },
-        include: { buyer: true, items: true, complaint: true },
+        include: { buyer: true, items: true, complaint: true, orderPayment: { include: { refund: { select: { id: true } } } } },
       }));
     }, { isolationLevel: 'Serializable' });
   }
@@ -613,7 +643,7 @@ function createSupplierService(prisma) {
         include: { priceHistory: { orderBy: { createdAt: 'desc' }, take: 1 } },
         orderBy: { updatedAt: 'desc' },
       }),
-      prisma.wholesaleOrder.findMany({ where: { supplierId: profile.id }, include: { buyer: true, items: true, complaint: true }, orderBy: { createdAt: 'desc' }, take: 50 }),
+      prisma.wholesaleOrder.findMany({ where: { supplierId: profile.id }, include: { buyer: true, items: true, complaint: true, orderPayment: { include: { refund: { select: { id: true } } } } }, orderBy: { createdAt: 'desc' }, take: 50 }),
       prisma.wholesaleOrder.count({ where: { supplierId: profile.id, status: 'PENDING' } }),
       prisma.wholesaleOrder.count({ where: { supplierId: profile.id, status: 'PENDING', depositStatus: 'SUBMITTED' } }),
       prisma.wholesaleOrder.aggregate({ where: { supplierId: profile.id, status: 'DELIVERED' }, _sum: { total: true } }),

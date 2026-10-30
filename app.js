@@ -21,13 +21,13 @@ const { createProfileRoutes } = require('./routes/profileRoutes');
 const { createRestockRoutes } = require('./routes/restockRoutes');
 const { createAdvisorRoutes } = require('./routes/advisorRoutes');
 const { createOrderRoutes } = require('./routes/orderRoutes');
-const { createWalletRoutes } = require('./routes/walletRoutes');
 const { createPasswordRoutes } = require('./routes/passwordRoutes');
 const { createAdminRoutes } = require('./routes/adminRoutes');
 const { createComplaintRoutes } = require('./routes/complaintRoutes');
 const { createSupplierQuoteRoutes, createStoreQuoteRoutes } = require('./routes/quoteRoutes');
 const { createSubscriptionRoutes } = require('./routes/subscriptionRoutes');
 const { createContractRoutes } = require('./routes/contractRoutes');
+const { createWalletRoutes, createAdminWalletRoutes } = require('./routes/walletRoutes');
 const { createSubscriptionGate } = require('./middlewares/subscriptionMiddleware');
 
 function createApp(prisma, config) {
@@ -193,6 +193,16 @@ function createApp(prisma, config) {
   app.use(
     '/api/advisor',
     createAdvisorRoutes(prisma, requireAuth, config)
+  );
+
+  app.use(
+    '/api/wallet',
+    createWalletRoutes(prisma, requireAuth, config)
+  );
+
+  app.use(
+    '/api/admin/wallet',
+    createAdminWalletRoutes(prisma, requireAuth)
   );
 
   // =========================

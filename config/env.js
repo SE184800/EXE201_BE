@@ -42,6 +42,15 @@ function readConfig(env = process.env) {
     throw new Error('PORT không hợp lệ.');
   const aiProvider = env.AI_PROVIDER || (env.GEMINI_API_KEY ? 'GEMINI' : 'OPENAI');
   if (!['GEMINI', 'OPENAI'].includes(aiProvider)) throw new Error('AI_PROVIDER phải là GEMINI hoặc OPENAI.');
+  // Bank account that receives the VietQR deposits. Every value is optional so
+  // a deployment without the feature simply hides the QR button.
+  const qrBank = {
+    code: (env.QR_BANK_CODE || '').trim(),
+    name: (env.QR_BANK_NAME || '').trim(),
+    accountNumber: (env.QR_BANK_ACCOUNT || '').trim(),
+    accountHolder: (env.QR_BANK_HOLDER || '').trim(),
+  };
+  const qrEnabled = Boolean(qrBank.code && qrBank.accountNumber && qrBank.accountHolder);
   return {
     mailTransport,
     gmail: { user: env.GMAIL_USER || '', appPassword: env.GMAIL_APP_PASSWORD || '' },
@@ -57,6 +66,8 @@ function readConfig(env = process.env) {
     trustProxyHops,
     serveWeb: env.SERVE_WEB === 'true',
     sessionSeconds: 28800,
+    qrBank,
+    qrEnabled,
   };
 }
 module.exports = { readConfig };
