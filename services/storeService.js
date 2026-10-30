@@ -18,6 +18,10 @@ const DEFAULT_STORE_PROFILES = {
     longitude: 106.660172,
     isAddressVerified: true,
     isConfigured: true,
+    bankName: 'Vietcombank',
+    bankAccountNumber: '0071001234567',
+    bankAccountHolder: 'TIEM TAP HOA AN KHANG',
+    bankQrImageUrl: null,
   },
 };
 
@@ -115,6 +119,10 @@ function getStoreProfile(userId, defaultPhone = '') {
       longitude: null,
       isAddressVerified: false,
       isConfigured: false,
+      bankName: null,
+      bankAccountNumber: null,
+      bankAccountHolder: null,
+      bankQrImageUrl: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -135,6 +143,22 @@ function validateStoreInput(body = {}, currentUserId = null) {
   const latitude = typeof body.latitude === 'number' && !Number.isNaN(body.latitude) ? body.latitude : null;
   const longitude = typeof body.longitude === 'number' && !Number.isNaN(body.longitude) ? body.longitude : null;
   const isAddressVerified = Boolean(body.isAddressVerified);
+
+  // Banking info (optional for auto-fill on withdrawals/deposits)
+  const bankName = typeof body.bankName === 'string' ? body.bankName.trim().slice(0, 100) : '';
+  const bankAccountNumber = typeof body.bankAccountNumber === 'string' ? body.bankAccountNumber.trim().replace(/[\s.-]/g, '').slice(0, 34) : '';
+  const bankAccountHolder = typeof body.bankAccountHolder === 'string' ? body.bankAccountHolder.trim().toUpperCase().slice(0, 100) : '';
+  let bankQrImageUrl = typeof body.bankQrImageUrl === 'string' ? body.bankQrImageUrl.trim() : '';
+
+  if (bankAccountNumber && !/^[A-Za-z0-9]{4,34}$/.test(bankAccountNumber)) {
+    errors.bankAccountNumber = 'Số tài khoản ngân hàng không hợp lệ (gồm 4-34 ký tự số/chữ cái, không dấu).';
+  }
+  if (bankAccountNumber && !bankName) {
+    errors.bankName = 'Vui lòng chọn ngân hàng khi đã nhập số tài khoản.';
+  }
+  if (bankQrImageUrl && (!bankQrImageUrl.startsWith('/uploads/') && !bankQrImageUrl.startsWith('http'))) {
+    bankQrImageUrl = '';
+  }
 
   if (!storeName || storeName.length < 2 || storeName.length > 100) {
     errors.storeName = 'Tên tiệm tạp hóa cần từ 2 đến 100 ký tự.';
@@ -205,6 +229,10 @@ function validateStoreInput(body = {}, currentUserId = null) {
       latitude,
       longitude,
       isAddressVerified,
+      bankName: bankName || null,
+      bankAccountNumber: bankAccountNumber || null,
+      bankAccountHolder: bankAccountHolder || null,
+      bankQrImageUrl: bankQrImageUrl || null,
     },
   };
 }

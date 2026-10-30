@@ -1,7 +1,41 @@
 const express = require('express');
+const multer = require('multer');
+const path = require('node:path');
+const fs = require('node:fs');
+const crypto = require('node:crypto');
 const { audit } = require('../services/platformPolicy');
 const { normalizePhone, todayInVietnam, getBirthDateRange } = require('../services/registrationValidation');
 const { getStoreProfile, saveStoreProfile } = require('../services/storeService');
+
+const uploadsDir = path.join(__dirname, '../public/uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+const qrStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadsDir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    const safeExt = ['.jpg', '.jpeg', '.png', '.webp'].includes(ext) ? ext : '.png';
+    const rand = crypto.randomBytes(16).toString('hex');
+    cb(null, `bank-qr-${rand}${safeExt}`);
+  },
+});
+
+const uploadQr = multer({
+  storage: qrStorage,
+  limits: { fileSize: 3 * 1024 * 1024 }, // 3MB maximum
+  fileFilter: (req, file, cb) => {
+    const allowedMimes = ['image/jpeg', 'image/png', 'image/webp'];
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Chỉ chấp nhận file ảnh định dạng JPG, PNG hoặc WEBP (tối đa 3MB). Không hỗ trợ SVG hoặc file thực thi.'));
+    }
+  },
+});
 
 const select = {
   id: true,
@@ -74,6 +108,25 @@ function createProfileRoutes(prisma, requireAuth) {
     }
   });
 
+  // Secure QR code upload endpoint
+  router.post('/upload-bank-qr', (req, res, next) => {
+    uploadQr.single('qrImage')(req, res, (err) => {
+      if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(400).json({ success: false, message: 'Dung lượng ảnh mã QR không được vượt quá 3MB.' });
+        }
+        return res.status(400).json({ success: false, message: `Lỗi tải ảnh: ${err.message}` });
+      } else if (err) {
+        return res.status(400).json({ success: false, message: err.message });
+      }
+      if (!req.file) {
+        return res.status(400).json({ success: false, message: 'Vui lòng chọn file ảnh mã QR để tải lên.' });
+      }
+      const imageUrl = `/uploads/${req.file.filename}`;
+      return res.json({ success: true, imageUrl, message: 'Tải ảnh mã QR thành công.' });
+    });
+  });
+
   router.get('/', async (req, res, next) => {
     try {
       const user = await prisma.user.findUniqueOrThrow({ where: { id: req.auth.user.id }, select });
@@ -107,6 +160,10 @@ function createProfileRoutes(prisma, requireAuth) {
           latitude: req.body.latitude,
           longitude: req.body.longitude,
           isAddressVerified: req.body.isAddressVerified,
+          bankName: req.body.bankName,
+          bankAccountNumber: req.body.bankAccountNumber,
+          bankAccountHolder: req.body.bankAccountHolder,
+          bankQrImageUrl: req.body.bankQrImageUrl,
         });
       }
 
