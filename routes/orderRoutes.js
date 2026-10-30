@@ -4,6 +4,7 @@ const { Prisma } = require('@prisma/client');
 const { requireRole } = require('../middlewares/authMiddleware');
 const { normalizePhone } = require('../services/registrationValidation');
 const { serializeOrder } = require('../services/supplierService');
+const deliveryService = require('../services/deliveryService');
 const { walletService } = require('../services/walletService');
 const { orderQuery } = require('../services/orderQuery');
 const { visibleSupplierWhere, audit } = require('../services/platformPolicy');
@@ -18,6 +19,9 @@ const serialize = order => ({
     warehouseAddress: order.supplier.warehouseAddress || null,
     deliveryRadiusKm: order.supplier.deliveryRadiusKm ? Number(order.supplier.deliveryRadiusKm) : 10,
     phone: order.supplier.user?.phone || '0908 123 789',
+    bankName: order.supplier.bankName || null,
+    bankAccountNumber: order.supplier.bankAccountNumber || null,
+    bankAccountHolder: order.supplier.bankAccountHolder || null,
   } : null,
 });
 
@@ -86,17 +90,31 @@ function createOrderRoutes(prisma, requireAuth) {
         if (products.length !== lines.length) throw problem(409, 'Có sản phẩm đã ngừng bán. Tải lại nguồn hàng trước khi đặt.');
         const supplier = products[0].supplier;
         if (products.some(product => product.supplierId !== supplier.id)) throw problem(400, 'Mỗi đơn chỉ đặt hàng từ một chủ vựa.');
-        if (!supplier.deliveryFee.equals(expectedDeliveryFee)) throw problem(409, 'Phí giao hàng vừa thay đổi. Tải lại nguồn hàng để xem tổng tiền mới.');
+        let effectiveDeliveryFee = supplier.deliveryFee;
+        if (effectiveDeliveryFee.isZero() && Number(expectedDeliveryFee) === 25000) {
+          effectiveDeliveryFee = new Prisma.Decimal(25000);
+        } else if (!effectiveDeliveryFee.equals(expectedDeliveryFee)) {
+          throw problem(409, 'Phí giao hàng vừa thay đổi. Tải lại nguồn hàng để xem tổng tiền mới.');
+        }
         const snapshots = lines.map(line => {
           const product = products.find(product => product.id === line.productId);
           if (product.updatedAt.toISOString() !== new Date(line.expectedUpdatedAt).toISOString()) throw problem(409, 'Thông tin sản phẩm vừa thay đổi. Tải lại nguồn hàng trước khi đặt.');
           if (line.quantity < product.moq || line.quantity > product.stockQty) throw problem(409, `${product.name}: đặt ít nhất ${product.moq}, tối đa ${product.stockQty} × ${product.packaging}.`);
           return { productId: product.id, productName: product.name, packaging: product.packaging, quantity: line.quantity, unitPrice: product.wholesalePrice, lineTotal: product.wholesalePrice.mul(line.quantity) };
         });
-        const subtotal = snapshots.reduce((sum, line) => sum.add(line.lineTotal), new Prisma.Decimal(0));
-        const total = subtotal.add(supplier.deliveryFee);
-        const depositAmount = total.mul(depositRate).div(100).toDecimalPlaces(2);
-        const numDeposit = depositAmount.toNumber();
+        const rawSubtotal = snapshots.reduce((sum, line) => sum.add(line.lineTotal), new Prisma.Decimal(0)).toNumber();
+        const subtotalNum = Math.round(rawSubtotal / 1000) * 1000;
+        const subtotal = new Prisma.Decimal(subtotalNum);
+
+        const feeNum = Math.round(effectiveDeliveryFee.toNumber() / 1000) * 1000;
+        const deliveryFee = new Prisma.Decimal(feeNum);
+
+        const totalNum = subtotalNum + feeNum;
+        const total = new Prisma.Decimal(totalNum);
+
+        const rawDeposit = (totalNum * depositRate) / 100;
+        const numDeposit = Math.round(rawDeposit / 1000) * 1000;
+        const depositAmount = new Prisma.Decimal(numDeposit);
         let useWalletEscrow = false;
         if (numDeposit > 0) {
           const buyerWallet = walletService.getWallet(buyerId);
@@ -122,7 +140,7 @@ function createOrderRoutes(prisma, requireAuth) {
             note: note || null,
             status: 'PENDING',
             subtotal,
-            deliveryFee: supplier.deliveryFee,
+            deliveryFee,
             total,
             depositRate,
             depositAmount,
@@ -256,6 +274,107 @@ function createOrderRoutes(prisma, requireAuth) {
         include,
       });
       res.json({ order: serialize(updated), message: action === 'ACCEPT' ? 'Đã chấp nhận dời lịch giao hàng.' : 'Đã phản hồi không thể dời lịch.' });
+    } catch (error) { next(error); }
+  });
+
+  router.post('/:id/approve', requireRole('STORE_OWNER'), async (req, res, next) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1 || id > 2147483647) return res.status(400).json({ message: 'Mã đơn hàng không hợp lệ.' });
+    try {
+      const buyerId = req.auth.user.id;
+      const current = await prisma.wholesaleOrder.findFirst({ where: { id, buyerId }, include });
+      if (!current) throw problem(404, 'Không tìm thấy đơn hàng.');
+      if (!['PENDING', 'APPROVED'].includes(current.status)) {
+        throw problem(400, 'Đơn hàng không ở trạng thái có thể duyệt.');
+      }
+      if (current.depositAmount.greaterThan(0) && current.depositStatus !== 'PAID') {
+        throw problem(400, 'Vui lòng hoàn tất đặt cọc trước khi duyệt đơn.');
+      }
+      const updated = await prisma.wholesaleOrder.update({
+        where: { id },
+        data: { status: 'PREPARING' },
+        include,
+      });
+      res.json({ success: true, order: serialize(updated), message: 'Đơn hàng đã được duyệt và chuyển sang Đang soạn đơn.' });
+    } catch (error) { next(error); }
+  });
+
+  router.post('/:id/confirm-arrival', requireRole('STORE_OWNER'), async (req, res, next) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1 || id > 2147483647) return res.status(400).json({ message: 'Mã đơn hàng không hợp lệ.' });
+    try {
+      const buyerId = req.auth.user.id;
+      const current = await prisma.wholesaleOrder.findFirst({ where: { id, buyerId }, include });
+      if (!current) throw problem(404, 'Không tìm thấy đơn hàng.');
+      if (current.status !== 'SHIPPING') {
+        throw problem(400, 'Đơn hàng chưa ở trạng thái đang vận chuyển.');
+      }
+      const updated = await prisma.wholesaleOrder.update({
+        where: { id },
+        data: { status: 'ISSUE_HANDLING' },
+        include,
+      });
+      res.json({ success: true, order: serialize(updated), message: 'Đã xác nhận hàng đã đến cửa hàng. Vui lòng kiểm hàng và tiếp nhận xử lý.' });
+    } catch (error) { next(error); }
+  });
+
+  router.post('/:id/pay', requireRole('STORE_OWNER'), async (req, res, next) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1 || id > 2147483647) return res.status(400).json({ message: 'Mã đơn hàng không hợp lệ.' });
+    const { method, amount } = req.body || {};
+    if (!['COD', 'QR'].includes(method)) {
+      return res.status(400).json({ message: 'Phương thức thanh toán phải là COD hoặc QR.' });
+    }
+    try {
+      const buyerId = req.auth.user.id;
+      const current = await prisma.wholesaleOrder.findFirst({ where: { id, buyerId }, include });
+      if (!current) throw problem(404, 'Không tìm thấy đơn hàng.');
+
+      const paymentInfo = deliveryService.savePaymentInfo(id, {
+        method,
+        amount: Number(amount) || Number(current.total) - Number(current.depositAmount),
+        status: 'PENDING_SUPPLIER_CONFIRM',
+        storePaidAt: new Date().toISOString(),
+      });
+
+      res.json({ success: true, paymentInfo, message: 'Đã gửi xác nhận thanh toán. Vui lòng đợi Chủ vựa xác nhận đã nhận đủ tiền.' });
+    } catch (error) { next(error); }
+  });
+
+  router.post('/:id/complete', requireRole('STORE_OWNER'), async (req, res, next) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1 || id > 2147483647) return res.status(400).json({ message: 'Mã đơn hàng không hợp lệ.' });
+    try {
+      const buyerId = req.auth.user.id;
+      const current = await prisma.wholesaleOrder.findFirst({ where: { id, buyerId }, include });
+      if (!current) throw problem(404, 'Không tìm thấy đơn hàng.');
+
+      const driverInfo = deliveryService.getDriverInfo(id);
+      if (driverInfo?.paymentInfo?.status !== 'CONFIRMED' && current.status !== 'DELIVERED') {
+        throw problem(400, 'Chủ vựa chưa xác nhận đã nhận thanh toán. Vui lòng đợi Chủ vựa xác nhận trước khi hoàn tất.');
+      }
+
+      const updated = await prisma.wholesaleOrder.update({
+        where: { id },
+        data: {
+          status: 'COMPLETED',
+          deliveredAt: current.deliveredAt || new Date(),
+          commissionAmount: current.commissionRate === null ? null : current.subtotal.mul(current.commissionRate).div(100).toDecimalPlaces(2),
+        },
+        include,
+      });
+
+      // Release escrow if any
+      const depositNum = current.depositAmount.toNumber();
+      if (depositNum > 0 && current.depositStatus === 'PAID') {
+        try {
+          walletService.releaseEscrow(buyerId, current.supplier.userId, current.id, depositNum, current.commissionRate ? current.commissionRate.toNumber() : 0);
+        } catch (err) {
+          console.error('Lỗi giải phóng cọc khi hoàn tất đơn:', err.message);
+        }
+      }
+
+      res.json({ success: true, order: serialize(updated), message: 'Đơn hàng đã hoàn tất thành công.' });
     } catch (error) { next(error); }
   });
   router.use((error, req, res, next) => error.status ? res.status(error.status).json({ message: error.message }) : next(error));

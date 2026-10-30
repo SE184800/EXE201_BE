@@ -4,6 +4,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { requireRole } = require('../middlewares/authMiddleware');
 const { walletService } = require('../services/walletService');
+const { sendComplaintNoticeEmail } = require('../services/complaintMailService');
 
 const COMPLAINT_REASONS = new Set([
   'DAMAGED',
@@ -123,10 +124,6 @@ function createComplaintRoutes(prisma, requireAuth) {
         ? imageUrl.trim()
         : null;
 
-      if (!normalizedImageUrl) {
-        return res.status(400).json({ message: 'Vui lòng cung cấp hình ảnh chụp bằng chứng hàng bị hỏng hoặc thiếu trước khi gửi báo cáo.' });
-      }
-
       const c = await prisma.orderComplaint.create({
         data: {
           orderId,
@@ -144,6 +141,41 @@ function createComplaintRoutes(prisma, requireAuth) {
           where: { id: orderId },
           data: { status: 'ISSUE_HANDLING' },
         });
+      }
+
+      // Send email notification to supplier
+      try {
+        const supplier = await prisma.supplierProfile.findUnique({
+          where: { id: order.supplierId },
+          include: { user: true },
+        });
+        const supplierEmail = supplier?.user?.email || 'supplier@supplymind.vn';
+        const storeName = req.auth.user.name || req.auth.user.username || 'Tiệm Tạp Hóa';
+        const match = normalizedDescription.match(
+          /^\[Sự cố:\s*([^|\]]+)(?:\s*\|\s*Bồi hoàn ước tính:\s*([^|\]]+))?(?:\s*\|\s*Đề xuất:\s*([^|\]]+))?\]\s*\n?([\s\S]*)$/
+        );
+        const itemSummaries = match ? match[1]?.trim() : '';
+        const claimValue = match ? match[2]?.trim() : '';
+        const resolutionProposal = match ? match[3]?.trim() : '';
+        const details = match ? match[4]?.trim() : normalizedDescription;
+        const images = normalizedImageUrl
+          ? (normalizedImageUrl.includes('|||') ? normalizedImageUrl.split('|||') : [normalizedImageUrl])
+          : [];
+
+        sendComplaintNoticeEmail({
+          to: supplierEmail,
+          supplierName: supplier?.businessName || supplier?.user?.name || 'Quý Chủ Vựa',
+          storeName,
+          orderId,
+          reasonLabel: REASON_LABELS[normalizedReason] || normalizedReason,
+          description: details,
+          itemSummaries,
+          claimValue,
+          resolutionProposal,
+          evidenceImages: images,
+        }).catch((err) => console.error('Lỗi gửi email sự cố:', err.message));
+      } catch (err) {
+        console.error('Lỗi tra cứu thông tin gửi email:', err.message);
       }
 
       res.status(201).json({ complaint: c });
@@ -169,11 +201,70 @@ function createComplaintRoutes(prisma, requireAuth) {
       });
       if (!complaint) return res.status(404).json({ message: 'Không tìm thấy khiếu nại của đơn hàng.' });
 
-      const { resolutionType, deductAmount, note } = req.body || {};
+      const { resolutionType, deductAmount, note, items } = req.body || {};
       const order = complaint.order;
       const depositAmt = Number(order.depositAmount) || 0;
       const orderTotal = Number(order.total) || 0;
       const remainingCOD = Math.max(0, orderTotal - depositAmt);
+
+      if (resolutionType === 'AGREE_REPLACE_0VND' || resolutionType === 'REPLACE' || resolutionType === 'AGREE_REPLACE') {
+        const itemsToReplace = Array.isArray(items) && items.length > 0
+          ? items
+          : order.items.map((it) => ({
+              productId: it.productId,
+              productName: it.productName,
+              packaging: it.packaging,
+              quantity: it.quantity,
+            }));
+
+        const newOrder = await prisma.wholesaleOrder.create({
+          data: {
+            buyerId: order.buyerId,
+            supplierId: order.supplierId,
+            status: 'PREPARING',
+            subtotal: 0,
+            deliveryFee: 0,
+            total: 0,
+            depositRate: 0,
+            depositAmount: 0,
+            depositStatus: 'NONE',
+            recipientName: order.recipientName,
+            recipientPhone: order.recipientPhone,
+            deliveryAddress: order.deliveryAddress,
+            note: `Đơn giao bổ sung 0đ bù hàng sự cố cho đơn #${order.id}`,
+            items: {
+              create: itemsToReplace.map((it) => ({
+                productId: it.productId,
+                productName: it.productName,
+                packaging: it.packaging || 'Phần',
+                quantity: it.quantity || 1,
+                unitPrice: 0,
+                lineTotal: 0,
+              })),
+            },
+          },
+          include: { items: true },
+        });
+
+        const resolveMsg = note && note.trim().length >= 3
+          ? note.trim()
+          : `Chủ vựa đã đồng ý giao bù hàng mới và tự động khởi tạo đơn giao bù 0đ #${newOrder.id} cho cửa hàng.`;
+
+        const updatedComplaint = await prisma.orderComplaint.update({
+          where: { id },
+          data: {
+            status: 'RESOLVED',
+            response: resolveMsg,
+          },
+        });
+
+        return res.json({
+          success: true,
+          complaint: updatedComplaint,
+          supplementaryOrder: newOrder,
+          message: resolveMsg,
+        });
+      }
 
       if (resolutionType === 'DEDUCT_COD') {
         const numDeduct = Math.max(0, Number(deductAmount) || 0);
@@ -297,7 +388,10 @@ function createComplaintRoutes(prisma, requireAuth) {
       const p = await prisma.supplierProfile.findUnique({ where: { userId: req.auth.user.id } });
       if (!p) return res.status(404).json({ message: 'Không tìm thấy hồ sơ nhà cung cấp.' });
 
-      const c = await prisma.orderComplaint.findFirst({ where: { id, supplierId: p.id } });
+      const c = await prisma.orderComplaint.findFirst({
+        where: { id, supplierId: p.id },
+        include: { order: { include: { items: true } } },
+      });
       if (!c) return res.status(404).json({ message: 'Không tìm thấy khiếu nại.' });
 
       const status = ['IN_REVIEW', 'RESOLVED', 'REJECTED'].includes(req.body?.status) ? req.body.status : null;
@@ -307,6 +401,42 @@ function createComplaintRoutes(prisma, requireAuth) {
         return res.status(400).json({ message: 'Nhập phản hồi từ 3 đến 1.000 ký tự khi kết thúc báo cáo.' });
       }
 
+      let supplementaryOrder = null;
+      if (status === 'RESOLVED' && (response.includes('AGREE_REPLACE') || response.includes('giao bù') || response.includes('Giao bù')) && c.order) {
+        try {
+          supplementaryOrder = await prisma.wholesaleOrder.create({
+            data: {
+              buyerId: c.order.buyerId,
+              supplierId: c.order.supplierId,
+              status: 'PREPARING',
+              subtotal: 0,
+              deliveryFee: 0,
+              total: 0,
+              depositRate: 0,
+              depositAmount: 0,
+              depositStatus: 'NONE',
+              recipientName: c.order.recipientName,
+              recipientPhone: c.order.recipientPhone,
+              deliveryAddress: c.order.deliveryAddress,
+              note: `Đơn giao bổ sung 0đ bù hàng theo khiếu nại đơn #${c.order.id}`,
+              items: {
+                create: c.order.items.map((it) => ({
+                  productId: it.productId,
+                  productName: it.productName,
+                  packaging: it.packaging || 'Phần',
+                  quantity: it.quantity || 1,
+                  unitPrice: 0,
+                  lineTotal: 0,
+                })),
+              },
+            },
+            include: { items: true },
+          });
+        } catch (err) {
+          console.error('Không thể tự động tạo đơn bù 0đ:', err.message);
+        }
+      }
+
       const saved = await prisma.orderComplaint.update({
         where: { id },
         data: {
@@ -314,7 +444,7 @@ function createComplaintRoutes(prisma, requireAuth) {
           response: response || null,
         },
       });
-      res.json({ complaint: saved });
+      res.json({ complaint: saved, supplementaryOrder });
     } catch (e) {
       if (e.code === 'P2000') return res.status(400).json({ message: 'Phản hồi vượt quá giới hạn cho phép.' });
       next(e);

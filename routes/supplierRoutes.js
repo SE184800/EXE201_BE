@@ -68,6 +68,12 @@ function createSupplierRoutes(prisma, requireAuth) {
   router.patch('/orders/:orderId/driver-info', controller.updateDriverInfo);
   router.patch('/orders/:orderId/deposit', controller.updateDeposit);
 
+  router.get('/drivers', controller.getDrivers);
+  router.post('/drivers', controller.saveDriver);
+  router.post('/orders/:orderId/packing', controller.savePacking);
+  router.post('/orders/:orderId/incident', controller.reportIncident);
+  router.post('/orders/:orderId/confirm-payment', controller.confirmPayment);
+
   router.get('/consignments/requests', async (req, res, next) => {
     try {
       const profile = await prisma.supplierProfile.findUnique({ where: { userId: req.auth.user.id } });

@@ -140,6 +140,54 @@ function createSupplierController(service) {
         return next(error);
       }
     },
+    async getDrivers(req, res, next) {
+      try {
+        const data = await service.getSavedDrivers(req.auth.user.id);
+        return res.json({ success: true, ...data });
+      } catch (error) {
+        return next(error);
+      }
+    },
+    async saveDriver(req, res, next) {
+      try {
+        const profile = await service.getProfile(req.auth.user.id);
+        const { saveDriverToSavedList } = require('../services/deliveryService');
+        const driver = saveDriverToSavedList(req.body, profile?.id);
+        return res.json({ success: true, driver });
+      } catch (error) {
+        return next(error);
+      }
+    },
+    async reportIncident(req, res, next) {
+      const orderId = idFrom(req.params.orderId);
+      if (!orderId) return res.status(400).json({ success: false, message: 'Mã đơn hàng không hợp lệ.' });
+      try {
+        const result = await service.reportIncident(req.auth.user.id, orderId, req.body);
+        return res.json(result);
+      } catch (error) {
+        return next(error);
+      }
+    },
+    async confirmPayment(req, res, next) {
+      const orderId = idFrom(req.params.orderId);
+      if (!orderId) return res.status(400).json({ success: false, message: 'Mã đơn hàng không hợp lệ.' });
+      try {
+        const result = await service.confirmPayment(req.auth.user.id, orderId);
+        return res.json(result);
+      } catch (error) {
+        return next(error);
+      }
+    },
+    async savePacking(req, res, next) {
+      const orderId = idFrom(req.params.orderId);
+      if (!orderId) return res.status(400).json({ success: false, message: 'Mã đơn hàng không hợp lệ.' });
+      try {
+        const result = await service.savePacking(req.auth.user.id, orderId, req.body?.checkedItemIds);
+        return res.json(result);
+      } catch (error) {
+        return next(error);
+      }
+    },
     uploadImage(req, res) {
       if (!req.file) {
         return res.status(400).json({ success: false, message: 'Vui lòng chọn file ảnh để tải lên.' });

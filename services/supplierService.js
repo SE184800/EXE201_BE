@@ -3,23 +3,24 @@ const { moderateContent } = require('./contentModerationService');
 const { walletService } = require('./walletService');
 const deliveryService = require('./deliveryService');
 const ORDER_STATUSES = Object.freeze([
-  'PENDING', 'APPROVED', 'REJECTED', 'PREPARING', 'SHIPPING', 'ISSUE_HANDLING', 'DELIVERED',
+  'PENDING', 'APPROVED', 'REJECTED', 'PREPARING', 'SHIPPING', 'ISSUE_HANDLING', 'DELIVERED', 'COMPLETED',
 ]);
 
 const STATUS_LABELS = Object.freeze({
   PENDING: 'Chờ duyệt', APPROVED: 'Đã duyệt', REJECTED: 'Đã từ chối',
-  PREPARING: 'Đang chuẩn bị', SHIPPING: 'Đang vận chuyển',
-  ISSUE_HANDLING: 'Tiếp nhận xử lý', DELIVERED: 'Đã giao',
+  PREPARING: 'Đang soạn đơn', SHIPPING: 'Đang vận chuyển',
+  ISSUE_HANDLING: 'Tiếp nhận xử lý', DELIVERED: 'Đã giao', COMPLETED: 'Hoàn tất',
 });
 
 const TRANSITIONS = Object.freeze({
-  PENDING: ['APPROVED', 'REJECTED'],
+  PENDING: ['APPROVED', 'PREPARING', 'REJECTED'],
   APPROVED: ['PREPARING'],
   PREPARING: ['SHIPPING'],
   SHIPPING: ['ISSUE_HANDLING', 'DELIVERED'],
-  ISSUE_HANDLING: ['DELIVERED', 'REJECTED'],
+  ISSUE_HANDLING: ['DELIVERED', 'COMPLETED', 'REJECTED'],
+  DELIVERED: ['COMPLETED'],
+  COMPLETED: [],
   REJECTED: [],
-  DELIVERED: [],
 });
 
 function numberValue(value) {
@@ -157,7 +158,7 @@ function validateProfileInput(body = {}) {
       deliveryRadiusKm,
       ...extras,
       ...(phone !== undefined ? { phone } : {}),
-      ...(body.deliveryFee === undefined ? {} : { deliveryFee: body.deliveryFee }),
+      ...(body.deliveryFee === undefined ? { deliveryFee: 25000 } : { deliveryFee: body.deliveryFee > 0 ? body.deliveryFee : 25000 }),
       ...(body.bankName === undefined && body.bankAccountNumber === undefined && body.bankAccountHolder === undefined
         ? {}
         : {
@@ -434,10 +435,10 @@ function createSupplierService(prisma) {
       throw error;
     }
     if (driverInfo) {
-      deliveryService.saveDriverInfo(order.id, driverInfo);
+      deliveryService.saveDriverInfo(order.id, driverInfo, profile.id);
     }
     const normalizedRejectReason = typeof rejectReason === 'string' ? rejectReason.trim() : '';
-    if (status === 'APPROVED' && numberValue(order.depositAmount || 0) > 0 && order.depositStatus !== 'PAID') {
+    if ((status === 'APPROVED' || status === 'PREPARING') && numberValue(order.depositAmount || 0) > 0 && order.depositStatus !== 'PAID') {
       const error = new Error('Đơn này yêu cầu đặt cọc. Chỉ duyệt sau khi đã xác nhận tiền vào tài khoản.');
       error.code = 'DEPOSIT_REQUIRED';
       throw error;
@@ -453,7 +454,7 @@ function createSupplierService(prisma) {
       throw error;
     }
     await prisma.$transaction(async (transaction) => {
-      if (status === 'APPROVED') {
+      if (status === 'APPROVED' || (status === 'PREPARING' && order.status === 'PENDING')) {
         const currentProfile = await transaction.supplierProfile.findUnique({ where: { id: profile.id } });
         if (currentProfile.verificationStatus !== 'APPROVED') throw problem(403, 'Gian hàng cần được xác minh trước khi nhận đơn mới.');
       }
@@ -466,11 +467,13 @@ function createSupplierService(prisma) {
           ...(status === 'REJECTED' && order.depositStatus === 'PAID'
             ? { depositStatus: 'REFUNDED' }
             : {}),
-          ...(status === 'DELIVERED' ? { deliveredAt: new Date(), commissionAmount: order.commissionRate === null ? null : order.subtotal.mul(order.commissionRate).div(100).toDecimalPlaces(2) } : {}),
+          ...(status === 'DELIVERED' || status === 'COMPLETED'
+            ? { deliveredAt: new Date(), commissionAmount: order.commissionRate === null ? null : order.subtotal.mul(order.commissionRate).div(100).toDecimalPlaces(2) }
+            : {}),
         },
       });
       if (!changed.count) throw Object.assign(new Error('Đơn đã được xử lý. Vui lòng tải lại.'), { code: 'INVALID_ORDER_TRANSITION' });
-      if (status === 'APPROVED') {
+      if (status === 'APPROVED' || (status === 'PREPARING' && order.status === 'PENDING')) {
         for (const item of [...order.items].sort((a, b) => a.productId - b.productId)) {
           const result = await transaction.supplierProduct.updateMany({
             where: { id: item.productId, supplierId: profile.id, isActive: true, stockQty: { gte: item.quantity } },
@@ -490,7 +493,7 @@ function createSupplierService(prisma) {
       await audit(transaction, userId, 'ORDER_STATUS_CHANGED', 'ORDER', order.id, { before: order.status, after: status, rejectReason: status === 'REJECTED' ? normalizedRejectReason : null });
     }, { isolationLevel: 'Serializable' });
 
-    if (status === 'DELIVERED' && numberValue(order.depositAmount || 0) > 0 && order.depositStatus === 'PAID') {
+    if ((status === 'DELIVERED' || status === 'COMPLETED') && numberValue(order.depositAmount || 0) > 0 && order.depositStatus === 'PAID') {
       try {
         walletService.releaseEscrow(order.buyerId, profile.userId, order.id, numberValue(order.depositAmount), order.commissionRate ? numberValue(order.commissionRate) : 0);
       } catch (err) {
@@ -628,9 +631,128 @@ function createSupplierService(prisma) {
     };
   }
 
+  async function reportIncident(userId, orderId, body = {}) {
+    const profile = await requireProfile(userId);
+    const order = await prisma.wholesaleOrder.findFirst({
+      where: { id: orderId, supplierId: profile.id },
+      include: { buyer: true, items: true },
+    });
+    if (!order) throw problem(404, 'Không tìm thấy đơn hàng.');
+
+    const { damagedItems, damageType, damageTypeLabel, evidenceImageUrl, notes, action } = body;
+    if (!Array.isArray(damagedItems) || damagedItems.length === 0) {
+      throw problem(400, 'Vui lòng chọn ít nhất 1 mặt hàng bị hư hỏng.');
+    }
+
+    let supplementaryOrder = null;
+    const incidentData = {
+      orderId: order.id,
+      damagedItems,
+      damageType: damageType || 'DAMAGED_TRANSIT',
+      damageTypeLabel: damageTypeLabel || 'Hư hỏng bể vỡ khi vận chuyển',
+      evidenceImageUrl: evidenceImageUrl || null,
+      notes: notes || null,
+      action: action || 'REPLACE_0VND',
+      reportedBy: 'SUPPLIER',
+      reportedAt: new Date().toISOString(),
+    };
+
+    if (action === 'REPLACE_0VND' || !action) {
+      supplementaryOrder = await prisma.wholesaleOrder.create({
+        data: {
+          buyerId: order.buyerId,
+          supplierId: order.supplierId,
+          status: 'PREPARING',
+          subtotal: 0,
+          deliveryFee: 0,
+          total: 0,
+          depositRate: 0,
+          depositAmount: 0,
+          depositStatus: 'NONE',
+          recipientName: order.recipientName,
+          recipientPhone: order.recipientPhone,
+          deliveryAddress: order.deliveryAddress,
+          note: `Đơn giao bổ sung 0đ bù hàng sự cố vận chuyển cho đơn #${order.id}`,
+          items: {
+            create: damagedItems.map((it) => ({
+              productId: it.productId,
+              productName: it.productName,
+              packaging: it.packaging || 'Phần',
+              quantity: it.quantity || 1,
+              unitPrice: 0,
+              lineTotal: 0,
+            })),
+          },
+        },
+        include: { items: true, buyer: true },
+      });
+      incidentData.supplementaryOrderId = supplementaryOrder.id;
+    }
+
+    deliveryService.saveIncidentReport(order.id, incidentData);
+
+    return {
+      success: true,
+      incidentReport: incidentData,
+      supplementaryOrder: supplementaryOrder ? serializeOrder(supplementaryOrder) : null,
+      message: supplementaryOrder
+        ? `Đã ghi nhận sự cố và tự động tạo đơn giao bổ sung 0đ #${supplementaryOrder.id}.`
+        : 'Đã ghi nhận báo cáo sự cố vận chuyển.',
+    };
+  }
+
+  async function confirmPayment(userId, orderId) {
+    const profile = await requireProfile(userId);
+    const order = await prisma.wholesaleOrder.findFirst({
+      where: { id: orderId, supplierId: profile.id },
+      include: { buyer: true, items: true },
+    });
+    if (!order) throw problem(404, 'Không tìm thấy đơn hàng.');
+
+    const paymentInfo = deliveryService.savePaymentInfo(order.id, {
+      status: 'CONFIRMED',
+      supplierConfirmedAt: new Date().toISOString(),
+      confirmedBy: userId,
+    });
+
+    if (order.status === 'ISSUE_HANDLING') {
+      await prisma.wholesaleOrder.update({
+        where: { id: order.id },
+        data: {
+          status: 'DELIVERED',
+          deliveredAt: new Date(),
+          commissionAmount: order.commissionRate === null ? null : order.subtotal.mul(order.commissionRate).div(100).toDecimalPlaces(2),
+        },
+      });
+    }
+
+    return {
+      success: true,
+      paymentInfo,
+      message: 'Đã xác nhận nhận đủ tiền thanh toán cho đơn hàng #' + order.id,
+    };
+  }
+
+  async function savePacking(userId, orderId, checkedItemIds = []) {
+    const profile = await requireProfile(userId);
+    const order = await prisma.wholesaleOrder.findFirst({
+      where: { id: orderId, supplierId: profile.id },
+    });
+    if (!order) throw problem(404, 'Không tìm thấy đơn hàng.');
+    const packingChecklist = deliveryService.savePackingChecklist(order.id, checkedItemIds);
+    return { success: true, packingChecklist };
+  }
+
+  async function getSavedDrivers(userId) {
+    const profile = await requireProfile(userId);
+    const drivers = deliveryService.getSavedDrivers(profile.id);
+    return { drivers };
+  }
+
   return {
     getProfile, upsertProfile, submitVerification, quickVerify, listProducts, createProduct, updateProduct, deactivateProduct,
     listOrders, updateOrderStatus, updateDriverInfo, updateDeposit, dashboard,
+    reportIncident, confirmPayment, savePacking, getSavedDrivers,
   };
 }
 

@@ -1,0 +1,36 @@
+[
+  {
+    "id": "drv-1793295482908-643",
+    "driverName": "Lê Văn Tài",
+    "driverPhone": "0988776655",
+    "vehicleType": "Xe ba gác",
+    "licensePlate": "51-T2 123.45",
+    "deliveryNotes": "Hàng nặng, cần người đỡ khi dỡ hàng",
+    "supplierId": null,
+    "lastUsedAt": "2026-10-29T18:00:28.291Z"
+  },
+  {
+    "id": "drv-1",
+    "driverName": "Nguyễn Văn Tuấn",
+    "driverPhone": "0912345678",
+    "vehicleType": "Xe ba gác chở hàng",
+    "licensePlate": "59X1-888.99",
+    "deliveryNotes": "Tài xế quen, hỗ trợ khuân vác vào tiệm."
+  },
+  {
+    "id": "drv-2",
+    "driverName": "Trần Quốc Huy",
+    "driverPhone": "0987654321",
+    "vehicleType": "Xe tải nhỏ 500kg",
+    "licensePlate": "51D-123.45",
+    "deliveryNotes": "Chuyên chở hàng cồng kềnh, thùng bia, nước ngọt."
+  },
+  {
+    "id": "drv-3",
+    "driverName": "Lê Hoàng Nam",
+    "driverPhone": "0903112233",
+    "vehicleType": "Xe máy giao hàng",
+    "licensePlate": "59T2-456.78",
+    "deliveryNotes": "Chuyên giao hàng hỏa tốc trong ngày."
+  }
+]

@@ -9,5 +9,16 @@
     "deliveryNotes": null,
     "assignedAt": "2026-10-29T12:04:04.836Z",
     "updatedAt": "2026-10-29T12:04:49.982Z"
+  },
+  "1048": {
+    "orderId": 1048,
+    "driverName": "Trí",
+    "driverPhone": "0379862525",
+    "vehicleType": "Xe ba gác chở hàng",
+    "licensePlate": "51T5-8126",
+    "estimatedDeliveryTime": "Trong 30 - 45 phút tới",
+    "deliveryNotes": null,
+    "assignedAt": "2026-10-29T13:19:36.282Z",
+    "updatedAt": "2026-10-29T13:19:36.282Z"
   }
 }

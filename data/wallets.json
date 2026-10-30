@@ -2,10 +2,10 @@
   "wallets": {
     "1": {
       "userId": 1,
-      "availableBalance": 9866000.05,
-      "lockedBalance": 74500,
+      "availableBalance": 9781500.07,
+      "lockedBalance": 158999.97999999998,
       "createdAt": "2026-10-26T11:25:19.561Z",
-      "updatedAt": "2026-10-29T12:05:16.787Z"
+      "updatedAt": "2026-10-29T13:18:18.769Z"
     },
     "2": {
       "userId": 2,
@@ -72,6 +72,28 @@
     }
   },
   "transactions": [
+    {
+      "id": "TX-1793279898769-258",
+      "userId": 1,
+      "orderId": 1048,
+      "type": "ESCROW_LOCK",
+      "amount": -74500,
+      "balanceBefore": 9856000.07,
+      "balanceAfter": 9781500.07,
+      "description": "Tạm khóa 10% tiền cọc đơn hàng #1048 (Ví hệ thống)",
+      "createdAt": "2026-10-29T13:18:18.769Z"
+    },
+    {
+      "id": "TX-1793279898629-480",
+      "userId": 1,
+      "orderId": 1047,
+      "type": "ESCROW_LOCK",
+      "amount": -9999.98,
+      "balanceBefore": 9866000.05,
+      "balanceAfter": 9856000.07,
+      "description": "Tạm khóa 10% tiền cọc đơn hàng #1047 (Ví hệ thống)",
+      "createdAt": "2026-10-29T13:18:18.629Z"
+    },
     {
       "id": "TX-1793275516922-795",
       "userId": 1221,
