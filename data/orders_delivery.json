@@ -137,5 +137,21 @@
       "supplierConfirmedAt": "2026-10-31T09:33:08.526Z",
       "confirmedBy": 2
     }
+  },
+  "1065": {
+    "orderId": 1065,
+    "packingChecklist": [
+      1061,
+      1062
+    ],
+    "packingUpdatedAt": "2026-10-31T13:36:13.676Z",
+    "driverName": "Lê Văn Tài",
+    "driverPhone": "0988776655",
+    "vehicleType": "Xe ba gác",
+    "licensePlate": "51-T2 123.45",
+    "estimatedDeliveryTime": "Ngày 31/10/2026 · Ca đêm / Tiệm bán khuya (21:00 - 23:30)",
+    "deliveryNotes": "Hàng nặng, cần người đỡ khi dỡ hàng",
+    "assignedAt": "2026-10-31T13:38:32.873Z",
+    "updatedAt": "2026-10-31T13:38:32.873Z"
   }
 }

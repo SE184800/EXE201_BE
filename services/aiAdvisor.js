@@ -40,12 +40,19 @@ async function answerWithAI({ message, history = [], calendar, apiKey, model, pr
 
   try {
     if (provider === 'GEMINI') {
+      const safeDefaultModels = [
+        'gemini-2.5-flash',
+        'gemini-2.0-flash',
+        'gemini-1.5-flash-latest',
+        'gemini-1.5-flash-8b',
+        'gemini-1.5-pro-latest',
+      ];
+      const rawModel = (model || '').trim().replace(/^models\//, '');
+      const mappedModel = rawModel === 'gemini-1.5-flash' ? 'gemini-1.5-flash-latest' : rawModel;
       const candidates = [
-        model || 'gemini-flash-lite-latest',
-        'gemini-flash-lite-latest',
-        'gemini-3.5-flash-lite',
-        'gemini-3.1-flash-lite'
-      ].filter((m, idx, arr) => arr.indexOf(m) === idx);
+        mappedModel,
+        ...safeDefaultModels,
+      ].filter(Boolean).filter((m, idx, arr) => arr.indexOf(m) === idx);
 
       let lastError = null;
       for (const candidateModel of candidates) {

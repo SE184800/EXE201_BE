@@ -583,10 +583,10 @@ function createSupplierService(prisma) {
       let expectedDepositStatus;
       let event;
       if (normalizedAction === 'CONFIRM') {
-        if (order.status !== 'PENDING' || order.depositStatus !== 'SUBMITTED') {
+        if (order.status !== 'PENDING' || !['PENDING', 'SUBMITTED'].includes(order.depositStatus)) {
           throw problem(409, 'Khoản cọc không còn ở trạng thái chờ xác nhận.');
         }
-        expectedDepositStatus = 'SUBMITTED';
+        expectedDepositStatus = order.depositStatus;
         event = 'DEPOSIT_CONFIRMED';
         data = {
           depositStatus: 'PAID',

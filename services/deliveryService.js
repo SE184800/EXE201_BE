@@ -273,9 +273,28 @@ function savePaymentInfo(orderId, paymentData) {
   return existing.paymentInfo;
 }
 
+function updateEstimatedDeliveryTime(orderId, newTime) {
+  if (!orderId || !newTime) return null;
+  const store = loadDeliveries();
+  const key = String(orderId);
+  const existing = store[key] || {
+    orderId: Number(orderId),
+    driverName: 'Chủ vựa tự giao / Xe vựa',
+    driverPhone: '0908123789',
+    vehicleType: 'Xe ba gác chở hàng',
+    createdAt: new Date().toISOString(),
+  };
+  existing.estimatedDeliveryTime = String(newTime).trim();
+  existing.updatedAt = new Date().toISOString();
+  store[key] = existing;
+  persistDeliveries();
+  return existing;
+}
+
 module.exports = {
   getDriverInfo,
   saveDriverInfo,
+  updateEstimatedDeliveryTime,
   deleteDriverInfo,
   validateDriverInput,
   normalizeLicensePlate,

@@ -275,7 +275,12 @@ function createOrderRoutes(prisma, requireAuth) {
 
       let updatedTag = '';
       if (action === 'ACCEPT') {
-        updatedTag = `[VỰA ĐÃ ĐỒNG Ý DỜI LỊCH GIAO]${note && note.trim() ? `: ${note.trim()}` : ''}`;
+        const match = current.note ? current.note.match(/Hẹn lúc\s+([^()\[\]|]+?)(?:\s*\(|\s*-|\s*\||$)/) : null;
+        const newTime = match && match[1] ? match[1].trim() : null;
+        if (newTime) {
+          deliveryService.updateEstimatedDeliveryTime(id, newTime);
+        }
+        updatedTag = `[VỰA ĐÃ ĐỒNG Ý DỜI LỊCH GIAO]${newTime ? ` (Hẹn mới: ${newTime})` : ''}${note && note.trim() ? `: ${note.trim()}` : ''}`;
       } else {
         const rejectReason = note && note.trim().length >= 3 ? note.trim() : 'Vựa không thể dời giờ do xe đã kín tuyến hoặc hàng cần bảo quản';
         updatedTag = `[VỰA TỪ CHỐI DỜI LỊCH GIAO]: ${rejectReason}. Vui lòng sắp xếp người nhận hoặc liên hệ vựa.`;
