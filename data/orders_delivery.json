@@ -153,5 +153,134 @@
     "deliveryNotes": "Hàng nặng, cần người đỡ khi dỡ hàng",
     "assignedAt": "2026-10-31T13:38:32.873Z",
     "updatedAt": "2026-10-31T13:38:32.873Z"
+  },
+  "1066": {
+    "orderId": 1066,
+    "packingChecklist": [
+      1063
+    ],
+    "packingUpdatedAt": "2026-10-31T14:26:17.656Z",
+    "driverName": "Lê Văn Tài",
+    "driverPhone": "0988776655",
+    "vehicleType": "Xe ba gác",
+    "licensePlate": "51-T2 123.45",
+    "estimatedDeliveryTime": "Ngày 02/11/2026 lúc 15:42",
+    "deliveryNotes": "Hàng nặng, cần người đỡ khi dỡ hàng",
+    "assignedAt": "2026-10-31T14:29:49.466Z",
+    "updatedAt": "2026-10-31T14:29:49.466Z",
+    "incidentReport": {
+      "orderId": 1066,
+      "damagedItems": [
+        {
+          "productId": 6,
+          "productName": "Dầu ăn Tường An 1L (Hỏng lẻ 6/12 chai)",
+          "packaging": "6 chai",
+          "quantity": 1
+        }
+      ],
+      "damageType": "SPOILED",
+      "damageTypeLabel": "Hàng biến chất / hư hại do nhiệt độ",
+      "evidenceImageUrl": null,
+      "notes": null,
+      "action": "DEDUCT_COD",
+      "reportedBy": "SUPPLIER",
+      "reportedAt": "2026-10-31T14:31:57.446Z"
+    },
+    "paymentInfo": {
+      "method": "QR",
+      "amount": 351000,
+      "status": "CONFIRMED",
+      "storePaidAt": "2026-10-31T14:46:57.782Z",
+      "updatedAt": "2026-10-31T14:47:24.714Z",
+      "supplierConfirmedAt": "2026-10-31T14:47:24.713Z",
+      "confirmedBy": 2
+    }
+  },
+  "1067": {
+    "orderId": 1067,
+    "packingChecklist": [
+      1064
+    ],
+    "packingUpdatedAt": "2026-10-31T15:49:01.172Z",
+    "driverName": "Nguyễn Văn Tuấn",
+    "driverPhone": "0912345678",
+    "vehicleType": "Xe ba gác chở hàng",
+    "licensePlate": "59X1-888.99",
+    "estimatedDeliveryTime": "Ngày 02/11/2026 lúc 16:04",
+    "deliveryNotes": "Tài xế quen, hỗ trợ khuân vác vào tiệm.",
+    "assignedAt": "2026-10-31T15:52:07.270Z",
+    "updatedAt": "2026-10-31T15:52:07.270Z",
+    "incidentReport": {
+      "orderId": 1067,
+      "damagedItems": [
+        {
+          "productId": 6,
+          "productName": "Dầu ăn Tường An 1L (Hỏng lẻ 7/12 chai)",
+          "packaging": "7 chai",
+          "quantity": 1
+        }
+      ],
+      "damageType": "DAMAGED_TRANSIT",
+      "damageTypeLabel": "Hư hỏng bể vỡ do va chạm khi vận chuyển",
+      "evidenceImageUrl": null,
+      "notes": null,
+      "action": "DEDUCT_COD",
+      "lossAmount": 227500,
+      "reportedBy": "SUPPLIER",
+      "reportedAt": "2026-10-31T15:52:35.179Z"
+    },
+    "paymentInfo": {
+      "method": "COD",
+      "amount": 351000,
+      "status": "CONFIRMED",
+      "storePaidAt": "2026-10-31T15:53:41.658Z",
+      "updatedAt": "2026-10-31T15:53:50.676Z",
+      "supplierConfirmedAt": "2026-10-31T15:53:50.675Z",
+      "confirmedBy": 2
+    }
+  },
+  "1069": {
+    "orderId": 1069,
+    "packingChecklist": [
+      1066,
+      1067
+    ],
+    "packingUpdatedAt": "2026-10-31T16:15:19.071Z",
+    "driverName": "Nguyễn Văn Tuấn",
+    "driverPhone": "0912345678",
+    "vehicleType": "Xe ba gác chở hàng",
+    "licensePlate": "59X1-888.99",
+    "estimatedDeliveryTime": "Ngày 01/11/2026 lúc 09:30",
+    "deliveryNotes": "Tài xế quen, hỗ trợ khuân vác vào tiệm.",
+    "assignedAt": "2026-10-31T16:17:10.420Z",
+    "updatedAt": "2026-10-31T16:17:10.420Z",
+    "incidentReport": {
+      "orderId": 1069,
+      "damagedItems": [
+        {
+          "productId": 7,
+          "productName": "Bánh Oreo 133g",
+          "packaging": "thùng 24 gói",
+          "quantity": 1
+        }
+      ],
+      "damageType": "DAMAGED_TRANSIT",
+      "damageTypeLabel": "Hư hỏng bể vỡ do va chạm khi vận chuyển",
+      "evidenceImageUrl": null,
+      "notes": null,
+      "action": "DEDUCT_COD",
+      "lossAmount": 360000,
+      "reportedBy": "SUPPLIER",
+      "reportedAt": "2026-10-31T16:22:31.547Z"
+    },
+    "paymentInfo": {
+      "method": "COD",
+      "amount": 999000,
+      "status": "CONFIRMED",
+      "storePaidAt": "2026-10-31T16:32:29.747Z",
+      "updatedAt": "2026-10-31T16:32:50.671Z",
+      "supplierConfirmedAt": "2026-10-31T16:32:50.671Z",
+      "confirmedBy": 2
+    }
   }
 }

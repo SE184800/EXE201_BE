@@ -15,10 +15,10 @@
       "bankName": "Vietcombank",
       "bankAccountNumber": null,
       "bankAccountHolder": "CHỦ CỬA HÀNG TẠP HÓA",
-      "bankQrImageUrl": null,
+      "bankQrImageUrl": "/uploads/bank-qr-60bd1bef46ec9d5e4e73505b0b38217d.jpg",
       "isConfigured": true,
       "createdAt": "2026-10-26T13:10:03.557Z",
-      "updatedAt": "2026-10-31T04:36:59.401Z"
+      "updatedAt": "2026-10-31T16:31:52.582Z"
     },
     "9999": {
       "userId": 9999,
