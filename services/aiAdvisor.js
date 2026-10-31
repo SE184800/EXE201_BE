@@ -54,7 +54,11 @@ async function answerWithAI({ message, history = [], calendar, apiKey, model, pr
           generationConfig: { maxOutputTokens: 1800 },
         }),
       });
-      if (!response.ok) throw new Error('AI provider unavailable');
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        console.error(`[AI Provider Error - GEMINI] HTTP ${response.status}: ${errorText}`);
+        throw new Error(`AI provider returned ${response.status}`);
+      }
       const data = await response.json(), candidate = data.candidates?.[0];
       const answer = (candidate?.content?.parts || []).filter(p => !p.thought && typeof p.text === 'string').map(p => p.text).join('\n').trim();
       if (candidate?.finishReason !== 'STOP' || !answer) throw new Error('Incomplete AI answer');
@@ -75,12 +79,17 @@ async function answerWithAI({ message, history = [], calendar, apiKey, model, pr
         ]
       })
     });
-    if (!response.ok) throw new Error('AI provider unavailable');
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      console.error(`[AI Provider Error - OPENAI] HTTP ${response.status}: ${errorText}`);
+      throw new Error(`AI provider returned ${response.status}`);
+    }
     const data = await response.json();
     const answer = (data.output || []).filter(o => o.type === 'message').flatMap(o => o.content || []).filter(c => c.type === 'output_text').map(c => c.text).join('\n').trim();
     if (data.status !== 'completed' || !answer) throw new Error('Incomplete AI answer');
     return { mode: 'AI', answer, usage: { inputTokens: data.usage?.input_tokens, outputTokens: data.usage?.output_tokens } };
-  } catch {
+  } catch (err) {
+    console.error('[AI Advisor Error]:', err.message || err);
     return { mode: 'UNAVAILABLE', answer: 'AI đang không phản hồi hoặc cấu hình chưa hợp lệ. Bạn vẫn có thể xem lịch nhập và tra cứu kho.\n\n' + basicAnswer(message, calendar) };
   }
 }
