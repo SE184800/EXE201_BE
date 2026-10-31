@@ -77,7 +77,7 @@ function calculateFeeForOrder({ buyerId, supplier, deliveryAddress }) {
 
   // Alley surcharge: +5,000 d if location is inside an alley (requires bike / ba gác transshipment)
   const isAlley = storeProfile?.locationType === 'ALLEY';
-  const alleySurcharge = isAlley ? 5000 : 0;
+  const alleySurcharge = 0; // Da bo phu phi hem
 
   const totalCalculated = baseFee + distanceExtraFee + alleySurcharge;
   const deliveryFee = Math.round(totalCalculated / 1000) * 1000;

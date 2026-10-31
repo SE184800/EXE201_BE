@@ -101,6 +101,7 @@ function createOrderRoutes(prisma, requireAuth) {
         const expectedFeeNum = Number(expectedDeliveryFee);
         let effectiveDeliveryFee;
         if (
+          expectedFeeNum === 0 ||
           Math.abs(expectedFeeNum - calculatedFee.deliveryFee) <= 10000 ||
           expectedFeeNum === supplier.deliveryFee.toNumber() ||
           (supplier.deliveryFee.isZero() && expectedFeeNum === 25000)
@@ -158,7 +159,7 @@ function createOrderRoutes(prisma, requireAuth) {
             depositRate,
             depositAmount,
             depositStatus: numDeposit > 0 ? (useWalletEscrow ? 'PAID' : 'PENDING') : 'NONE',
-            depositReference: useWalletEscrow ? 'VÍ_HỆ_THỐNG' : null,
+            depositReference: useWalletEscrow ? 'VI_HE_THONG' : null,
             depositPaidAt: useWalletEscrow ? new Date() : null,
             depositBankName: numDeposit > 0 ? (supplier.bankName || 'Hệ thống SupplyMind') : null,
             depositBankAccountNumber: numDeposit > 0 ? (supplier.bankAccountNumber || 'ESCROW') : null,
@@ -211,7 +212,7 @@ function createOrderRoutes(prisma, requireAuth) {
         where: { id },
         data: {
           depositStatus: 'PAID',
-          depositReference: 'VÍ_HỆ_THỐNG',
+          depositReference: 'VI_HE_THONG',
           depositPaidAt: new Date(),
           depositReviewedAt: new Date(),
           depositRejectionReason: null,
