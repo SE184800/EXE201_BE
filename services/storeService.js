@@ -39,9 +39,22 @@ function normalizeAddress(val) {
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/\b(so nha|so|duong|phuong|xa|thi tran|quan|huyen|thi xa|thanh pho|tp|tinh|viet nam)\b/g, '')
     .replace(/[,\.\-\/]/g, ' ')
-    .replace(/\s+/g, ' ')
+    .replace(/\s+/g, '')
     .trim();
+}
+
+function isAddressDuplicate(addr1, addr2) {
+  const n1 = normalizeAddress(addr1);
+  const n2 = normalizeAddress(addr2);
+  if (!n1 || !n2) return false;
+  if (n1 === n2) return true;
+  if (n1.length >= 8 && n2.length >= 8) {
+    if (n1.startsWith(n2) || n2.startsWith(n1)) return true;
+  }
+  return false;
 }
 
 function ensureDataFile() {
@@ -203,8 +216,8 @@ function validateStoreInput(body = {}, currentUserId = null) {
         errors.storePhone = 'Số điện thoại này đã được sử dụng bởi một tiệm tạp hóa khác.';
       }
 
-      if (normAddr && normalizeAddress(store.storeAddress) === normAddr) {
-        errors.storeAddress = 'Địa chỉ này đã được đăng ký bởi một tiệm tạp hóa khác. Vui lòng kiểm tra lại số nhà hoặc tên tiệm.';
+      if (isAddressDuplicate(store.storeAddress, storeAddress)) {
+        errors.storeAddress = 'Địa chỉ này đã được đăng ký bởi một tiệm tạp hóa khác trong hệ thống. Mỗi địa chỉ chỉ áp dụng cho một cửa hàng duy nhất để tránh trường hợp 2 tiệm cùng 1 địa chỉ.';
       }
 
       if (taxCode && store.taxCode && store.taxCode.trim().toLowerCase() === taxCode.toLowerCase()) {
