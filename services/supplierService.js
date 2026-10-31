@@ -2,6 +2,7 @@ const { audit, problem, httpsDocument, verificationComplete } = require('./platf
 const { moderateContent } = require('./contentModerationService');
 const deliveryService = require('./deliveryService');
 const { settleOrderToSupplier, refundPaidOrder, walletService } = require('./walletService');
+const { syncOrderToStoreInventory } = require('./inventorySyncService');
 const ORDER_STATUSES = Object.freeze([
   'PENDING', 'APPROVED', 'REJECTED', 'PREPARING', 'SHIPPING', 'ISSUE_HANDLING', 'DELIVERED', 'COMPLETED',
 ]);
@@ -500,6 +501,11 @@ function createSupplierService(prisma) {
         } catch (err) {
           console.error('Loi quyet toan vi:', err.message);
         }
+        try {
+          await syncOrderToStoreInventory(transaction, order.buyerId, order);
+        } catch (err) {
+          console.error('Loi tu dong nhap kho:', err.message);
+        }
       }
       if (status === 'REJECTED') {
         if (['APPROVED', 'PREPARING', 'SHIPPING', 'ISSUE_HANDLING'].includes(order.status)) {
@@ -524,14 +530,14 @@ function createSupplierService(prisma) {
 
     if ((status === 'DELIVERED' || status === 'COMPLETED') && numberValue(order.depositAmount || 0) > 0 && order.depositStatus === 'PAID') {
       try {
-        walletService.releaseEscrow(order.buyerId, profile.userId, order.id, numberValue(order.depositAmount), order.commissionRate ? numberValue(order.commissionRate) : 0);
+        await walletService.releaseEscrow(order.buyerId, profile.userId, order.id, numberValue(order.depositAmount), order.commissionRate ? numberValue(order.commissionRate) : 0);
       } catch (err) {
         console.error('Lỗi giải phóng cọc ví:', err.message);
       }
     }
     if (status === 'REJECTED' && numberValue(order.depositAmount || 0) > 0 && order.depositStatus === 'PAID') {
       try {
-        walletService.refundEscrow(order.buyerId, order.id, numberValue(order.depositAmount), `Hoàn trả cọc do chủ vựa từ chối đơn #${order.id}: ${normalizedRejectReason}`);
+        await walletService.refundEscrow(order.buyerId, order.id, numberValue(order.depositAmount), `Hoàn trả cọc do chủ vựa từ chối đơn #${order.id}: ${normalizedRejectReason}`);
       } catch (err) {
         console.error('Lỗi hoàn cọc ví:', err.message);
       }

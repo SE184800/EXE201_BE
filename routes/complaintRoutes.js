@@ -329,7 +329,7 @@ function createComplaintRoutes(prisma, requireAuth) {
 
         // Refund escrow to buyer's wallet
         if (depositAmt > 0 && order.depositStatus === 'PAID') {
-          walletService.refundEscrow(order.buyerId, order.id, depositAmt, `Hoàn cọc đơn #${order.id} do chủ vựa nhận lại hàng`);
+          await walletService.refundEscrow(order.buyerId, order.id, depositAmt, `Hoàn cọc đơn #${order.id} do chủ vựa nhận lại hàng`);
         }
 
         return res.json({ success: true, complaint: updatedComplaint, message: resolveMsg });
@@ -367,7 +367,7 @@ function createComplaintRoutes(prisma, requireAuth) {
 
         // Confiscate escrow to supplier's wallet
         if (depositAmt > 0 && order.depositStatus === 'PAID') {
-          walletService.confiscateEscrow(order.buyerId, req.auth.user.id, order.id, depositAmt, `Bồi thường tiền cọc đơn hàng #${order.id} do khách từ chối nhận vô cớ`);
+          await walletService.confiscateEscrow(order.buyerId, req.auth.user.id, order.id, depositAmt, `Bồi thường tiền cọc đơn hàng #${order.id} do khách từ chối nhận vô cớ`);
         }
 
         return res.json({ success: true, complaint: updatedComplaint, message: resolveMsg });

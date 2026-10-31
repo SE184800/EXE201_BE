@@ -5,7 +5,9 @@ const { requireRole } = require('../middlewares/authMiddleware');
 const { normalizePhone } = require('../services/registrationValidation');
 const { serializeOrder } = require('../services/supplierService');
 const deliveryService = require('../services/deliveryService');
-const { walletService } = require('../services/walletService');
+const deliveryFeeService = require('../services/deliveryFeeService');
+const { syncOrderToStoreInventory } = require('../services/inventorySyncService');
+const { walletService, settleOrderToSupplier } = require('../services/walletService');
 const { orderQuery } = require('../services/orderQuery');
 const { visibleSupplierWhere, audit } = require('../services/platformPolicy');
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -90,11 +92,22 @@ function createOrderRoutes(prisma, requireAuth) {
         if (products.length !== lines.length) throw problem(409, 'Có sản phẩm đã ngừng bán. Tải lại nguồn hàng trước khi đặt.');
         const supplier = products[0].supplier;
         if (products.some(product => product.supplierId !== supplier.id)) throw problem(400, 'Mỗi đơn chỉ đặt hàng từ một chủ vựa.');
-        let effectiveDeliveryFee = supplier.deliveryFee;
-        if (effectiveDeliveryFee.isZero() && Number(expectedDeliveryFee) === 25000) {
-          effectiveDeliveryFee = new Prisma.Decimal(25000);
-        } else if (!effectiveDeliveryFee.equals(expectedDeliveryFee)) {
-          throw problem(409, 'Phí giao hàng vừa thay đổi. Tải lại nguồn hàng để xem tổng tiền mới.');
+        const calculatedFee = deliveryFeeService.calculateFeeForOrder({
+          buyerId,
+          supplier,
+          deliveryAddress,
+        });
+
+        const expectedFeeNum = Number(expectedDeliveryFee);
+        let effectiveDeliveryFee;
+        if (
+          Math.abs(expectedFeeNum - calculatedFee.deliveryFee) <= 10000 ||
+          expectedFeeNum === supplier.deliveryFee.toNumber() ||
+          (supplier.deliveryFee.isZero() && expectedFeeNum === 25000)
+        ) {
+          effectiveDeliveryFee = new Prisma.Decimal(expectedFeeNum);
+        } else {
+          effectiveDeliveryFee = new Prisma.Decimal(calculatedFee.deliveryFee);
         }
         const snapshots = lines.map(line => {
           const product = products.find(product => product.id === line.productId);
@@ -117,7 +130,7 @@ function createOrderRoutes(prisma, requireAuth) {
         const depositAmount = new Prisma.Decimal(numDeposit);
         let useWalletEscrow = false;
         if (numDeposit > 0) {
-          const buyerWallet = walletService.getWallet(buyerId);
+          const buyerWallet = await walletService.getWallet(buyerId);
           if (buyerWallet.availableBalance >= numDeposit) {
             useWalletEscrow = true;
           } else if (!supplier.bankName || !supplier.bankAccountNumber || !supplier.bankAccountHolder) {
@@ -155,7 +168,7 @@ function createOrderRoutes(prisma, requireAuth) {
           include,
         });
         if (useWalletEscrow) {
-          walletService.lockEscrow(buyerId, created.id, numDeposit, `Tạm khóa ${depositRate}% tiền cọc đơn hàng #${created.id} (Ví hệ thống)`);
+          await walletService.lockEscrow(buyerId, created.id, numDeposit, `Tạm khóa ${depositRate}% tiền cọc đơn hàng #${created.id} (Ví hệ thống)`, { tx });
         }
         await audit(tx, buyerId, 'ORDER_CREATED', 'ORDER', created.id, { supplierId: supplier.id, subtotal: subtotal.toString(), commissionRate: settings.commissionRate.toString(), depositRate: String(depositRate), depositAmount: depositAmount.toString() });
         return created;
@@ -189,11 +202,11 @@ function createOrderRoutes(prisma, requireAuth) {
       if (current.depositStatus === 'PAID') return res.json({ order: serialize(current) });
       const depositNum = current.depositAmount.toNumber();
       if (depositNum <= 0) throw problem(400, 'Đơn này không yêu cầu cọc.');
-      const buyerWallet = walletService.getWallet(buyerId);
+      const buyerWallet = await walletService.getWallet(buyerId);
       if (buyerWallet.availableBalance < depositNum) {
         throw problem(400, `Số dư ví khả dụng không đủ (${buyerWallet.availableBalance.toLocaleString('vi-VN')} ₫). Cần ${depositNum.toLocaleString('vi-VN')} ₫ để cọc.`);
       }
-      walletService.lockEscrow(buyerId, id, depositNum, `Tạm khóa tiền cọc đơn hàng #${id} qua Ví hệ thống`);
+      await walletService.lockEscrow(buyerId, id, depositNum, `Tạm khóa tiền cọc đơn hàng #${id} qua Ví hệ thống`);
       const updated = await prisma.wholesaleOrder.update({
         where: { id },
         data: {
@@ -368,10 +381,17 @@ function createOrderRoutes(prisma, requireAuth) {
       const depositNum = current.depositAmount.toNumber();
       if (depositNum > 0 && current.depositStatus === 'PAID') {
         try {
-          walletService.releaseEscrow(buyerId, current.supplier.userId, current.id, depositNum, current.commissionRate ? current.commissionRate.toNumber() : 0);
+          await walletService.releaseEscrow(buyerId, current.supplier.userId, current.id, depositNum, current.commissionRate ? current.commissionRate.toNumber() : 0);
         } catch (err) {
           console.error('Lỗi giải phóng cọc khi hoàn tất đơn:', err.message);
         }
+      }
+
+      // Automatically sync order items to store owner inventory
+      try {
+        await syncOrderToStoreInventory(prisma, buyerId, current);
+      } catch (err) {
+        console.error('Lỗi tự động nhập kho từ đơn hàng:', err.message);
       }
 
       res.json({ success: true, order: serialize(updated), message: 'Đơn hàng đã hoàn tất thành công.' });
