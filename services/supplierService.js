@@ -105,6 +105,9 @@ function serializeOrder(order) {
       warehouseAddress: order.supplier.warehouseAddress || null,
       deliveryRadiusKm: order.supplier.deliveryRadiusKm ? numberValue(order.supplier.deliveryRadiusKm) : 10,
       phone: order.supplier.user?.phone || '0908 123 789',
+      bankName: order.supplier.bankName || null,
+      bankAccountNumber: order.supplier.bankAccountNumber || null,
+      bankAccountHolder: order.supplier.bankAccountHolder || null,
     } : null,
     // Wallet payment state. null when the order was not paid with a wallet.
     walletPayment: order.orderPayment
@@ -674,7 +677,7 @@ function createSupplierService(prisma) {
     });
     if (!order) throw problem(404, 'Không tìm thấy đơn hàng.');
 
-    const { damagedItems, damageType, damageTypeLabel, evidenceImageUrl, notes, action } = body;
+    const { damagedItems, damageType, damageTypeLabel, evidenceImageUrl, notes, action, lossAmount } = body;
     if (!Array.isArray(damagedItems) || damagedItems.length === 0) {
       throw problem(400, 'Vui lòng chọn ít nhất 1 mặt hàng bị hư hỏng.');
     }
@@ -688,6 +691,7 @@ function createSupplierService(prisma) {
       evidenceImageUrl: evidenceImageUrl || null,
       notes: notes || null,
       action: action || 'REPLACE_0VND',
+      lossAmount: typeof lossAmount === 'number' && Number.isFinite(lossAmount) ? Math.round(lossAmount) : undefined,
       reportedBy: 'SUPPLIER',
       reportedAt: new Date().toISOString(),
     };
