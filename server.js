@@ -1,4 +1,8 @@
 require('dotenv').config();
+const dns = require('dns');
+if (typeof dns.setDefaultResultOrder === 'function') {
+  dns.setDefaultResultOrder('ipv4first');
+}
 const prisma = require('./config/db');
 const { readConfig } = require('./config/env');
 const { createApp } = require('./app');
