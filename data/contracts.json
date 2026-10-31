@@ -19,8 +19,8 @@
         "email": "",
         "phone": "0908123456",
         "businessName": "Tiệm Tạp Hóa An Khang",
-        "taxCode": "",
-        "address": "123 Đường Số 4, Phường Bình Trị Đông B, Quận Bình Tân, TP. Hồ Chí Minh",
+        "taxCode": "03123131313123",
+        "address": "221 Trịnh Đình Trọng, Tân Phú, TP.Hồ Chí Minh",
         "locationType": "STREET_FRONT",
         "latitude": null,
         "longitude": null
@@ -57,7 +57,7 @@
         "phone": "",
         "businessName": "Vựa Bách Hóa Tổng Hợp Tân Bình",
         "taxCode": "0312987654",
-        "address": "120 Lý Thường Kiệt, Q. Tân Bình, TP. Hồ Chí Minh",
+        "address": "261/24, Trần Hưng Đạo, Cầu Ông Lãnh, Quận 1, TP.Hồ Chí Minh",
         "locationType": "STREET_FRONT",
         "latitude": null,
         "longitude": null

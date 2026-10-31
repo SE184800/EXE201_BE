@@ -3,12 +3,22 @@
     "1": {
       "userId": 1,
       "storeName": "Tiệm Tạp Hóa An Khang",
-      "storeAddress": "123 Đường Số 4, Phường Bình Trị Đông B, Quận Bình Tân, TP. Hồ Chí Minh",
+      "storeAddress": "221 Trịnh Đình Trọng, Tân Phú, TP.Hồ Chí Minh",
       "storePhone": "0908123456",
+      "taxCode": "03123131313123",
       "businessType": "Tạp hóa tổng hợp",
+      "locationType": "STREET_FRONT",
+      "alleyDetail": null,
+      "latitude": null,
+      "longitude": null,
+      "isAddressVerified": false,
+      "bankName": "Vietcombank",
+      "bankAccountNumber": null,
+      "bankAccountHolder": "CHỦ CỬA HÀNG TẠP HÓA",
+      "bankQrImageUrl": null,
       "isConfigured": true,
       "createdAt": "2026-10-26T13:10:03.557Z",
-      "updatedAt": "2026-10-26T13:10:03.558Z"
+      "updatedAt": "2026-10-31T04:36:59.401Z"
     },
     "9999": {
       "userId": 9999,
