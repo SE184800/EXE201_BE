@@ -16,7 +16,8 @@
     "db:seed:full": "node prisma/seed-demo-full.js",
     "db:seed:subscription-test": "node prisma/seed-subscription-demo.js",
     "db:seed:holidays:test": "node prisma/seed-holiday-test.js",
-    "test": "node --test --test-concurrency=1"
+    "test": "node --test --test-concurrency=1 tests/*.test.js",
+    "db:seed:test-accounts": "node prisma/seed-test-accounts.js"
   },
   "keywords": [],
   "author": "",

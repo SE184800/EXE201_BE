@@ -2,12 +2,13 @@ const { audit, problem, httpsDocument, verificationComplete } = require('./platf
 const { moderateContent } = require('./contentModerationService');
 const deliveryService = require('./deliveryService');
 const { settleOrderToSupplier, refundPaidOrder, walletService } = require('./walletService');
-const { syncOrderToStoreInventory } = require('./inventorySyncService');
+const { importBlockReason } = require('./inventorySyncService');
 const ORDER_STATUSES = Object.freeze([
   'PENDING', 'APPROVED', 'REJECTED', 'PREPARING', 'SHIPPING', 'ISSUE_HANDLING', 'DELIVERED', 'COMPLETED',
 ]);
 
 const STATUS_LABELS = Object.freeze({
+  COMPLETED: 'Hoàn tất',
   PENDING: 'Chờ duyệt', APPROVED: 'Đã duyệt', REJECTED: 'Đã từ chối',
   PREPARING: 'Đang soạn đơn', SHIPPING: 'Đang vận chuyển',
   ISSUE_HANDLING: 'Tiếp nhận xử lý', DELIVERED: 'Đã giao', COMPLETED: 'Hoàn tất',
@@ -64,7 +65,12 @@ async function serializeProduct(product) {
 }
 
 function serializeOrder(order) {
+  const driverInfo = deliveryService.getDriverInfo(order.id);
+  const inventoryImportBlockedReason = importBlockReason(order, driverInfo);
   return {
+    inventoryImportedAt: order.inventoryImportedAt || null,
+    canImportInventory: !order.inventoryImportedAt && !inventoryImportBlockedReason,
+    inventoryImportBlockedReason,
     commissionRate: order.commissionRate === null ? null : numberValue(order.commissionRate),
     commissionAmount: order.commissionAmount === null ? null : numberValue(order.commissionAmount),
     commissionPaidAt: order.commissionPaidAt, deliveredAt: order.deliveredAt,
@@ -94,7 +100,7 @@ function serializeOrder(order) {
     depositRefundReference: order.depositRefundReference || null,
     note: order.note,
     rejectReason: order.rejectReason,
-    driverInfo: deliveryService.getDriverInfo(order.id),
+    driverInfo,
     complaint: order.complaint ? { id: order.complaint.id, reason: order.complaint.reason, description: order.complaint.description, imageUrl: order.complaint.imageUrl || null, status: order.complaint.status, response: order.complaint.response } : null,
     createdAt: order.createdAt,
     updatedAt: order.updatedAt,
@@ -479,7 +485,7 @@ function createSupplierService(prisma) {
           status,
           rejectReason: status === 'REJECTED' ? normalizedRejectReason : null,
           ...(status === 'REJECTED' && order.depositStatus === 'PAID'
-            ? { depositStatus: 'REFUNDED' }
+            ? { depositStatus: 'REFUND_PENDING' }
             : {}),
           ...(status === 'DELIVERED' || status === 'COMPLETED'
             ? { deliveredAt: new Date(), commissionAmount: order.commissionRate === null ? null : order.subtotal.mul(order.commissionRate).div(100).toDecimalPlaces(2) }
@@ -504,13 +510,15 @@ function createSupplierService(prisma) {
         } catch (err) {
           console.error('Loi quyet toan vi:', err.message);
         }
-        try {
-          await syncOrderToStoreInventory(transaction, order.buyerId, order);
-        } catch (err) {
-          console.error('Loi tu dong nhap kho:', err.message);
-        }
       }
       if (status === 'REJECTED') {
+        if (order.depositStatus === 'PAID') {
+          const escrow = await transaction.walletTransaction.findFirst({ where: { orderId: order.id, type: 'ESCROW_LOCK' } });
+          if (escrow) {
+            await walletService.refundEscrow(order.buyerId, order.id, numberValue(order.depositAmount), 'Hoàn cọc khi từ chối đơn', { tx: transaction });
+            await transaction.wholesaleOrder.update({ where: { id: order.id }, data: { depositStatus: 'REFUNDED', depositRefundedAt: new Date(), depositRefundReference: 'ESCROW-REFUND-' + order.id } });
+          }
+        }
         if (['APPROVED', 'PREPARING', 'SHIPPING', 'ISSUE_HANDLING'].includes(order.status)) {
           for (const item of order.items) {
             await transaction.supplierProduct.updateMany({
@@ -619,11 +627,6 @@ function createSupplierService(prisma) {
           depositRefundedAt: new Date(),
           depositRefundReference: reference,
         };
-        try {
-          walletService.refundEscrow(order.buyerId, order.id, numberValue(order.depositAmount), `Hoàn tiền cọc đơn #${order.id} (Mã GD: ${reference})`);
-        } catch (err) {
-          console.error('Lỗi hoàn cọc ví:', err.message);
-        }
       }
       const changed = await tx.wholesaleOrder.updateMany({
         where: { id: order.id, supplierId: profile.id, depositStatus: expectedDepositStatus },

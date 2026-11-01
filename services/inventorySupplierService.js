@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const documents = require('./documentStorage');
 const path = require('node:path');
 
 const dataDir = path.join(__dirname, '../data');
@@ -16,6 +17,7 @@ function ensureDataFile() {
 }
 
 function loadSuppliers() {
+  if (documents.active()) return documents.readDocument('inventory_suppliers', {});
   ensureDataFile();
   if (suppliersCache) return suppliersCache;
   try {
@@ -29,6 +31,7 @@ function loadSuppliers() {
 }
 
 function persistSuppliers() {
+  if (documents.active()) return documents.writeDocument('inventory_suppliers', documents.readDocument('inventory_suppliers', {}));
   ensureDataFile();
   try {
     const tempFile = `${supplierFile}.tmp`;

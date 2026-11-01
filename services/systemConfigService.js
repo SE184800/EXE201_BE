@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const documents = require('./documentStorage');
 const path = require('node:path');
 
 const dataDir = path.join(__dirname, '../data');
@@ -67,6 +68,7 @@ function ensureDataFile() {
 }
 
 function loadConfig() {
+  if (documents.active()) return documents.readDocument('systemConfig', DEFAULT_CONFIG);
   ensureDataFile();
   try {
     const raw = fs.readFileSync(configFile, 'utf8');
@@ -97,6 +99,7 @@ function loadConfig() {
 }
 
 function saveConfig(config) {
+  if (documents.active()) return documents.writeDocument('systemConfig', config);
   ensureDataFile();
   const tempFile = `${configFile}.tmp.${Date.now()}`;
   fs.writeFileSync(tempFile, JSON.stringify(config, null, 2), 'utf8');
@@ -105,6 +108,7 @@ function saveConfig(config) {
 }
 
 function getConfig() {
+  if (documents.active()) return loadConfig();
   if (!cachedConfig) {
     return loadConfig();
   }

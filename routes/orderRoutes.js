@@ -6,7 +6,7 @@ const { normalizePhone } = require('../services/registrationValidation');
 const { serializeOrder } = require('../services/supplierService');
 const deliveryService = require('../services/deliveryService');
 const deliveryFeeService = require('../services/deliveryFeeService');
-const { syncOrderToStoreInventory } = require('../services/inventorySyncService');
+const { syncOrderToStoreInventory, importBlockReason } = require('../services/inventorySyncService');
 const { walletService, settleOrderToSupplier } = require('../services/walletService');
 const { orderQuery } = require('../services/orderQuery');
 const { visibleSupplierWhere, audit } = require('../services/platformPolicy');
@@ -369,7 +369,10 @@ function createOrderRoutes(prisma, requireAuth) {
       if (!current) throw problem(404, 'Không tìm thấy đơn hàng.');
 
       const driverInfo = deliveryService.getDriverInfo(id);
-      if (driverInfo?.paymentInfo?.status !== 'CONFIRMED' && current.status !== 'DELIVERED') {
+      if (current.status === 'COMPLETED') return res.json({ success: true, order: serialize(current), message: 'Đơn hàng đã hoàn tất.' });
+      if (current.status !== 'DELIVERED') throw problem(409, 'Cần nhận hàng và đối soát thanh toán trước khi hoàn tất.');
+      const paidWallet = current.orderPayment && !current.orderPayment.refund && ['PAID', 'SETTLED'].includes(current.orderPayment.status) && Number(current.orderPayment.amount) >= Number(current.total);
+      if (driverInfo?.paymentInfo?.status !== 'CONFIRMED' && !paidWallet) {
         throw problem(400, 'Chủ vựa chưa xác nhận đã nhận thanh toán. Vui lòng đợi Chủ vựa xác nhận trước khi hoàn tất.');
       }
 
@@ -393,17 +396,36 @@ function createOrderRoutes(prisma, requireAuth) {
         }
       }
 
-      // Automatically sync order items to store owner inventory
-      try {
-        await syncOrderToStoreInventory(prisma, buyerId, current);
-      } catch (err) {
-        console.error('Lỗi tự động nhập kho từ đơn hàng:', err.message);
-      }
 
       res.json({ success: true, order: serialize(updated), message: 'Đơn hàng đã hoàn tất thành công.' });
     } catch (error) { next(error); }
   });
-  router.use((error, req, res, next) => error.status ? res.status(error.status).json({ message: error.message }) : next(error));
+  router.post('/:id/import-inventory', requireRole('STORE_OWNER'), async (req, res, next) => {
+    const id = Number(req.params.id), buyerId = req.auth.user.id;
+    if (!Number.isInteger(id) || id < 1 || id > 2147483647) return res.status(400).json({ message: 'Mã đơn hàng không hợp lệ.' });
+    try {
+      const result = await prisma.$transaction(async tx => {
+        const resource = 'SupplyMindOrderInventory:' + id;
+        const locked = await tx.$queryRaw`DECLARE @result INT; EXEC @result = sys.sp_getapplock @Resource = ${resource}, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 10000; SELECT @result AS code;`;
+        if (locked[0].code < 0) throw problem(409, 'Đơn đang được nhập kho. Vui lòng thử lại.');
+        const order = await tx.wholesaleOrder.findFirst({ where: { id, buyerId }, include });
+        if (!order) throw problem(404, 'Không tìm thấy đơn hàng.');
+        const reason = importBlockReason(order, deliveryService.getDriverInfo(id));
+        if (reason) throw problem(409, reason);
+        const receipt = await syncOrderToStoreInventory(tx, buyerId, order);
+        if (!receipt.alreadyImported) await audit(tx, buyerId, 'ORDER_IMPORTED_TO_INVENTORY', 'ORDER', id, { count: receipt.count });
+        const saved = await tx.wholesaleOrder.findUniqueOrThrow({ where: { id }, include });
+        return { ...receipt, order: saved };
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: 10000, timeout: 30000 });
+      for (const update of result.supplierUpdates || []) {
+        try { require('../services/inventorySupplierService').setSupplier(update.itemId, update.supplierName); }
+        catch (error) { console.warn('Không lưu được tên NCC sau nhập kho:', error.message); }
+      }
+      const { supplierUpdates, ...receipt } = result;
+      res.json({ success: true, ...receipt, order: serialize(result.order), message: result.alreadyImported ? 'Đơn này đã được thêm vào kho trước đó; không cộng lại số lượng.' : 'Đã thêm ' + result.count + ' mặt hàng vào kho. Hàng nhập được lưu thành lô riêng theo đơn.' });
+    } catch (error) { next(error); }
+  });
+  router.use((error, req, res, next) => error.status || error.code === 'P2034' ? res.status(error.status || 409).json({ message: error.status ? error.message : 'Kho vừa thay đổi. Vui lòng thử nhập lại đơn.' }) : next(error));
   return router;
 }
 module.exports = { createOrderRoutes };

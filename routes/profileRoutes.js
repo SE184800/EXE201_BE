@@ -1,3 +1,4 @@
+const { sqlEnabled, sqlUploadStorage } = require('../services/uploadStorage');
 const express = require('express');
 const multer = require('multer');
 const path = require('node:path');
@@ -8,11 +9,11 @@ const { normalizePhone, todayInVietnam, getBirthDateRange } = require('../servic
 const { getStoreProfile, saveStoreProfile } = require('../services/storeService');
 
 const uploadsDir = path.join(__dirname, '../public/uploads');
-if (!fs.existsSync(uploadsDir)) {
+if (!sqlEnabled() && !fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-const qrStorage = multer.diskStorage({
+const qrStorage = sqlEnabled() ? sqlUploadStorage('bank-qr') : multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, uploadsDir);
   },

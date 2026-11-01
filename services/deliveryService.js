@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const documents = require('./documentStorage');
 const path = require('node:path');
 const { normalizePhone } = require('./registrationValidation');
 
@@ -49,6 +50,7 @@ function ensureDataFile() {
 }
 
 function loadDeliveries() {
+  if (documents.active()) return documents.readDocument('orders_delivery', {});
   ensureDataFile();
   if (deliveryCache) return deliveryCache;
   try {
@@ -62,6 +64,7 @@ function loadDeliveries() {
 }
 
 function persistDeliveries() {
+  if (documents.active()) return documents.writeDocument('orders_delivery', documents.readDocument('orders_delivery', {}));
   ensureDataFile();
   try {
     const tempFile = `${deliveryFile}.tmp`;
@@ -73,6 +76,7 @@ function persistDeliveries() {
 }
 
 function loadSavedDrivers() {
+  if (documents.active()) return documents.readDocument('saved_drivers', DEFAULT_SAVED_DRIVERS);
   ensureDataFile();
   if (savedDriversCache) return savedDriversCache;
   try {
@@ -90,6 +94,7 @@ function loadSavedDrivers() {
 }
 
 function persistSavedDrivers() {
+  if (documents.active()) return documents.writeDocument('saved_drivers', documents.readDocument('saved_drivers', DEFAULT_SAVED_DRIVERS));
   ensureDataFile();
   try {
     const tempFile = `${savedDriversFile}.tmp`;
@@ -182,6 +187,7 @@ function saveDriverToSavedList(driverData, supplierId) {
     list.unshift(entry);
   }
 
+  if (documents.active()) { documents.writeDocument('saved_drivers', list.slice(0, 50)); return entry; }
   savedDriversCache = list.slice(0, 50);
   persistSavedDrivers();
   return entry;

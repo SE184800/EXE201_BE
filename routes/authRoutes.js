@@ -22,12 +22,8 @@ function createAuthRoutes(authService, requireAuth, config) {
     },
   });
 
-  // =========================================================================
-  // CƠ CHẾ CHỐNG SPAM ĐĂNG KÝ (REGISTRATION RATE LIMITER)
-  // TẠM THỜI TẮT (bypassRegistrationLimiter = true) để thuận tiện test luồng.
-  // Khi cần bật lại cho Production, chỉ cần đổi biến này thành false.
-  // =========================================================================
-  const bypassRegistrationLimiter = true;
+  // Enforce spam protection in production.
+  const bypassRegistrationLimiter = !config.production;
 
   const registrationLimiter = bypassRegistrationLimiter
     ? (req, res, next) => next() // Bỏ qua rate limit để test gửi request liên tục

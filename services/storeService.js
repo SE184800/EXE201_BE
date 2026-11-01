@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const documents = require('./documentStorage');
 const path = require('node:path');
 
 const dataDir = path.join(__dirname, '../data');
@@ -84,6 +85,7 @@ function ensureDataFile() {
 }
 
 function loadData() {
+  if (documents.active()) return documents.readDocument('stores', { stores: {} });
   ensureDataFile();
   try {
     const raw = fs.readFileSync(storesFile, 'utf8');
@@ -96,6 +98,7 @@ function loadData() {
 }
 
 function saveData(data) {
+  if (documents.active()) return documents.writeDocument('stores', data);
   ensureDataFile();
   const tempFile = `${storesFile}.tmp.${Date.now()}`;
   fs.writeFileSync(tempFile, JSON.stringify(data, null, 2), 'utf8');
