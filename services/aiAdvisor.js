@@ -1,3 +1,7 @@
+const dns = require('dns');
+if (typeof dns.setDefaultResultOrder === 'function') {
+  dns.setDefaultResultOrder('ipv4first');
+}
 const { answerInventory } = require('./inventoryChat');
 
 function basicAnswer(message, calendar) {
@@ -36,29 +40,63 @@ async function answerWithAI({ message, history = [], calendar, apiKey, model, pr
 
   try {
     if (provider === 'GEMINI') {
-      const response = await fetcher(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-        method: 'POST',
-        headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
-        signal: AbortSignal.timeout(25000),
-        body: JSON.stringify({
-          systemInstruction: {
-            parts: [{
-              text: 'Bạn là trợ lý kho tạp hóa thông minh, trả lời bằng tiếng Việt thân thiện, rõ ràng. Bạn có dữ liệu Lịch Ngày Lễ tại Việt Nam. Khi người dùng hỏi về kế hoạch nhập hàng hoặc ngày lễ, hãy phân tích tác động của các dịp lễ sắp tới lên nhu cầu tiêu dùng của các nhóm hàng tương ứng (như nước giải khát, bia, bánh kẹo). Chỉ dùng dữ liệu được cung cấp. Trả lời văn bản thuần, không HTML.'
-            }]
-          },
-          contents: [
-            { role: 'user', parts: [{ text: JSON.stringify({ items: rows, upcomingHolidays, truncated: calendar.items.length > 100, assumptions: calendar.assumptions }) }] },
-            ...history.map(h => ({ role: h.role === 'assistant' ? 'model' : 'user', parts: [{ text: h.content }] })),
-            { role: 'user', parts: [{ text: message }] }
-          ],
-          generationConfig: { maxOutputTokens: 1800 },
-        }),
-      });
-      if (!response.ok) throw new Error('AI provider unavailable');
-      const data = await response.json(), candidate = data.candidates?.[0];
-      const answer = (candidate?.content?.parts || []).filter(p => !p.thought && typeof p.text === 'string').map(p => p.text).join('\n').trim();
-      if (candidate?.finishReason !== 'STOP' || !answer) throw new Error('Incomplete AI answer');
-      return { mode: 'AI', answer, usage: { inputTokens: data.usageMetadata?.promptTokenCount, outputTokens: data.usageMetadata?.candidatesTokenCount } };
+      const safeDefaultModels = [
+        'gemini-2.5-flash',
+        'gemini-2.0-flash',
+        'gemini-1.5-flash-latest',
+        'gemini-1.5-flash-8b',
+        'gemini-1.5-pro-latest',
+      ];
+      const rawModel = (model || '').trim().replace(/^models\//, '');
+      const mappedModel = rawModel === 'gemini-1.5-flash' ? 'gemini-1.5-flash-latest' : rawModel;
+      const candidates = [
+        mappedModel,
+        ...safeDefaultModels,
+      ].filter(Boolean).filter((m, idx, arr) => arr.indexOf(m) === idx);
+
+      let lastError = null;
+      for (const candidateModel of candidates) {
+        try {
+          const response = await fetcher(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(candidateModel)}:generateContent`, {
+            method: 'POST',
+            headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
+            signal: AbortSignal.timeout(25000),
+            body: JSON.stringify({
+              systemInstruction: {
+                parts: [{
+                  text: 'Bạn là trợ lý kho tạp hóa thông minh, trả lời bằng tiếng Việt thân thiện, rõ ràng. Bạn có dữ liệu Lịch Ngày Lễ tại Việt Nam. Khi người dùng hỏi về kế hoạch nhập hàng hoặc ngày lễ, hãy phân tích tác động của các dịp lễ sắp tới lên nhu cầu tiêu dùng của các nhóm hàng tương ứng (như nước giải khát, bia, bánh kẹo). Chỉ dùng dữ liệu được cung cấp. Trả lời văn bản thuần, không HTML.'
+                }]
+              },
+              contents: [
+                { role: 'user', parts: [{ text: JSON.stringify({ items: rows, upcomingHolidays, truncated: calendar.items.length > 100, assumptions: calendar.assumptions }) }] },
+                ...history.map(h => ({ role: h.role === 'assistant' ? 'model' : 'user', parts: [{ text: h.content }] })),
+                { role: 'user', parts: [{ text: message }] }
+              ],
+              generationConfig: { maxOutputTokens: 1800 },
+            }),
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text().catch(() => '');
+            console.warn(`[AI Warning] Model ${candidateModel} returned HTTP ${response.status}: ${errorText.slice(0, 100)}. Đang thử model dự phòng...`);
+            lastError = new Error(`Model ${candidateModel} error ${response.status}`);
+            continue;
+          }
+
+          const data = await response.json(), candidate = data.candidates?.[0];
+          const answer = (candidate?.content?.parts || []).filter(p => !p.thought && typeof p.text === 'string').map(p => p.text).join('\n').trim();
+          if (candidate?.finishReason !== 'STOP' || !answer) {
+            lastError = new Error(`Model ${candidateModel} incomplete answer`);
+            continue;
+          }
+
+          return { mode: 'AI', answer, usage: { inputTokens: data.usageMetadata?.promptTokenCount, outputTokens: data.usageMetadata?.candidatesTokenCount } };
+        } catch (attemptErr) {
+          lastError = attemptErr;
+          console.warn(`[AI Warning] Model ${candidateModel} failed: ${attemptErr.message}. Đang thử model dự phòng...`);
+        }
+      }
+      throw lastError || new Error('All candidate models failed');
     }
 
     const response = await fetcher('https://api.openai.com/v1/responses', {
@@ -75,12 +113,17 @@ async function answerWithAI({ message, history = [], calendar, apiKey, model, pr
         ]
       })
     });
-    if (!response.ok) throw new Error('AI provider unavailable');
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      console.error(`[AI Provider Error - OPENAI] HTTP ${response.status}: ${errorText}`);
+      throw new Error(`AI provider returned ${response.status}`);
+    }
     const data = await response.json();
     const answer = (data.output || []).filter(o => o.type === 'message').flatMap(o => o.content || []).filter(c => c.type === 'output_text').map(c => c.text).join('\n').trim();
     if (data.status !== 'completed' || !answer) throw new Error('Incomplete AI answer');
     return { mode: 'AI', answer, usage: { inputTokens: data.usage?.input_tokens, outputTokens: data.usage?.output_tokens } };
-  } catch {
+  } catch (err) {
+    console.error('[AI Advisor Error]:', err.message || err);
     return { mode: 'UNAVAILABLE', answer: 'AI đang không phản hồi hoặc cấu hình chưa hợp lệ. Bạn vẫn có thể xem lịch nhập và tra cứu kho.\n\n' + basicAnswer(message, calendar) };
   }
 }

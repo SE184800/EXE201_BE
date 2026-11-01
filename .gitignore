@@ -8,5 +8,7 @@ node_modules
 dev-out.log
 dev-err.log
 
-# Local tooling downloaded for this workstation
+# Local tooling and runtime files
 .local-tools/
+*.log
+data/

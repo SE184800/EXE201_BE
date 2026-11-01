@@ -27,10 +27,51 @@ function createSupplierController(service) {
     async submitVerification(req, res, next) {
       try { res.json({ profile: await service.submitVerification(req.auth.user.id) }); } catch (error) { next(error); }
     },
+    async quickVerify(req, res, next) {
+      try {
+        const profile = await service.quickVerify(req.auth.user.id);
+        return res.json({ success: true, profile });
+      } catch (error) {
+        return next(error);
+      }
+    },
     async listProducts(req, res, next) {
       try { return res.json({ success: true, products: await service.listProducts(req.auth.user.id) }); } catch (error) { return next(error); }
     },
     async createProduct(req, res, next) {
+      const items = Array.isArray(req.body)
+        ? req.body
+        : (Array.isArray(req.body?.products) ? req.body.products : null);
+
+      if (items) {
+        if (items.length === 0) {
+          return res.status(400).json({ success: false, message: 'Danh sách sản phẩm trống.' });
+        }
+        const validatedList = [];
+        for (let i = 0; i < items.length; i++) {
+          const validation = validateProductInput(items[i]);
+          if (!validation.data) {
+            return res.status(400).json({
+              success: false,
+              message: `Mặt hàng thứ ${i + 1} ("${items[i]?.name || ''}") chưa hợp lệ.`,
+              errors: validation.errors,
+              index: i,
+            });
+          }
+          validatedList.push(validation.data);
+        }
+        try {
+          const createdList = [];
+          for (const item of validatedList) {
+            const product = await service.createProduct(req.auth.user.id, item);
+            createdList.push(product);
+          }
+          return res.status(201).json({ success: true, products: createdList, count: createdList.length });
+        } catch (error) {
+          return next(error);
+        }
+      }
+
       const validation = validateProductInput(req.body);
       if (!validation.data) return res.status(400).json({ success: false, message: 'Thông tin sản phẩm chưa hợp lệ.', errors: validation.errors });
       try { return res.status(201).json({ success: true, product: await service.createProduct(req.auth.user.id, validation.data) }); } catch (error) { return next(error); }
@@ -61,12 +102,24 @@ function createSupplierController(service) {
     async updateOrderStatus(req, res, next) {
       const orderId = idFrom(req.params.orderId);
       const status = req.body?.status;
+      const driverInfo = req.body?.driverInfo;
       if (!orderId) return res.status(400).json({ success: false, message: 'Mã đơn hàng không hợp lệ.' });
       try {
-        const order = await service.updateOrderStatus(req.auth.user.id, orderId, status, req.body?.rejectReason);
+        const order = await service.updateOrderStatus(req.auth.user.id, orderId, status, req.body?.rejectReason, driverInfo);
         return order ? res.json({ success: true, order }) : res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
       } catch (error) {
-        if (['INVALID_ORDER_STATUS', 'INVALID_ORDER_TRANSITION', 'REJECT_REASON_REQUIRED', 'INSUFFICIENT_STOCK', 'DEPOSIT_REQUIRED', 'DEPOSIT_UNRESOLVED'].includes(error.code)) return res.status(400).json({ success: false, message: error.message });
+        if (['INVALID_ORDER_STATUS', 'INVALID_ORDER_TRANSITION', 'REJECT_REASON_REQUIRED', 'INSUFFICIENT_STOCK', 'DEPOSIT_REQUIRED', 'DEPOSIT_UNRESOLVED'].includes(error.code) || error.status === 400) return res.status(400).json({ success: false, message: error.message });
+        return next(error);
+      }
+    },
+    async updateDriverInfo(req, res, next) {
+      const orderId = idFrom(req.params.orderId);
+      if (!orderId) return res.status(400).json({ success: false, message: 'Mã đơn hàng không hợp lệ.' });
+      try {
+        const order = await service.updateDriverInfo(req.auth.user.id, orderId, req.body);
+        return order ? res.json({ success: true, order }) : res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+      } catch (error) {
+        if (error.status === 400) return res.status(400).json({ success: false, message: error.message });
         return next(error);
       }
     },
@@ -83,6 +136,54 @@ function createSupplierController(service) {
         return order
           ? res.json({ success: true, order })
           : res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+      } catch (error) {
+        return next(error);
+      }
+    },
+    async getDrivers(req, res, next) {
+      try {
+        const data = await service.getSavedDrivers(req.auth.user.id);
+        return res.json({ success: true, ...data });
+      } catch (error) {
+        return next(error);
+      }
+    },
+    async saveDriver(req, res, next) {
+      try {
+        const profile = await service.getProfile(req.auth.user.id);
+        const { saveDriverToSavedList } = require('../services/deliveryService');
+        const driver = saveDriverToSavedList(req.body, profile?.id);
+        return res.json({ success: true, driver });
+      } catch (error) {
+        return next(error);
+      }
+    },
+    async reportIncident(req, res, next) {
+      const orderId = idFrom(req.params.orderId);
+      if (!orderId) return res.status(400).json({ success: false, message: 'Mã đơn hàng không hợp lệ.' });
+      try {
+        const result = await service.reportIncident(req.auth.user.id, orderId, req.body);
+        return res.json(result);
+      } catch (error) {
+        return next(error);
+      }
+    },
+    async confirmPayment(req, res, next) {
+      const orderId = idFrom(req.params.orderId);
+      if (!orderId) return res.status(400).json({ success: false, message: 'Mã đơn hàng không hợp lệ.' });
+      try {
+        const result = await service.confirmPayment(req.auth.user.id, orderId);
+        return res.json(result);
+      } catch (error) {
+        return next(error);
+      }
+    },
+    async savePacking(req, res, next) {
+      const orderId = idFrom(req.params.orderId);
+      if (!orderId) return res.status(400).json({ success: false, message: 'Mã đơn hàng không hợp lệ.' });
+      try {
+        const result = await service.savePacking(req.auth.user.id, orderId, req.body?.checkedItemIds);
+        return res.json(result);
       } catch (error) {
         return next(error);
       }

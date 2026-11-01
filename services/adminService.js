@@ -1,4 +1,8 @@
+const fs = require('node:fs');
+const path = require('node:path');
 const { Prisma } = require('@prisma/client');
+const { moderateContent } = require('./contentModerationService');
+const systemConfigService = require('./systemConfigService');
 const { audit, problem, activeAccountWhere, verificationComplete } = require('./platformPolicy');
 const { addCalendarMonth, MONTHLY_PRICE } = require('./subscriptionService');
 const PAGE_SIZE = 20;
@@ -49,8 +53,10 @@ function settlementRow(order) {
 function settlementWhere(query, dates) {
   const status = textFilter(query.status);
   if (!['', 'PAID', 'UNPAID', 'NO_FEE', 'UNTRACKED'].includes(status)) throw problem(400, 'Trạng thái đối soát không hợp lệ.');
-  return { status: 'DELIVERED', deliveredAt: dates.range, ...(query.supplierId ? { supplierId: idParam(query.supplierId) } : {}),
-    ...(status === 'PAID' ? { commissionPaidAt: { not: null } } : status === 'UNPAID' ? { commissionPaidAt: null, commissionAmount: { gt: 0 } } : status === 'NO_FEE' ? { commissionAmount: 0 } : status === 'UNTRACKED' ? { commissionAmount: null } : {}) };
+  return {
+    status: 'DELIVERED', deliveredAt: dates.range, ...(query.supplierId ? { supplierId: idParam(query.supplierId) } : {}),
+    ...(status === 'PAID' ? { commissionPaidAt: { not: null } } : status === 'UNPAID' ? { commissionPaidAt: null, commissionAmount: { gt: 0 } } : status === 'NO_FEE' ? { commissionAmount: 0 } : status === 'UNTRACKED' ? { commissionAmount: null } : {})
+  };
 }
 function csvCell(value) {
   let text = value === null || value === undefined ? '' : String(value);
@@ -65,6 +71,70 @@ function serializeHoliday(row) {
     demandMultiplier: number(row.demandMultiplier),
   };
 }
+function cleanupUserLocalData(userId) {
+  const key = String(userId);
+  const dataDir = path.join(__dirname, '../data');
+
+  try {
+    const storesFile = path.join(dataDir, 'stores.json');
+    if (fs.existsSync(storesFile)) {
+      const stores = JSON.parse(fs.readFileSync(storesFile, 'utf8'));
+      if (stores.stores && stores.stores[key]) {
+        delete stores.stores[key];
+        fs.writeFileSync(storesFile, JSON.stringify(stores, null, 2), 'utf8');
+      }
+    }
+  } catch {}
+
+  try {
+    const contractsFile = path.join(dataDir, 'contracts.json');
+    if (fs.existsSync(contractsFile)) {
+      const contracts = JSON.parse(fs.readFileSync(contractsFile, 'utf8'));
+      if (contracts.contracts && contracts.contracts[key]) {
+        delete contracts.contracts[key];
+        fs.writeFileSync(contractsFile, JSON.stringify(contracts, null, 2), 'utf8');
+      }
+    }
+  } catch {}
+
+  try {
+    const walletsFile = path.join(dataDir, 'wallets.json');
+    if (fs.existsSync(walletsFile)) {
+      const wallets = JSON.parse(fs.readFileSync(walletsFile, 'utf8'));
+      let changed = false;
+      if (wallets.wallets && wallets.wallets[key]) {
+        delete wallets.wallets[key];
+        changed = true;
+      }
+      if (Array.isArray(wallets.transactions)) {
+        const filtered = wallets.transactions.filter((t) => t.userId !== Number(userId));
+        if (filtered.length !== wallets.transactions.length) {
+          wallets.transactions = filtered;
+          changed = true;
+        }
+      }
+      if (changed) {
+        fs.writeFileSync(walletsFile, JSON.stringify(wallets, null, 2), 'utf8');
+      }
+    }
+  } catch {}
+
+  try {
+    const crFile = path.join(dataDir, 'consignment_requests.json');
+    if (fs.existsSync(crFile)) {
+      const crs = JSON.parse(fs.readFileSync(crFile, 'utf8'));
+      if (Array.isArray(crs)) {
+        const filtered = crs.filter(
+          (r) => r.storeId !== Number(userId) && r.supplierId !== Number(userId)
+        );
+        if (filtered.length !== crs.length) {
+          fs.writeFileSync(crFile, JSON.stringify(filtered, null, 2), 'utf8');
+        }
+      }
+    }
+  } catch {}
+}
+
 function holidayInput(body, requireVersion = false) {
   body = body && typeof body === 'object' ? body : {};
   const name = typeof body.name === 'string' ? body.name.trim().replace(/\s+/g, ' ') : '';
@@ -101,9 +171,11 @@ function createAdminService(prisma, config) {
   async function listUsers(query) {
     const { page, skip, take } = pagination(query), q = textFilter(query.q), role = textFilter(query.role), status = textFilter(query.status);
     if (!['', 'STORE_OWNER', 'SUPPLIER'].includes(role) || !['', 'ACTIVE', 'SUSPENDED', 'BANNED'].includes(status)) throw problem(400, 'Vai trò hoặc trạng thái không hợp lệ.');
-    const where = { role: { code: role || { in: ['STORE_OWNER', 'SUPPLIER'] } },
+    const where = {
+      role: { code: role || { in: ['STORE_OWNER', 'SUPPLIER'] } },
       ...(status === 'BANNED' ? { isActive: false } : status === 'SUSPENDED' ? { isActive: true, suspendedUntil: { gt: new Date() } } : status === 'ACTIVE' ? activeAccountWhere() : {}),
-      ...(q ? { AND: [{ OR: ['username', 'name', 'email', 'phone'].map(field => ({ [field]: { contains: q } })) }] } : {}) };
+      ...(q ? { AND: [{ OR: ['username', 'name', 'email', 'phone'].map(field => ({ [field]: { contains: q } })) }] } : {})
+    };
     const [users, total] = await Promise.all([prisma.user.findMany({ where, select: userSelect, skip, take, orderBy: { id: 'desc' } }), prisma.user.count({ where })]);
     return { users: users.map(publicAccount), total, page, hasMore: skip + take < total };
   }
@@ -292,10 +364,321 @@ function createAdminService(prisma, config) {
     const actors = await prisma.user.findMany({ where: { id: { in: [...new Set(rows.map(r => r.actorId).filter(Boolean))] } }, select: { id: true, name: true, username: true } });
     return { logs: rows.map(row => ({ ...row, actor: actors.find(a => a.id === row.actorId) || null, details: JSON.parse(row.details) })), total, page, hasMore: skip + take < total };
   }
+  async function listModerationQueue(query = {}) {
+    const { page, skip, take } = pagination(query);
+    const products = await prisma.supplierProduct.findMany({
+      include: {
+        supplier: {
+          select: {
+            businessName: true,
+            warehouseAddress: true,
+            deliveryRadiusKm: true,
+            verificationStatus: true,
+            taxCode: true,
+            user: { select: { name: true, phone: true, email: true, username: true } }
+          }
+        }
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const itemsWithModeration = await Promise.all(
+      products.map(async (p) => {
+        const mod = await moderateContent({
+          name: p.name,
+          category: p.category,
+          packaging: p.packaging,
+          wholesalePrice: number(p.wholesalePrice),
+          moq: p.moq,
+        }, config || {});
+
+        return {
+          id: p.id,
+          supplierId: p.supplierId,
+          supplierName: p.supplier.businessName,
+          supplierOwner: p.supplier.user.name,
+          name: p.name,
+          category: p.category,
+          packaging: p.packaging,
+          wholesalePrice: number(p.wholesalePrice),
+          stockQty: p.stockQty,
+          moq: p.moq,
+          isActive: p.isActive,
+          createdAt: p.createdAt,
+          moderation: mod,
+        };
+      })
+    );
+
+    // Hàng chờ Admin CHỈ hiển thị các bài cần duyệt Mức 2 (NEEDS_REVIEW), loại bỏ AUTO_REJECTED để giảm tải cho Admin
+    const reviewQueue = itemsWithModeration.filter(item => item.moderation.status === 'NEEDS_REVIEW');
+    const autoRejectedCount = itemsWithModeration.filter(item => item.moderation.status === 'AUTO_REJECTED').length;
+    const autoApprovedCount = itemsWithModeration.filter(item => item.moderation.status === 'AUTO_APPROVED').length;
+    const total = reviewQueue.length;
+    const queue = reviewQueue.slice(skip, skip + take);
+
+    return {
+      queue,
+      total,
+      page,
+      hasMore: skip + take < total,
+      summary: {
+        flaggedCount: reviewQueue.length,
+        autoApprovedCount,
+        autoRejectedCount,
+        totalCount: itemsWithModeration.length,
+      },
+    };
+  }
+
+  async function moderateAction(actorId, productId, body = {}) {
+    const action = body.action;
+    const reason = textFilter(body.reason, 255);
+    if (!['APPROVE', 'REJECT'].includes(action)) throw problem(400, 'Hành động duyệt không hợp lệ (chỉ APPROVE hoặc REJECT).');
+
+    const product = await prisma.supplierProduct.findUnique({ where: { id: productId } });
+    if (!product) throw problem(404, 'Không tìm thấy sản phẩm.');
+
+    const newActiveState = action === 'APPROVE';
+    await prisma.supplierProduct.update({
+      where: { id: productId },
+      data: { isActive: newActiveState },
+    });
+
+    await audit(prisma, actorId, action === 'APPROVE' ? 'PRODUCT_AI_MODERATION_APPROVED' : 'PRODUCT_AI_MODERATION_REJECTED', 'PRODUCT', productId, {
+      action,
+      reason,
+      productName: product.name,
+    });
+
+    return {
+      success: true,
+      message: action === 'APPROVE' ? 'Đã duyệt sản phẩm thành công.' : 'Đã từ chối và gỡ sản phẩm khỏi sàn sỉ.',
+      productId,
+      action,
+    };
+  }
+  async function getSystemConfig() {
+    return systemConfigService.getConfig();
+  }
+
+  async function updateSystemConfig(actorId, body) {
+    const updated = systemConfigService.updateConfig(actorId, body);
+    try {
+      await audit(prisma, actorId, 'SYSTEM_CONFIG_UPDATED', 'SETTING', 'SYSTEM', {
+        strictness: updated.aiModeration?.strictness,
+        autoModerationEnabled: updated.aiModeration?.autoModerationEnabled,
+        forbiddenWordsCount: updated.aiModeration?.criticalForbiddenKeywords?.length,
+        restrictedWordsCount: updated.aiModeration?.restrictedKeywords?.length,
+        defaultDepositRate: updated.escrowDeposit?.defaultDepositRate,
+        maxDepositRate: updated.escrowDeposit?.maxDepositRate,
+      });
+    } catch {
+      // audit failure shouldn't block config update
+    }
+    return updated;
+  }
+
+  async function resetSystemConfig(actorId) {
+    const reset = systemConfigService.resetConfig(actorId);
+    try {
+      await audit(prisma, actorId, 'SYSTEM_CONFIG_RESET', 'SETTING', 'SYSTEM', {
+        action: 'RESET_TO_DEFAULT',
+      });
+    } catch {
+      // ignore
+    }
+    return reset;
+  }
+
+  async function addForbiddenWord(actorId, word) {
+    const updated = systemConfigService.addKeyword('forbidden', word);
+    try {
+      await audit(prisma, actorId, 'FORBIDDEN_KEYWORD_ADDED', 'SETTING', word, { word });
+    } catch {}
+    return updated;
+  }
+
+  async function removeForbiddenWord(actorId, word) {
+    const updated = systemConfigService.removeKeyword('forbidden', word);
+    try {
+      await audit(prisma, actorId, 'FORBIDDEN_KEYWORD_REMOVED', 'SETTING', word, { word });
+    } catch {}
+    return updated;
+  }
+
+  async function addRestrictedWord(actorId, word) {
+    const updated = systemConfigService.addKeyword('restricted', word);
+    try {
+      await audit(prisma, actorId, 'RESTRICTED_KEYWORD_ADDED', 'SETTING', word, { word });
+    } catch {}
+    return updated;
+  }
+
+  async function removeRestrictedWord(actorId, word) {
+    const updated = systemConfigService.removeKeyword('restricted', word);
+    try {
+      await audit(prisma, actorId, 'RESTRICTED_KEYWORD_REMOVED', 'SETTING', word, { word });
+    } catch {}
+    return updated;
+  }
+
+  async function deleteUser(actorId, id) {
+    if (!Number.isInteger(id) || id <= 0) throw problem(400, 'Mã tài khoản không hợp lệ.');
+    if (id === actorId) throw problem(400, 'Không thể tự xóa tài khoản quản trị đang đăng nhập.');
+
+    const result = await prisma.$transaction(async (tx) => {
+      const user = await tx.user.findUnique({
+        where: { id },
+        include: { role: true, supplierProfile: true },
+      });
+      if (!user) throw problem(404, 'Không tìm thấy tài khoản người dùng.');
+      if (user.role.code === 'ADMIN') throw problem(403, 'Không được phép xóa tài khoản Quản trị viên.');
+
+      const supplierProfile = user.supplierProfile;
+      if (supplierProfile) {
+        const suppId = supplierProfile.id;
+
+        // Delete WholesaleOrders for supplier
+        const suppOrders = await tx.wholesaleOrder.findMany({
+          where: { supplierId: suppId },
+          select: { id: true },
+        });
+        const suppOrderIds = suppOrders.map((o) => o.id);
+        if (suppOrderIds.length > 0) {
+          await tx.orderComplaint.deleteMany({ where: { orderId: { in: suppOrderIds } } });
+          await tx.wholesaleOrderItem.deleteMany({ where: { orderId: { in: suppOrderIds } } });
+          await tx.wholesaleOrder.deleteMany({ where: { id: { in: suppOrderIds } } });
+        }
+
+        // Delete SupplierQuotes for supplier
+        const suppQuotes = await tx.supplierQuote.findMany({
+          where: { supplierId: suppId },
+          select: { id: true },
+        });
+        const suppQuoteIds = suppQuotes.map((q) => q.id);
+        if (suppQuoteIds.length > 0) {
+          await tx.supplierQuoteLine.deleteMany({ where: { quoteId: { in: suppQuoteIds } } });
+          await tx.supplierQuote.deleteMany({ where: { id: { in: suppQuoteIds } } });
+        }
+
+        // Delete SupplierProducts
+        const suppProducts = await tx.supplierProduct.findMany({
+          where: { supplierId: suppId },
+          select: { id: true },
+        });
+        const suppProductIds = suppProducts.map((p) => p.id);
+        if (suppProductIds.length > 0) {
+          await tx.supplierProductPriceHistory.deleteMany({
+            where: { productId: { in: suppProductIds } },
+          });
+          await tx.supplierQuoteLine.deleteMany({
+            where: { productId: { in: suppProductIds } },
+          });
+          await tx.wholesaleOrderItem.deleteMany({
+            where: { productId: { in: suppProductIds } },
+          });
+          await tx.supplierProduct.deleteMany({ where: { id: { in: suppProductIds } } });
+        }
+
+        await tx.orderComplaint.deleteMany({ where: { supplierId: suppId } });
+        await tx.supplierProfile.delete({ where: { id: suppId } });
+      }
+
+      // Buyer orders & complaints & quotes
+      const buyerOrders = await tx.wholesaleOrder.findMany({
+        where: { buyerId: id },
+        select: { id: true },
+      });
+      const buyerOrderIds = buyerOrders.map((o) => o.id);
+      if (buyerOrderIds.length > 0) {
+        await tx.orderComplaint.deleteMany({ where: { orderId: { in: buyerOrderIds } } });
+        await tx.wholesaleOrderItem.deleteMany({ where: { orderId: { in: buyerOrderIds } } });
+        await tx.wholesaleOrder.deleteMany({ where: { id: { in: buyerOrderIds } } });
+      }
+      await tx.orderComplaint.deleteMany({ where: { buyerId: id } });
+
+      const buyerQuotes = await tx.supplierQuote.findMany({
+        where: { buyerId: id },
+        select: { id: true },
+      });
+      const buyerQuoteIds = buyerQuotes.map((q) => q.id);
+      if (buyerQuoteIds.length > 0) {
+        await tx.supplierQuoteLine.deleteMany({ where: { quoteId: { in: buyerQuoteIds } } });
+        await tx.supplierQuote.deleteMany({ where: { id: { in: buyerQuoteIds } } });
+      }
+
+      // Restock plans
+      const restockPlans = await tx.restockPlan.findMany({
+        where: { ownerId: id },
+        select: { id: true },
+      });
+      const planIds = restockPlans.map((p) => p.id);
+      if (planIds.length > 0) {
+        await tx.restockPlanLine.deleteMany({ where: { planId: { in: planIds } } });
+        await tx.restockPlan.deleteMany({ where: { id: { in: planIds } } });
+      }
+
+      // Inventory items
+      const items = await tx.inventoryItem.findMany({
+        where: { ownerId: id },
+        select: { id: true },
+      });
+      const itemIds = items.map((i) => i.id);
+      if (itemIds.length > 0) {
+        await tx.inventoryLot.deleteMany({ where: { itemId: { in: itemIds } } });
+        await tx.stockMovement.deleteMany({ where: { itemId: { in: itemIds } } });
+        await tx.inventoryItem.deleteMany({ where: { id: { in: itemIds } } });
+      }
+
+      // Recommendations & AI events
+      await tx.recommendationRun.deleteMany({ where: { ownerId: id } });
+      await tx.aiUsageEvent.deleteMany({ where: { userId: id } });
+
+      // Subscriptions
+      const subs = await tx.subscription.findMany({
+        where: { userId: id },
+        select: { id: true },
+      });
+      const subIds = subs.map((s) => s.id);
+      if (subIds.length > 0) {
+        await tx.subscriptionPayment.deleteMany({ where: { subscriptionId: { in: subIds } } });
+        await tx.subscription.deleteMany({ where: { id: { in: subIds } } });
+      }
+
+      // Auth sessions & password resets
+      await tx.authSession.deleteMany({ where: { userId: id } });
+      await tx.passwordReset.deleteMany({ where: { userId: id } });
+
+      // Audit logs
+      await tx.auditLog.updateMany({ where: { actorId: id }, data: { actorId: null } });
+
+      // Delete user
+      await tx.user.delete({ where: { id } });
+
+      await audit(tx, actorId, 'USER_DELETED_BY_ADMIN', 'USER', id, {
+        deletedUsername: user.username,
+        name: user.name,
+        role: user.role.code,
+      });
+
+      return {
+        success: true,
+        message: `Đã xóa tài khoản "${user.name}" (@${user.username}) thành công khỏi nền tảng.`,
+        deletedUser: { id: user.id, username: user.username, name: user.name },
+      };
+    });
+
+    cleanupUserLocalData(id);
+    return result;
+  }
+
   return {
-    listUsers, changeAccount, unlockSubscription, verifications, review, settings, changeRate,
+    listUsers, changeAccount, deleteUser, unlockSubscription, verifications, review, settings, changeRate,
     settlements, markPaid, analytics, aiMetrics, holidays, createHoliday,
-    updateHoliday, deleteHoliday, logs,
+    updateHoliday, deleteHoliday, logs, listModerationQueue, moderateAction,
+    getSystemConfig, updateSystemConfig, resetSystemConfig,
+    addForbiddenWord, removeForbiddenWord, addRestrictedWord, removeRestrictedWord,
   };
 }
 module.exports = { createAdminService, idParam, period, csvCell, holidayInput, serializeHoliday };

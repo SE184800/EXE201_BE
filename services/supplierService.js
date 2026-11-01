@@ -1,23 +1,28 @@
 const { audit, problem, httpsDocument, verificationComplete } = require('./platformPolicy');
-const { settleOrderToSupplier, refundPaidOrder } = require('./walletService');
+const { moderateContent } = require('./contentModerationService');
+const deliveryService = require('./deliveryService');
+const { settleOrderToSupplier, refundPaidOrder, walletService } = require('./walletService');
+const { importBlockReason } = require('./inventorySyncService');
 const ORDER_STATUSES = Object.freeze([
-  'PENDING', 'APPROVED', 'REJECTED', 'PREPARING', 'SHIPPING', 'ISSUE_HANDLING', 'DELIVERED',
+  'PENDING', 'APPROVED', 'REJECTED', 'PREPARING', 'SHIPPING', 'ISSUE_HANDLING', 'DELIVERED', 'COMPLETED',
 ]);
 
 const STATUS_LABELS = Object.freeze({
+  COMPLETED: 'Hoàn tất',
   PENDING: 'Chờ duyệt', APPROVED: 'Đã duyệt', REJECTED: 'Đã từ chối',
-  PREPARING: 'Đang chuẩn bị', SHIPPING: 'Đang vận chuyển',
-  ISSUE_HANDLING: 'Tiếp nhận xử lý', DELIVERED: 'Đã giao',
+  PREPARING: 'Đang soạn đơn', SHIPPING: 'Đang vận chuyển',
+  ISSUE_HANDLING: 'Tiếp nhận xử lý', DELIVERED: 'Đã giao', COMPLETED: 'Hoàn tất',
 });
 
 const TRANSITIONS = Object.freeze({
-  PENDING: ['APPROVED', 'REJECTED'],
+  PENDING: ['APPROVED', 'PREPARING', 'REJECTED'],
   APPROVED: ['PREPARING'],
   PREPARING: ['SHIPPING'],
   SHIPPING: ['ISSUE_HANDLING', 'DELIVERED'],
-  ISSUE_HANDLING: ['DELIVERED'],
+  ISSUE_HANDLING: ['DELIVERED', 'COMPLETED', 'REJECTED'],
+  DELIVERED: ['COMPLETED'],
+  COMPLETED: [],
   REJECTED: [],
-  DELIVERED: [],
 });
 
 function numberValue(value) {
@@ -29,9 +34,16 @@ function hasTwoDecimals(value) {
   return Number.isFinite(value) && Math.abs(value * 100 - Math.round(value * 100)) < 0.00001;
 }
 
-function serializeProduct(product) {
+async function serializeProduct(product) {
   const latestPrice = product.priceHistory?.[0] || null;
   const changePercent = latestPrice ? numberValue(latestPrice.changePercent) : null;
+  const mod = await moderateContent({
+    name: product.name,
+    category: product.category,
+    packaging: product.packaging,
+    wholesalePrice: numberValue(product.wholesalePrice),
+    moq: product.moq,
+  });
   return {
     category: product.category, imageUrl: product.imageUrl,
     id: product.id,
@@ -48,11 +60,17 @@ function serializeProduct(product) {
     priceChangedAt: latestPrice?.createdAt || null,
     priceChangeReason: latestPrice?.reason || null,
     priceWarning: changePercent !== null && changePercent >= 20,
+    moderation: mod,
   };
 }
 
 function serializeOrder(order) {
+  const driverInfo = deliveryService.getDriverInfo(order.id);
+  const inventoryImportBlockedReason = importBlockReason(order, driverInfo);
   return {
+    inventoryImportedAt: order.inventoryImportedAt || null,
+    canImportInventory: !order.inventoryImportedAt && !inventoryImportBlockedReason,
+    inventoryImportBlockedReason,
     commissionRate: order.commissionRate === null ? null : numberValue(order.commissionRate),
     commissionAmount: order.commissionAmount === null ? null : numberValue(order.commissionAmount),
     commissionPaidAt: order.commissionPaidAt, deliveredAt: order.deliveredAt,
@@ -82,11 +100,22 @@ function serializeOrder(order) {
     depositRefundReference: order.depositRefundReference || null,
     note: order.note,
     rejectReason: order.rejectReason,
+    driverInfo,
     complaint: order.complaint ? { id: order.complaint.id, reason: order.complaint.reason, description: order.complaint.description, imageUrl: order.complaint.imageUrl || null, status: order.complaint.status, response: order.complaint.response } : null,
     createdAt: order.createdAt,
     updatedAt: order.updatedAt,
     buyer: { id: order.buyer.id, name: order.buyer.name, username: order.buyer.username },
-    // Wallet payment state. `null` when the order was not paid with a wallet.
+    supplier: order.supplier ? {
+      id: order.supplier.id,
+      businessName: order.supplier.businessName,
+      warehouseAddress: order.supplier.warehouseAddress || null,
+      deliveryRadiusKm: order.supplier.deliveryRadiusKm ? numberValue(order.supplier.deliveryRadiusKm) : 10,
+      phone: order.supplier.user?.phone || '0908 123 789',
+      bankName: order.supplier.bankName || null,
+      bankAccountNumber: order.supplier.bankAccountNumber || null,
+      bankAccountHolder: order.supplier.bankAccountHolder || null,
+    } : null,
+    // Wallet payment state. null when the order was not paid with a wallet.
     walletPayment: order.orderPayment
       ? {
           id: order.orderPayment.id,
@@ -135,20 +164,28 @@ function validateProfileInput(body = {}) {
   if (businessName.length < 2 || businessName.length > 150) errors.businessName = 'Tên gian hàng cần từ 2 đến 150 ký tự.';
   if (warehouseAddress.length < 5 || warehouseAddress.length > 255) errors.warehouseAddress = 'Địa chỉ kho cần từ 5 đến 255 ký tự.';
   if (!hasTwoDecimals(deliveryRadiusKm) || deliveryRadiusKm < 0.01 || deliveryRadiusKm > 500) errors.deliveryRadiusKm = 'Bán kính giao hàng từ 0,01 đến 500 km, tối đa 2 chữ số thập phân.';
+  let phone = undefined;
+  if (body.phone !== undefined) {
+    phone = typeof body.phone === 'string' ? body.phone.trim().replace(/\s+/g, '') : '';
+    if (phone && !/^0\d{9}$/.test(phone)) {
+      errors.phone = 'Số điện thoại cần 10 số bắt đầu bằng 0.';
+    }
+  }
   return Object.keys(errors).length ? { errors } : {
     data: {
       businessName,
       warehouseAddress,
       deliveryRadiusKm,
       ...extras,
-      ...(body.deliveryFee === undefined ? {} : { deliveryFee: body.deliveryFee }),
+      ...(phone !== undefined ? { phone } : {}),
+      ...(body.deliveryFee === undefined ? { deliveryFee: 25000 } : { deliveryFee: body.deliveryFee > 0 ? body.deliveryFee : 25000 }),
       ...(body.bankName === undefined && body.bankAccountNumber === undefined && body.bankAccountHolder === undefined
         ? {}
         : {
-            bankName: hasBankInformation ? bankFields.bankName : null,
-            bankAccountNumber: hasBankInformation ? bankFields.bankAccountNumber : null,
-            bankAccountHolder: hasBankInformation ? bankFields.bankAccountHolder : null,
-          }),
+          bankName: hasBankInformation ? bankFields.bankName : null,
+          bankAccountNumber: hasBankInformation ? bankFields.bankAccountNumber : null,
+          bankAccountHolder: hasBankInformation ? bankFields.bankAccountHolder : null,
+        }),
     },
   };
 }
@@ -185,26 +222,50 @@ function validateProductInput(body = {}) {
     }
   }
   if (name.length < 2 || name.length > 150) errors.name = 'Tên sản phẩm cần từ 2 đến 150 ký tự.';
-  if (!packaging || packaging.length > 50) errors.packaging = 'Nhập quy cách đóng gói, ví dụ thùng, lốc hoặc bao.';
+  if (!packaging || packaging.length > 50) {
+    errors.packaging = 'Nhập quy cách đóng gói, ví dụ thùng, lốc hoặc bao.';
+  } else {
+    const numbersInPackaging = packaging.match(/\d+/g);
+    if (numbersInPackaging && numbersInPackaging.some(numStr => Number(numStr) > 100)) {
+      errors.packaging = 'Số lượng đơn vị trong quy cách đóng gói tối đa là 100 ngoài thực tế.';
+    }
+  }
   if (!hasTwoDecimals(wholesalePrice) || wholesalePrice < 0.01 || wholesalePrice > 1_000_000_000) errors.wholesalePrice = 'Giá sỉ từ 0,01 đến 1 tỷ đồng, tối đa 2 chữ số thập phân.';
-  if (!Number.isInteger(stockQty) || stockQty < 0 || stockQty > 2147483647) errors.stockQty = 'Tồn kho phải là số nguyên từ 0.';
-  if (!Number.isInteger(moq) || moq < 1 || moq > 2147483647) errors.moq = 'MOQ phải là số nguyên từ 1.';
+  if (!Number.isInteger(stockQty) || stockQty < 0 || stockQty > 50000) errors.stockQty = 'Tồn kho phải là số nguyên từ 0 đến 50.000.';
+  const effectiveMoq = Number.isInteger(moq) ? moq : (body.moq === undefined ? 1 : NaN);
+  if (!Number.isInteger(effectiveMoq) || effectiveMoq < 1 || effectiveMoq > 50000) {
+    errors.moq = 'MOQ phải là số nguyên từ 1 đến 50.000.';
+  } else if (Number.isInteger(stockQty) && stockQty > 0 && effectiveMoq > stockQty) {
+    errors.moq = `Số lượng tối thiểu (MOQ: ${effectiveMoq}) không được lớn hơn tồn kho có sẵn (${stockQty}).`;
+  }
   if (body.isActive !== undefined && typeof body.isActive !== 'boolean') errors.isActive = 'Trạng thái đăng bán không hợp lệ.';
-  return Object.keys(errors).length ? { errors } : { data: { name, packaging, wholesalePrice, stockQty, moq, ...extras, ...(body.isActive === undefined ? {} : { isActive: body.isActive }) } };
+  return Object.keys(errors).length ? { errors } : { data: { name, packaging, wholesalePrice, stockQty, moq: effectiveMoq, ...extras, ...(body.isActive === undefined ? {} : { isActive: body.isActive }) } };
 }
 
 function createSupplierService(prisma) {
   async function getProfile(userId) {
-    return prisma.supplierProfile.findUnique({ where: { userId } });
+    return prisma.supplierProfile.findUnique({
+      where: { userId },
+      include: { user: { select: { phone: true, name: true, email: true } } },
+    });
   }
 
   async function upsertProfile(userId, input) {
+    const { phone, ...profileData } = input;
     return prisma.$transaction(async tx => {
+      if (phone) {
+        await tx.user.update({ where: { id: userId }, data: { phone } });
+      }
       const old = await tx.supplierProfile.findUnique({ where: { userId } });
       const identityFields = ['businessName', 'warehouseAddress', 'region', 'taxCode', 'legalRepresentative', 'verificationDocumentUrl'];
-      const changedIdentity = old && identityFields.some(key => input[key] !== undefined && input[key] !== old[key]);
-      const profile = await tx.supplierProfile.upsert({ where: { userId }, create: { userId, ...input }, update: { ...input, ...(changedIdentity ? { verificationStatus: 'DRAFT', verificationNote: null, reviewedAt: null, reviewedBy: null, submittedAt: null, verificationVersion: { increment: 1 } } : {}) } });
-      await audit(tx, userId, 'SUPPLIER_PROFILE_UPDATED', 'SUPPLIER', profile.id, { changedFields: Object.keys(input), verificationReset: Boolean(changedIdentity), businessName: profile.businessName });
+      const changedIdentity = old && identityFields.some(key => profileData[key] !== undefined && profileData[key] !== old[key]);
+      const profile = await tx.supplierProfile.upsert({
+        where: { userId },
+        create: { userId, ...profileData },
+        update: { ...profileData, ...(changedIdentity ? { verificationStatus: 'DRAFT', verificationNote: null, reviewedAt: null, reviewedBy: null, submittedAt: null, verificationVersion: { increment: 1 } } : {}) },
+        include: { user: { select: { phone: true, name: true, email: true } } },
+      });
+      await audit(tx, userId, 'SUPPLIER_PROFILE_UPDATED', 'SUPPLIER', profile.id, { changedFields: Object.keys(profileData), verificationReset: Boolean(changedIdentity), businessName: profile.businessName });
       return profile;
     }, { isolationLevel: 'Serializable' });
   }
@@ -221,6 +282,27 @@ function createSupplierService(prisma) {
     }, { isolationLevel: 'Serializable' });
   }
 
+  async function quickVerify(userId) {
+    return prisma.$transaction(async tx => {
+      const profile = await tx.supplierProfile.findUnique({ where: { userId } });
+      if (!profile) throw problem(404, 'Bạn cần thiết lập thông tin gian hàng trước.');
+      const changed = await tx.supplierProfile.update({
+        where: { id: profile.id },
+        data: {
+          verificationStatus: 'APPROVED',
+          verificationNote: 'Gian hàng đã được kích hoạt mở bán trên Nguồn sỉ.',
+          reviewedAt: new Date(),
+          verificationVersion: { increment: 1 },
+        },
+      });
+      await audit(tx, userId, 'SUPPLIER_QUICK_VERIFIED', 'SUPPLIER', profile.id, {
+        businessName: profile.businessName,
+        status: 'APPROVED',
+      });
+      return serializeProfile(changed);
+    }, { isolationLevel: 'Serializable' });
+  }
+
   async function requireProfile(userId) {
     const profile = await getProfile(userId);
     if (!profile) {
@@ -234,22 +316,42 @@ function createSupplierService(prisma) {
   async function listProducts(userId) {
     const profile = await requireProfile(userId);
     const products = await prisma.supplierProduct.findMany({
-      where: { supplierId: profile.id },
       include: { priceHistory: { orderBy: { createdAt: 'desc' }, take: 1 } },
+      where: { supplierId: profile.id },
       orderBy: { updatedAt: 'desc' },
     });
-    return products.map(serializeProduct);
+    return Promise.all(products.map(serializeProduct));
   }
 
   async function createProduct(userId, input) {
     const profile = await requireProfile(userId);
     const { priceChangeReason: _priceChangeReason, ...productInput } = input;
+    const mod = await moderateContent({
+      name: productInput.name,
+      category: productInput.category,
+      packaging: productInput.packaging,
+      wholesalePrice: numberValue(productInput.wholesalePrice),
+      moq: productInput.moq,
+    });
+    const isClean = mod.status === 'AUTO_APPROVED';
+    const dataToCreate = {
+      supplierId: profile.id,
+      ...productInput,
+      isActive: isClean ? (productInput.isActive !== undefined ? Boolean(productInput.isActive) : true) : false,
+    };
     const product = await prisma.$transaction(async tx => {
-      const created = await tx.supplierProduct.create({ data: { supplierId: profile.id, ...productInput } });
-      await audit(tx, userId, 'PRODUCT_CREATED', 'PRODUCT', created.id, { name: created.name, price: created.wholesalePrice.toString(), stock: created.stockQty });
+      const created = await tx.supplierProduct.create({ data: dataToCreate });
+      await audit(tx, userId, isClean ? 'PRODUCT_CREATED' : 'PRODUCT_CREATED_' + mod.status, 'PRODUCT', created.id, {
+        name: created.name,
+        price: created.wholesalePrice.toString(),
+        stock: created.stockQty,
+        isActive: created.isActive,
+        moderationStatus: mod.status,
+        moderationReasons: mod.reasons,
+      });
       return created;
     });
-    return serializeProduct(product);
+    return await serializeProduct(product);
   }
 
   async function updateProduct(userId, productId, input, expectedUpdatedAt) {
@@ -257,13 +359,41 @@ function createSupplierService(prisma) {
     const product = await prisma.supplierProduct.findFirst({ where: { id: productId, supplierId: profile.id } });
     if (!product) return null;
     const { priceChangeReason, ...productInput } = input;
+
+    const targetName = productInput.name !== undefined ? productInput.name : product.name;
+    const targetCategory = productInput.category !== undefined ? productInput.category : product.category;
+    const targetPackaging = productInput.packaging !== undefined ? productInput.packaging : product.packaging;
+    const targetPrice = productInput.wholesalePrice !== undefined ? numberValue(productInput.wholesalePrice) : numberValue(product.wholesalePrice);
+    const targetMoq = productInput.moq !== undefined ? productInput.moq : product.moq;
+
+    const mod = await moderateContent({
+      name: targetName,
+      category: targetCategory,
+      packaging: targetPackaging,
+      wholesalePrice: targetPrice,
+      moq: targetMoq,
+    });
+    const isClean = mod.status === 'AUTO_APPROVED';
+
+    if (!isClean && productInput.isActive === true) {
+      const errPrefix = mod.status === 'AUTO_REJECTED'
+        ? 'Không thể mở bán do vi phạm nghiêm trọng'
+        : 'Không thể mở bán do đang chờ Quản trị viên kiểm duyệt';
+      throw problem(400, `${errPrefix} (${mod.reasons.join('; ')}). Vui lòng sửa thông tin hợp lệ.`);
+    }
+
+    const finalProductInput = {
+      ...productInput,
+      ...(!isClean ? { isActive: false } : {}),
+    };
+
     const oldPrice = numberValue(product.wholesalePrice);
-    const priceChanged = oldPrice !== Number(productInput.wholesalePrice);
+    const priceChanged = productInput.wholesalePrice !== undefined && oldPrice !== Number(productInput.wholesalePrice);
     const normalizedPriceReason = priceChanged
       ? (priceChangeReason && priceChangeReason.length >= 3 ? priceChangeReason : 'Chủ vựa cập nhật giá bán')
       : null;
     return prisma.$transaction(async tx => {
-      const changed = await tx.supplierProduct.updateMany({ where: { id: productId, supplierId: profile.id, updatedAt: expectedUpdatedAt }, data: productInput });
+      const changed = await tx.supplierProduct.updateMany({ where: { id: productId, supplierId: profile.id, updatedAt: expectedUpdatedAt }, data: finalProductInput });
       if (!changed.count) throw Object.assign(new Error('Sản phẩm vừa thay đổi.'), { code: 'STALE_PRODUCT' });
       if (priceChanged) {
         const newPrice = Number(productInput.wholesalePrice);
@@ -272,12 +402,13 @@ function createSupplierService(prisma) {
           data: { productId, oldPrice, newPrice, changePercent, reason: normalizedPriceReason, changedBy: userId },
         });
       }
-      await audit(tx, userId, 'PRODUCT_UPDATED', 'PRODUCT', productId, {
+      await audit(tx, userId, isClean ? 'PRODUCT_UPDATED' : 'PRODUCT_UPDATED_' + mod.status, 'PRODUCT', productId, {
         before: { price: product.wholesalePrice.toString(), stock: product.stockQty, active: product.isActive },
-        after: productInput,
+        after: finalProductInput,
         priceChangeReason: normalizedPriceReason,
+        moderationStatus: mod.status,
       });
-      return serializeProduct(await tx.supplierProduct.findUnique({
+      return await serializeProduct(await tx.supplierProduct.findUnique({
         where: { id: productId },
         include: { priceHistory: { orderBy: { createdAt: 'desc' }, take: 1 } },
       }));
@@ -291,7 +422,7 @@ function createSupplierService(prisma) {
     return prisma.$transaction(async tx => {
       const saved = await tx.supplierProduct.update({ where: { id: productId }, data: { isActive: false } });
       await audit(tx, userId, 'PRODUCT_HIDDEN', 'PRODUCT', productId);
-      return serializeProduct(saved);
+      return await serializeProduct(saved);
     });
   }
 
@@ -307,7 +438,7 @@ function createSupplierService(prisma) {
     return { orders: orders.slice(0, 20).map(serializeOrder), total, page, hasMore: orders.length > 20 };
   }
 
-  async function updateOrderStatus(userId, orderId, status, rejectReason) {
+  async function updateOrderStatus(userId, orderId, status, rejectReason, driverInfo) {
     if (!ORDER_STATUSES.includes(status)) {
       const error = new Error('Trạng thái đơn hàng không hợp lệ.');
       error.code = 'INVALID_ORDER_STATUS';
@@ -323,8 +454,11 @@ function createSupplierService(prisma) {
       error.code = 'INVALID_ORDER_TRANSITION';
       throw error;
     }
+    if (driverInfo) {
+      deliveryService.saveDriverInfo(order.id, driverInfo, profile.id);
+    }
     const normalizedRejectReason = typeof rejectReason === 'string' ? rejectReason.trim() : '';
-    if (status === 'APPROVED' && numberValue(order.depositAmount || 0) > 0 && order.depositStatus !== 'PAID') {
+    if ((status === 'APPROVED' || status === 'PREPARING') && numberValue(order.depositAmount || 0) > 0 && order.depositStatus !== 'PAID') {
       const error = new Error('Đơn này yêu cầu đặt cọc. Chỉ duyệt sau khi đã xác nhận tiền vào tài khoản.');
       error.code = 'DEPOSIT_REQUIRED';
       throw error;
@@ -340,7 +474,7 @@ function createSupplierService(prisma) {
       throw error;
     }
     await prisma.$transaction(async (transaction) => {
-      if (status === 'APPROVED') {
+      if (status === 'APPROVED' || (status === 'PREPARING' && order.status === 'PENDING')) {
         const currentProfile = await transaction.supplierProfile.findUnique({ where: { id: profile.id } });
         if (currentProfile.verificationStatus !== 'APPROVED') throw problem(403, 'Gian hàng cần được xác minh trước khi nhận đơn mới.');
       }
@@ -353,11 +487,13 @@ function createSupplierService(prisma) {
           ...(status === 'REJECTED' && order.depositStatus === 'PAID'
             ? { depositStatus: 'REFUND_PENDING' }
             : {}),
-          ...(status === 'DELIVERED' ? { deliveredAt: new Date(), commissionAmount: order.commissionRate === null ? null : order.subtotal.mul(order.commissionRate).div(100).toDecimalPlaces(2) } : {}),
+          ...(status === 'DELIVERED' || status === 'COMPLETED'
+            ? { deliveredAt: new Date(), commissionAmount: order.commissionRate === null ? null : order.subtotal.mul(order.commissionRate).div(100).toDecimalPlaces(2) }
+            : {}),
         },
       });
       if (!changed.count) throw Object.assign(new Error('Đơn đã được xử lý. Vui lòng tải lại.'), { code: 'INVALID_ORDER_TRANSITION' });
-      if (status === 'APPROVED') {
+      if (status === 'APPROVED' || (status === 'PREPARING' && order.status === 'PENDING')) {
         for (const item of [...order.items].sort((a, b) => a.productId - b.productId)) {
           const result = await transaction.supplierProduct.updateMany({
             where: { id: item.productId, supplierId: profile.id, isActive: true, stockQty: { gte: item.quantity } },
@@ -366,27 +502,72 @@ function createSupplierService(prisma) {
           if (result.count !== 1) throw Object.assign(new Error('Sản phẩm “' + item.productName + '” không đủ tồn kho hoặc đã ẩn.'), { code: 'INSUFFICIENT_STOCK' });
         }
       }
-      // Money paid with the buyer wallet only reaches the supplier once the
-      // order is delivered, so the wallet follows the existing order flow.
-      if (status === 'DELIVERED') {
-        await settleOrderToSupplier(transaction, order);
+      // Money paid with the buyer wallet reaches the supplier once the
+      // order is delivered or completed, so the wallet follows the existing order flow.
+      if (status === 'DELIVERED' || status === 'COMPLETED') {
+        try {
+          await settleOrderToSupplier(transaction, order);
+        } catch (err) {
+          console.error('Loi quyet toan vi:', err.message);
+        }
       }
       if (status === 'REJECTED') {
-        // Only orders paid with the wallet need to be refunded.
+        if (order.depositStatus === 'PAID') {
+          const escrow = await transaction.walletTransaction.findFirst({ where: { orderId: order.id, type: 'ESCROW_LOCK' } });
+          if (escrow) {
+            await walletService.refundEscrow(order.buyerId, order.id, numberValue(order.depositAmount), 'Hoàn cọc khi từ chối đơn', { tx: transaction });
+            await transaction.wholesaleOrder.update({ where: { id: order.id }, data: { depositStatus: 'REFUNDED', depositRefundedAt: new Date(), depositRefundReference: 'ESCROW-REFUND-' + order.id } });
+          }
+        }
+        if (['APPROVED', 'PREPARING', 'SHIPPING', 'ISSUE_HANDLING'].includes(order.status)) {
+          for (const item of order.items) {
+            await transaction.supplierProduct.updateMany({
+              where: { id: item.productId, supplierId: profile.id },
+              data: { stockQty: { increment: item.quantity } },
+            });
+          }
+        }
         const payment = await transaction.orderPayment.findUnique({ where: { orderId: order.id } });
         if (payment && !payment.refund) {
           await refundPaidOrder(transaction, {
             orderId: order.id,
             actorId: userId,
-            reason: normalizedRejectReason || 'Chủ vựa từ chối đơn hàng.',
+            reason: normalizedRejectReason || 'Chu vua tu choi don hang.',
           });
         }
       }
       await audit(transaction, userId, 'ORDER_STATUS_CHANGED', 'ORDER', order.id, { before: order.status, after: status, rejectReason: status === 'REJECTED' ? normalizedRejectReason : null });
     }, { isolationLevel: 'Serializable' });
+
+    if ((status === 'DELIVERED' || status === 'COMPLETED') && numberValue(order.depositAmount || 0) > 0 && order.depositStatus === 'PAID') {
+      try {
+        await walletService.releaseEscrow(order.buyerId, profile.userId, order.id, numberValue(order.depositAmount), order.commissionRate ? numberValue(order.commissionRate) : 0);
+      } catch (err) {
+        console.error('Lỗi giải phóng cọc ví:', err.message);
+      }
+    }
+    if (status === 'REJECTED' && numberValue(order.depositAmount || 0) > 0 && order.depositStatus === 'PAID') {
+      try {
+        await walletService.refundEscrow(order.buyerId, order.id, numberValue(order.depositAmount), `Hoàn trả cọc do chủ vựa từ chối đơn #${order.id}: ${normalizedRejectReason}`);
+      } catch (err) {
+        console.error('Lỗi hoàn cọc ví:', err.message);
+      }
+    }
+
     return serializeOrder(await prisma.wholesaleOrder.findUnique({
       where: { id: order.id }, include: { buyer: true, items: true, complaint: true, orderPayment: { include: { refund: { select: { id: true } } } } },
     }));
+  }
+
+  async function updateDriverInfo(userId, orderId, driverInfo) {
+    const profile = await requireProfile(userId);
+    const order = await prisma.wholesaleOrder.findFirst({
+      where: { id: orderId, supplierId: profile.id },
+      include: { buyer: true, items: true, complaint: true },
+    });
+    if (!order) return null;
+    deliveryService.saveDriverInfo(order.id, driverInfo);
+    return serializeOrder(order);
   }
 
   async function updateDeposit(userId, orderId, action, body = {}) {
@@ -413,10 +594,10 @@ function createSupplierService(prisma) {
       let expectedDepositStatus;
       let event;
       if (normalizedAction === 'CONFIRM') {
-        if (order.status !== 'PENDING' || order.depositStatus !== 'SUBMITTED') {
+        if (order.status !== 'PENDING' || !['PENDING', 'SUBMITTED'].includes(order.depositStatus)) {
           throw problem(409, 'Khoản cọc không còn ở trạng thái chờ xác nhận.');
         }
-        expectedDepositStatus = 'SUBMITTED';
+        expectedDepositStatus = order.depositStatus;
         event = 'DEPOSIT_CONFIRMED';
         data = {
           depositStatus: 'PAID',
@@ -480,7 +661,7 @@ function createSupplierService(prisma) {
     ]);
     return {
       profile: serializeProfile(profile),
-      products: products.map(serializeProduct), orders: orders.map(serializeOrder),
+      products: await Promise.all(products.map(serializeProduct)), orders: orders.map(serializeOrder),
       summary: {
         productCount: products.filter((product) => product.isActive).length,
         lowStockCount: products.filter((product) => product.isActive && product.stockQty <= product.moq).length,
@@ -491,9 +672,129 @@ function createSupplierService(prisma) {
     };
   }
 
+  async function reportIncident(userId, orderId, body = {}) {
+    const profile = await requireProfile(userId);
+    const order = await prisma.wholesaleOrder.findFirst({
+      where: { id: orderId, supplierId: profile.id },
+      include: { buyer: true, items: true },
+    });
+    if (!order) throw problem(404, 'Không tìm thấy đơn hàng.');
+
+    const { damagedItems, damageType, damageTypeLabel, evidenceImageUrl, notes, action, lossAmount } = body;
+    if (!Array.isArray(damagedItems) || damagedItems.length === 0) {
+      throw problem(400, 'Vui lòng chọn ít nhất 1 mặt hàng bị hư hỏng.');
+    }
+
+    let supplementaryOrder = null;
+    const incidentData = {
+      orderId: order.id,
+      damagedItems,
+      damageType: damageType || 'DAMAGED_TRANSIT',
+      damageTypeLabel: damageTypeLabel || 'Hư hỏng bể vỡ khi vận chuyển',
+      evidenceImageUrl: evidenceImageUrl || null,
+      notes: notes || null,
+      action: action || 'REPLACE_0VND',
+      lossAmount: typeof lossAmount === 'number' && Number.isFinite(lossAmount) ? Math.round(lossAmount) : undefined,
+      reportedBy: 'SUPPLIER',
+      reportedAt: new Date().toISOString(),
+    };
+
+    if (action === 'REPLACE_0VND' || !action) {
+      supplementaryOrder = await prisma.wholesaleOrder.create({
+        data: {
+          buyerId: order.buyerId,
+          supplierId: order.supplierId,
+          status: 'PREPARING',
+          subtotal: 0,
+          deliveryFee: 0,
+          total: 0,
+          depositRate: 0,
+          depositAmount: 0,
+          depositStatus: 'NONE',
+          recipientName: order.recipientName,
+          recipientPhone: order.recipientPhone,
+          deliveryAddress: order.deliveryAddress,
+          note: `Đơn giao bổ sung 0đ bù hàng sự cố vận chuyển cho đơn #${order.id}`,
+          items: {
+            create: damagedItems.map((it) => ({
+              productId: it.productId,
+              productName: it.productName,
+              packaging: it.packaging || 'Phần',
+              quantity: it.quantity || 1,
+              unitPrice: 0,
+              lineTotal: 0,
+            })),
+          },
+        },
+        include: { items: true, buyer: true },
+      });
+      incidentData.supplementaryOrderId = supplementaryOrder.id;
+    }
+
+    deliveryService.saveIncidentReport(order.id, incidentData);
+
+    return {
+      success: true,
+      incidentReport: incidentData,
+      supplementaryOrder: supplementaryOrder ? serializeOrder(supplementaryOrder) : null,
+      message: supplementaryOrder
+        ? `Đã ghi nhận sự cố và tự động tạo đơn giao bổ sung 0đ #${supplementaryOrder.id}.`
+        : 'Đã ghi nhận báo cáo sự cố vận chuyển.',
+    };
+  }
+
+  async function confirmPayment(userId, orderId) {
+    const profile = await requireProfile(userId);
+    const order = await prisma.wholesaleOrder.findFirst({
+      where: { id: orderId, supplierId: profile.id },
+      include: { buyer: true, items: true },
+    });
+    if (!order) throw problem(404, 'Không tìm thấy đơn hàng.');
+
+    const paymentInfo = deliveryService.savePaymentInfo(order.id, {
+      status: 'CONFIRMED',
+      supplierConfirmedAt: new Date().toISOString(),
+      confirmedBy: userId,
+    });
+
+    if (order.status === 'ISSUE_HANDLING') {
+      await prisma.wholesaleOrder.update({
+        where: { id: order.id },
+        data: {
+          status: 'DELIVERED',
+          deliveredAt: new Date(),
+          commissionAmount: order.commissionRate === null ? null : order.subtotal.mul(order.commissionRate).div(100).toDecimalPlaces(2),
+        },
+      });
+    }
+
+    return {
+      success: true,
+      paymentInfo,
+      message: 'Đã xác nhận nhận đủ tiền thanh toán cho đơn hàng #' + order.id,
+    };
+  }
+
+  async function savePacking(userId, orderId, checkedItemIds = []) {
+    const profile = await requireProfile(userId);
+    const order = await prisma.wholesaleOrder.findFirst({
+      where: { id: orderId, supplierId: profile.id },
+    });
+    if (!order) throw problem(404, 'Không tìm thấy đơn hàng.');
+    const packingChecklist = deliveryService.savePackingChecklist(order.id, checkedItemIds);
+    return { success: true, packingChecklist };
+  }
+
+  async function getSavedDrivers(userId) {
+    const profile = await requireProfile(userId);
+    const drivers = deliveryService.getSavedDrivers(profile.id);
+    return { drivers };
+  }
+
   return {
-    getProfile, upsertProfile, submitVerification, listProducts, createProduct, updateProduct, deactivateProduct,
-    listOrders, updateOrderStatus, updateDeposit, dashboard,
+    getProfile, upsertProfile, submitVerification, quickVerify, listProducts, createProduct, updateProduct, deactivateProduct,
+    listOrders, updateOrderStatus, updateDriverInfo, updateDeposit, dashboard,
+    reportIncident, confirmPayment, savePacking, getSavedDrivers,
   };
 }
 
@@ -507,6 +808,7 @@ function serializeProfile(profile) {
     id, businessName, warehouseAddress, region, taxCode, legalRepresentative,
     verificationDocumentUrl, verificationStatus, verificationNote, verificationVersion,
     submittedAt, reviewedAt, bankName, bankAccountNumber, bankAccountHolder,
+    phone: profile.user?.phone || profile.phone || null,
     deliveryRadiusKm: numberValue(profile.deliveryRadiusKm),
     deliveryFee: numberValue(profile.deliveryFee),
   };

@@ -18,6 +18,13 @@ const TRANSACTION_TYPES = Object.freeze({
   SANDBOX_DEPOSIT: 'SANDBOX_DEPOSIT',
   SANDBOX_WITHDRAWAL: 'SANDBOX_WITHDRAWAL',
   QR_DEPOSIT: 'QR_DEPOSIT',
+  SUBSCRIPTION_PAYMENT: 'SUBSCRIPTION_PAYMENT',
+  ESCROW_LOCK: 'ESCROW_LOCK',
+  ESCROW_RELEASE: 'ESCROW_RELEASE',
+  ESCROW_RECEIVED: 'ESCROW_RECEIVED',
+  ESCROW_REFUND: 'ESCROW_REFUND',
+  PENALTY_CONFISCATION: 'PENALTY_CONFISCATION',
+  COMPENSATION_RECEIVED: 'COMPENSATION_RECEIVED',
 });
 
 // REAL money needs an admin review, SANDBOX money settles instantly.
@@ -455,7 +462,22 @@ function createWalletService(prisma, qrBank = {}) {
   async function createSandboxDepositRequest(userId, body = {}) {
     const amount = parseAmount(body.amount);
     const note = text(body.note, 500);
+    if (body.requestId != null && (typeof body.requestId !== 'string' || !UUID.test(body.requestId))) {
+      throw problem(400, 'Mã yêu cầu nạp thử không hợp lệ.');
+    }
+    const requestReference = body.requestId ? `SANDBOX-REQ-${body.requestId}` : null;
     return prisma.$transaction(async tx => {
+      if (requestReference) {
+        const previous = await tx.walletTransaction.findUnique({ where: { reference: requestReference } });
+        if (previous) {
+          if (previous.userId !== userId) throw problem(409, 'Mã yêu cầu đã được dùng cho tài khoản khác.');
+          const saved = await tx.depositRequest.findFirstOrThrow({
+            where: { userId, reference: requestReference },
+            include: { user: { select: { id: true, name: true, username: true } } },
+          });
+          return serializeDeposit(saved);
+        }
+      }
       const request = await tx.depositRequest.create({
         data: {
           userId,
@@ -465,7 +487,7 @@ function createWalletService(prisma, qrBank = {}) {
           bankName: 'SANDBOX',
           bankAccountNumber: 'SANDBOX',
           bankAccountHolder: 'SANDBOX',
-          reference: `SANDBOX-DEP-${Date.now()}`,
+          reference: requestReference || `SANDBOX-DEP-${Date.now()}`,
           note: note || null,
           status: 'PENDING',
         },
@@ -484,7 +506,7 @@ function createWalletService(prisma, qrBank = {}) {
         type: TRANSACTION_TYPES.SANDBOX_DEPOSIT,
         direction: 'CREDIT',
         amount,
-        reference: `SANDBOX-DEP-${request.id}`,
+        reference: requestReference || `SANDBOX-DEP-${request.id}`,
         method: METHODS.SANDBOX,
         note: note || 'Nạp tiền ảo (sandbox).',
       });
@@ -1174,3 +1196,232 @@ module.exports = {
   money,
   UUID,
 };
+
+const defaultDb = require('../config/db');
+
+const walletService = {
+  async getWallet(userId) {
+    const wallet = await ensureWallet(defaultDb, userId);
+    return {
+      userId,
+      availableBalance: money(wallet.balance),
+      lockedBalance: money(wallet.heldBalance),
+      totalBalance: money(wallet.balance.add(wallet.heldBalance)),
+    };
+  },
+
+  async lockEscrow(buyerId, orderId, amountNum, note, { tx: externalTx } = {}) {
+    if (!amountNum || amountNum <= 0) return;
+    const amount = toDecimal(amountNum);
+    const run = async (tx) => {
+      const wallet = await ensureWallet(tx, buyerId);
+      if (wallet.balance.lessThan(amount)) {
+        throw problem(409, `Số dư ví khả dụng không đủ để ký quỹ cọc (${money(wallet.balance).toLocaleString('vi-VN')} ₫ / cần ${money(amount).toLocaleString('vi-VN')} ₫).`);
+      }
+      const nextBalance = wallet.balance.sub(amount);
+      const nextHeld = wallet.heldBalance.add(amount);
+      await tx.wallet.update({
+        where: { id: wallet.id },
+        data: { balance: nextBalance, heldBalance: nextHeld },
+      });
+      await tx.walletTransaction.create({
+        data: {
+          walletId: wallet.id,
+          userId: buyerId,
+          type: TRANSACTION_TYPES.ESCROW_LOCK,
+          direction: 'DEBIT',
+          amount,
+          balanceAfter: nextBalance,
+          reference: `ESCROW-LOCK-${orderId}-${Date.now()}`,
+          status: 'COMPLETED',
+          orderId,
+          note: note || `Tạm khóa tiền cọc đơn hàng #${orderId}`,
+        },
+      });
+    };
+    if (externalTx) return run(externalTx);
+    return defaultDb.$transaction(run);
+  },
+
+  async releaseEscrow(buyerId, supplierUserId, orderId, depositAmountNum, commissionRate = 0, { tx: externalTx } = {}) {
+    if (!depositAmountNum || depositAmountNum <= 0) return;
+    const depositAmount = toDecimal(depositAmountNum);
+    const run = async (tx) => {
+      // 1. Deduct held deposit from buyer's wallet
+      const buyerWallet = await ensureWallet(tx, buyerId);
+      const nextBuyerHeld = buyerWallet.heldBalance.sub(depositAmount);
+      await tx.wallet.update({
+        where: { id: buyerWallet.id },
+        data: { heldBalance: nextBuyerHeld.lessThan(0) ? ZERO : nextBuyerHeld },
+      });
+      await tx.walletTransaction.create({
+        data: {
+          walletId: buyerWallet.id,
+          userId: buyerId,
+          type: TRANSACTION_TYPES.ESCROW_RELEASE,
+          direction: 'DEBIT',
+          amount: depositAmount,
+          balanceAfter: buyerWallet.balance,
+          reference: `ESCROW-REL-${orderId}-${Date.now()}`,
+          status: 'COMPLETED',
+          orderId,
+          note: `Giải phóng tiền cọc đơn hàng #${orderId}`,
+        },
+      });
+
+      // 2. Credit deposit to supplier's wallet (minus commission if any)
+      const supplierWallet = await ensureWallet(tx, supplierUserId);
+      const commissionAmount = commissionRate > 0
+        ? depositAmount.mul(commissionRate).div(100).toDecimalPlaces(2)
+        : ZERO;
+      const supplierAmount = depositAmount.sub(commissionAmount);
+      const nextSupplierBalance = supplierWallet.balance.add(supplierAmount);
+
+      await tx.wallet.update({
+        where: { id: supplierWallet.id },
+        data: { balance: nextSupplierBalance },
+      });
+      await tx.walletTransaction.create({
+        data: {
+          walletId: supplierWallet.id,
+          userId: supplierUserId,
+          type: TRANSACTION_TYPES.ESCROW_RECEIVED,
+          direction: 'CREDIT',
+          amount: supplierAmount,
+          balanceAfter: nextSupplierBalance,
+          reference: `ESCROW-RECV-${orderId}-${Date.now()}`,
+          status: 'COMPLETED',
+          orderId,
+          note: `Nhận tiền cọc đơn hàng #${orderId} khi giao thành công`,
+        },
+      });
+    };
+    if (externalTx) return run(externalTx);
+    return defaultDb.$transaction(run);
+  },
+
+  async refundEscrow(buyerId, orderId, depositAmountNum, reason, { tx: externalTx } = {}) {
+    if (!depositAmountNum || depositAmountNum <= 0) return;
+    const depositAmount = toDecimal(depositAmountNum);
+    const run = async (tx) => {
+      const buyerWallet = await ensureWallet(tx, buyerId);
+      let nextHeld = buyerWallet.heldBalance.sub(depositAmount);
+      if (nextHeld.lessThan(0)) nextHeld = ZERO;
+      const nextBalance = buyerWallet.balance.add(depositAmount);
+
+      await tx.wallet.update({
+        where: { id: buyerWallet.id },
+        data: { balance: nextBalance, heldBalance: nextHeld },
+      });
+      await tx.walletTransaction.create({
+        data: {
+          walletId: buyerWallet.id,
+          userId: buyerId,
+          type: TRANSACTION_TYPES.ESCROW_REFUND,
+          direction: 'CREDIT',
+          amount: depositAmount,
+          balanceAfter: nextBalance,
+          reference: `ESCROW-REFUND-${orderId}-${Date.now()}`,
+          status: 'COMPLETED',
+          orderId,
+          note: reason || `Hoàn trả cọc đơn hàng #${orderId}`,
+        },
+      });
+    };
+    if (externalTx) return run(externalTx);
+    return defaultDb.$transaction(run);
+  },
+
+  async confiscateEscrow(buyerId, supplierUserId, orderId, depositAmountNum, reason, { tx: externalTx } = {}) {
+    if (!depositAmountNum || depositAmountNum <= 0) return;
+    const depositAmount = toDecimal(depositAmountNum);
+    const run = async (tx) => {
+      const buyerWallet = await ensureWallet(tx, buyerId);
+      let nextBuyerHeld = buyerWallet.heldBalance.sub(depositAmount);
+      if (nextBuyerHeld.lessThan(0)) nextBuyerHeld = ZERO;
+      await tx.wallet.update({
+        where: { id: buyerWallet.id },
+        data: { heldBalance: nextBuyerHeld },
+      });
+      await tx.walletTransaction.create({
+        data: {
+          walletId: buyerWallet.id,
+          userId: buyerId,
+          type: TRANSACTION_TYPES.PENALTY_CONFISCATION,
+          direction: 'DEBIT',
+          amount: depositAmount,
+          balanceAfter: buyerWallet.balance,
+          reference: `ESCROW-CONFISCATE-${orderId}-${Date.now()}`,
+          status: 'COMPLETED',
+          orderId,
+          note: reason || `Tịch thu cọc đơn hàng #${orderId}`,
+        },
+      });
+
+      const supplierWallet = await ensureWallet(tx, supplierUserId);
+      const nextSupplierBalance = supplierWallet.balance.add(depositAmount);
+      await tx.wallet.update({
+        where: { id: supplierWallet.id },
+        data: { balance: nextSupplierBalance },
+      });
+      await tx.walletTransaction.create({
+        data: {
+          walletId: supplierWallet.id,
+          userId: supplierUserId,
+          type: TRANSACTION_TYPES.COMPENSATION_RECEIVED,
+          direction: 'CREDIT',
+          amount: depositAmount,
+          balanceAfter: nextSupplierBalance,
+          reference: `ESCROW-COMPENSATE-${orderId}-${Date.now()}`,
+          status: 'COMPLETED',
+          orderId,
+          note: reason || `Bồi thường cọc đơn hàng #${orderId}`,
+        },
+      });
+    };
+    if (externalTx) return run(externalTx);
+    return defaultDb.$transaction(run);
+  },
+};
+
+// Escrow is a separate flow from a bank deposit. A legacy bank transfer must
+// never be turned into newly credited wallet money. Serialize transitions by
+// order and use the ledger to make callbacks/retries idempotent.
+for (const method of ['lockEscrow', 'releaseEscrow', 'refundEscrow', 'confiscateEscrow']) {
+  const original = walletService[method];
+  walletService[method] = async function (...args) {
+    const isLock = method === 'lockEscrow';
+    const isRefund = method === 'refundEscrow';
+    const orderId = args[isLock || isRefund ? 1 : 2];
+    const buyerId = args[0];
+    const amount = toDecimal(args[isLock || isRefund ? 2 : 3] || 0);
+    if (amount.lessThanOrEqualTo(0)) return;
+    const optionIndex = isLock || isRefund ? 4 : 5;
+    const externalTx = args[optionIndex]?.tx;
+    const run = async tx => {
+      const resource = `SupplyMindEscrow:${orderId}`;
+      const result = await tx.$queryRaw`DECLARE @result INT; EXEC @result = sys.sp_getapplock @Resource = ${resource}, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 10000; SELECT @result AS code;`;
+      if (result[0].code < 0) throw problem(409, 'Khoản cọc đang được xử lý. Vui lòng thử lại.');
+      const locked = await tx.walletTransaction.findFirst({ where: { orderId, type: TRANSACTION_TYPES.ESCROW_LOCK } });
+      if (isLock) {
+        if (locked) {
+          if (locked.userId !== buyerId || !locked.amount.equals(amount)) throw problem(409, 'Khoản ký quỹ không khớp.');
+          return;
+        }
+      } else {
+        if (!locked) return;
+        if (locked.userId !== buyerId || !locked.amount.equals(amount)) throw problem(409, 'Khoản ký quỹ không khớp.');
+        const completed = await tx.walletTransaction.findFirst({ where: { orderId, type: { in: [TRANSACTION_TYPES.ESCROW_RELEASE, TRANSACTION_TYPES.ESCROW_REFUND, TRANSACTION_TYPES.PENALTY_CONFISCATION] } } });
+        if (completed) return;
+        const wallet = await ensureWallet(tx, buyerId);
+        if (wallet.heldBalance.lessThan(amount)) throw problem(409, 'Số tiền ký quỹ không đủ để xử lý.');
+      }
+      const parameters = [...args];
+      parameters[optionIndex] = { tx };
+      return original.apply(walletService, parameters);
+    };
+    if (externalTx) return run(externalTx);
+    return defaultDb.$transaction(run, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 20000 });
+  };
+}
+module.exports.walletService = walletService;

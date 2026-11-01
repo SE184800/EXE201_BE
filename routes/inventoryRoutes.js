@@ -12,6 +12,8 @@ const {
 } = require('../services/inventoryImport');
 const { createStockService } = require('../services/stockService');
 const { createStoreRevenueService } = require('../services/storeRevenueService');
+const inventorySupplierService = require('../services/inventorySupplierService');
+const consignmentService = require('../services/consignmentService');
 
 const inventoryWorkbookUpload = multer({
   storage: multer.memoryStorage(),
@@ -49,6 +51,19 @@ function validateItem(body) {
     data[key] = body[key];
   }
   if (body.lowThreshold !== undefined) data.lowThreshold = body.lowThreshold;
+  if (body.supplierName !== undefined) {
+    data.supplierName = typeof body.supplierName === 'string' ? body.supplierName.trim().slice(0, 150) : null;
+  }
+  if (body.isConsignment !== undefined) {
+    data.isConsignment = Boolean(body.isConsignment);
+    if (data.isConsignment) {
+      data.purchasePrice = 0; // Ký gửi tiếp thị luôn là vốn 0đ
+      data.settlementPrice = typeof body.settlementPrice === 'number' && body.settlementPrice >= 0 ? Math.round(body.settlementPrice) : 0;
+      data.autoRestock = body.autoRestock !== false;
+      data.autoExchangeExpiry = body.autoExchangeExpiry !== false;
+      data.termsNote = typeof body.termsNote === 'string' ? body.termsNote.trim().slice(0, 300) : 'Cam kết đổi trả 100% khi cận date và giao bù hàng khi hết.';
+    }
+  }
   // Missing field preserves the existing date for older clients; empty clears it.
   if (body.expiryDate !== undefined) {
     if (body.expiryDate === null || body.expiryDate === '') data.expiryDate = null;
@@ -161,7 +176,115 @@ function createInventoryRoutes(prisma, requireAuth) {
   });
   const list = (ownerId) => prisma.inventoryItem.findMany({ where: { ownerId }, orderBy: { name: 'asc' }, include: { lots: { orderBy: [{ expiryDate: 'asc' }, { receivedAt: 'asc' }] } } });
   router.get('/', async (req, res, next) => {
-    try { res.json({ items: (await list(req.auth.user.id)).map((item) => ({ ...item, ...expiryInfo(item.expiryDate), lots: (item.lots || []).map((lot) => ({ ...lot, expiryDate: lot.expiryDate?.toISOString().slice(0, 10) || null })) })) }); } catch (error) { next(error); }
+    try {
+      res.json({
+        items: (await list(req.auth.user.id)).map((item) => {
+          const consignment = consignmentService.getItemConsignment(item.id);
+          return {
+            ...item,
+            supplierName: inventorySupplierService.getSupplier(item.id),
+            isConsignment: Boolean(consignment?.isConsignment),
+            settlementPrice: consignment?.settlementPrice || 0,
+            autoRestock: consignment?.autoRestock !== false,
+            autoExchangeExpiry: consignment?.autoExchangeExpiry !== false,
+            termsNote: consignment?.termsNote || null,
+            ...expiryInfo(item.expiryDate),
+            lots: (item.lots || []).map((lot) => ({
+              ...lot,
+              expiryDate: lot.expiryDate?.toISOString().slice(0, 10) || null,
+            })),
+          };
+        }),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/consignment-requests', async (req, res, next) => {
+    try {
+      const requests = consignmentService.getConsignmentRequests({ storeId: req.auth.user.id });
+      res.json({ requests });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/:id/consignment-request', async (req, res, next) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) return res.status(400).json({ message: 'Mã sản phẩm không hợp lệ.' });
+    const { type, requestedQty, note } = req.body || {};
+    try {
+      const item = await prisma.inventoryItem.findFirst({ where: { id, ownerId: req.auth.user.id } });
+      if (!item) return res.status(404).json({ message: 'Không tìm thấy sản phẩm trong kho.' });
+      const consignment = consignmentService.getItemConsignment(item.id);
+      const supplierName = inventorySupplierService.getSupplier(item.id) || consignment?.supplierName || 'Nhà cung cấp';
+
+      const request = consignmentService.createConsignmentRequest({
+        storeId: req.auth.user.id,
+        storeName: req.auth.user.name,
+        storePhone: req.auth.user.phone,
+        supplierId: consignment?.supplierId || null,
+        supplierName,
+        itemId: item.id,
+        productName: item.name,
+        unit: item.unit,
+        type: type === 'EXCHANGE_EXPIRY' ? 'EXCHANGE_EXPIRY' : 'RESTOCK',
+        currentQty: item.quantity,
+        requestedQty: Math.max(1, Number(requestedQty) || (item.lowThreshold ? item.lowThreshold * 2 : 10)),
+        expiryDate: item.expiryDate ? item.expiryDate.toISOString().slice(0, 10) : null,
+        note,
+      });
+
+      res.status(201).json({ request, message: 'Đã gửi yêu cầu đến nhà cung cấp thành công!' });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/consignment-requests/:requestId/confirm-receipt', async (req, res, next) => {
+    const { requestId } = req.params;
+    try {
+      const request = consignmentService.getRequestById(requestId);
+      if (!request || request.storeId !== req.auth.user.id) {
+        return res.status(404).json({ message: 'Không tìm thấy yêu cầu tiếp thị này.' });
+      }
+      if (request.status !== 'DISPATCHED') {
+        return res.status(400).json({ message: 'Yêu cầu chưa được điều xe giao hàng hoặc đã hoàn tất.' });
+      }
+
+      // Update inventory item based on restock or expiry exchange
+      const item = await prisma.inventoryItem.findFirst({ where: { id: request.itemId, ownerId: req.auth.user.id } });
+      if (item) {
+        if (request.type === 'RESTOCK') {
+          await stock.create(req.auth.user.id, {
+            name: item.name,
+            unit: item.unit,
+            quantity: request.requestedQty,
+            purchasePrice: 0,
+            sellingPrice: item.sellingPrice,
+            isConsignment: true,
+            supplierName: request.supplierName,
+          });
+        } else if (request.type === 'EXCHANGE_EXPIRY' && request.newExpiryDate) {
+          await stock.edit(req.auth.user.id, item.id, {
+            name: item.name,
+            unit: item.unit,
+            quantity: item.quantity,
+            purchasePrice: item.purchasePrice,
+            sellingPrice: item.sellingPrice,
+            expiryDate: request.newExpiryDate,
+            isConsignment: true,
+            supplierName: request.supplierName,
+          });
+        }
+      }
+
+      const updated = consignmentService.updateRequestStatus(requestId, 'COMPLETED');
+      res.json({ message: 'Xác nhận đã nhận hàng bù/đổi thành công!', request: updated });
+    } catch (error) {
+      next(error);
+    }
   });
   router.post('/chat', async (req, res, next) => {
     const message = req.body?.message;

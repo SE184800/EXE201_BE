@@ -1,9 +1,11 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "buildCommand": "npm run db:generate",
+  "buildCommand": "node scripts/build-vercel.js",
   "outputDirectory": "public",
-  "regions": ["hkg1"],
+  "regions": [
+    "sin1"
+  ],
   "functions": {
     "api/index.js": {
       "maxDuration": 60,
@@ -11,7 +13,12 @@
     }
   },
   "routes": [
-    { "handle": "filesystem" },
-    { "src": "/(.*)", "dest": "/api/index" }
+    {
+      "handle": "filesystem"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/api/index"
+    }
   ]
 }

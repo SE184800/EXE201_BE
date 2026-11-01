@@ -46,6 +46,39 @@ function createWalletRoutes(prisma, requireAuth, config = {}) {
     res.json(await service.listTransactions(req.auth.user.id, req.query));
   }));
 
+
+  // Compatibility with older /me and /mock-add
+  router.get('/me', run(async (req, res) => {
+    const w = await service.getWallet(req.auth.user.id);
+    res.json({
+      success: true,
+      wallet: {
+        userId: req.auth.user.id,
+        availableBalance: w.wallet.balance,
+        lockedBalance: w.wallet.heldBalance,
+        totalBalance: w.wallet.total,
+        updatedAt: w.wallet.updatedAt,
+      },
+    });
+  }));
+
+  router.post('/mock-add', run(async (req, res) => {
+    const amount = Number(req.body?.amount) || 5000000;
+    await service.createSandboxDeposit(req.auth.user.id, { amount, note: 'Nap tien thu nghiem' });
+    const w = await service.getWallet(req.auth.user.id);
+    res.json({
+      success: true,
+      wallet: {
+        userId: req.auth.user.id,
+        availableBalance: w.wallet.balance,
+        lockedBalance: w.wallet.heldBalance,
+        totalBalance: w.wallet.total,
+        updatedAt: w.wallet.updatedAt,
+      },
+      message: 'Nap tien thanh cong',
+    });
+  }));
+
   router.get('/payments', run(async (req, res) => {
     res.json(await service.listOrderPayments(req.auth.user.id, req.query));
   }));
