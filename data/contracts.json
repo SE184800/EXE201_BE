@@ -15,7 +15,7 @@
       "contractHash": "121c3918a587f92950fd6987800bad8a748cb11afe58bae55c0ec2168f7bb7ad",
       "signature": "r+0wagz0dqVoR5OCrVMmwQWNFP34f4+81sOZ6Z6uXWng/Yp5yFfha03eqbvbraXTeEWPdwpb3iq5Umo+ZBZ/Bg==",
       "signerInfo": {
-        "name": "Chủ cửa hàng tạp hóa",
+        "name": "Chủ tạp hóa",
         "email": "",
         "phone": "0908123456",
         "businessName": "Tiệm Tạp Hóa An Khang",
@@ -73,6 +73,33 @@
         "ipAddress": "::ffff:127.0.0.1",
         "qrPayload": "https://supplymind.vn/verify-contract?num=SM-HD-2026-000002&hash=db15447ed240be7f0ccdd4042cdd4aa2bee50c33bf052e4df7345b2ab171eb3e"
       }
+    },
+    "5": {
+      "userId": 5,
+      "username": "demo_taphoa_19k",
+      "role": "STORE_OWNER",
+      "contractNumber": "SM-HD-2026-000005",
+      "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAq8OdTGt5VqllR4RThiyjM9H9ICBxkv6t64glhbzc7wo=\n-----END PUBLIC KEY-----\n",
+      "privateKey": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEINiZY0cow8UKTmbRkzCZtXR4Z2dQTrYnBZo4rLBThO+h\n-----END PRIVATE KEY-----\n",
+      "rawPrivateKey": "MC4CAQAwBQYDK2VwBCIEINiZY0cow8UKTmbRkzCZtXR4Z2dQTrYnBZo4rLBThO+h",
+      "rawPublicKey": "MCowBQYDK2VwAyEAq8OdTGt5VqllR4RThiyjM9H9ICBxkv6t64glhbzc7wo=",
+      "isSigned": false,
+      "createdAt": "2026-11-02T04:52:23.197Z",
+      "signedAt": null,
+      "contractHash": null,
+      "signature": null,
+      "signerInfo": {
+        "name": "[DEMO19K] Tạp hóa demo đầy đủ",
+        "email": "demo_taphoa_19k@example.invalid",
+        "phone": "0926711233",
+        "businessName": "Tạp hóa Demo Local",
+        "taxCode": "0123456789",
+        "address": "45 Nguyễn Trãi, Phường Bến Thành, Quận 1, TP. Hồ Chí Minh",
+        "locationType": "STREET_FRONT",
+        "latitude": 10.7756,
+        "longitude": 106.7004
+      },
+      "stamp": null
     },
     "1221": {
       "userId": 1221,
