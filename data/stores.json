@@ -20,6 +20,26 @@
       "createdAt": "2026-10-26T13:10:03.557Z",
       "updatedAt": "2026-10-31T16:31:52.582Z"
     },
+    "5": {
+      "userId": 5,
+      "storeName": "Tạp hóa Demo Local",
+      "storeAddress": "45 Nguyễn Trãi, Phường Bến Thành, Quận 1, TP. Hồ Chí Minh",
+      "storePhone": "0926711233",
+      "taxCode": "0123456789",
+      "businessType": "Tạp hóa tổng hợp",
+      "locationType": "STREET_FRONT",
+      "alleyDetail": null,
+      "latitude": 10.7756,
+      "longitude": 106.7004,
+      "isAddressVerified": true,
+      "bankName": "MB Bank (Quân Đội)",
+      "bankAccountNumber": "100614072002",
+      "bankAccountHolder": "[DEMO19K] TẠP HÓA DEMO ĐẦY ĐỦ",
+      "bankQrImageUrl": null,
+      "isConfigured": true,
+      "createdAt": "2026-11-02T04:49:45.839Z",
+      "updatedAt": "2026-11-02T04:52:23.055Z"
+    },
     "9999": {
       "userId": 9999,
       "storeName": "Tạp Hóa Thành Công",
