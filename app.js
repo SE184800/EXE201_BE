@@ -27,6 +27,7 @@ const { createComplaintRoutes } = require('./routes/complaintRoutes');
 const { createSupplierQuoteRoutes, createStoreQuoteRoutes } = require('./routes/quoteRoutes');
 const { createSubscriptionRoutes } = require('./routes/subscriptionRoutes');
 const { createContractRoutes } = require('./routes/contractRoutes');
+const { createTaxRoutes } = require('./routes/taxRoutes');
 const { createWalletRoutes, createAdminWalletRoutes } = require('./routes/walletRoutes');
 const { createSubscriptionGate } = require('./middlewares/subscriptionMiddleware');
 
@@ -178,6 +179,7 @@ function createApp(prisma, config) {
   app.use('/api/supplier/quotes', createSupplierQuoteRoutes(prisma, requireAuth));
   app.use('/api/complaints', createComplaintRoutes(prisma, requireAuth));
   app.use('/api/contracts', createContractRoutes(prisma, requireAuth));
+  app.use('/api/tax', createTaxRoutes());
 
   app.use(
     '/api/profile',

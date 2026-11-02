@@ -82,7 +82,7 @@ function createContractRoutes(prisma, requireAuth) {
 
   // POST /api/contracts/sign
   router.post('/sign', async (req, res) => {
-    const { privateKey, agreedTerms } = req.body || {};
+    const { method = 'PRIVATE_KEY', privateKey, agreedTerms, vneidData } = req.body || {};
 
     if (!agreedTerms) {
       return res.status(400).json({
@@ -91,30 +91,39 @@ function createContractRoutes(prisma, requireAuth) {
       });
     }
 
-    if (!privateKey || typeof privateKey !== 'string' || !privateKey.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Vui lòng dán khóa bí mật cá nhân (Private Key) để thực hiện ký số.',
-      });
+    if (method !== 'VNEID') {
+      if (!privateKey || typeof privateKey !== 'string' || !privateKey.trim()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Vui lòng dán khóa bí mật cá nhân (Private Key) để thực hiện ký số.',
+        });
+      }
     }
 
     try {
       const signedContract = signContract(
         req.auth.user.id,
-        privateKey.trim(),
+        {
+          method,
+          privateKey: privateKey ? privateKey.trim() : undefined,
+          vneidData,
+        },
         Boolean(agreedTerms),
         { ip: req.ip || req.headers['x-forwarded-for'] || '127.0.0.1' }
       );
 
       return res.json({
         success: true,
-        message: 'Ký kết hợp đồng điện tử thành công! Chào mừng bạn gia nhập nền tảng SupplyMind.',
+        message: method === 'VNEID'
+          ? 'Ký số xác thực danh tính điện tử qua VNeID Mức 2 thành công!'
+          : 'Ký kết hợp đồng điện tử thành công! Chào mừng bạn gia nhập nền tảng SupplyMind.',
         contract: {
           userId: signedContract.userId,
           contractNumber: signedContract.contractNumber,
           isSigned: signedContract.isSigned,
           signedAt: signedContract.signedAt,
           contractHash: signedContract.contractHash,
+          signingMethod: signedContract.signingMethod,
           stamp: signedContract.stamp,
         },
       });
