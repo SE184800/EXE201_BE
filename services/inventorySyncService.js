@@ -1,5 +1,6 @@
 const { randomUUID } = require('node:crypto');
 const inventorySupplierService = require('./inventorySupplierService');
+const deliveryService = require('./deliveryService');
 
 function numberValue(val) {
   if (typeof val === 'object' && val !== null && typeof val.toNumber === 'function') {
@@ -33,7 +34,7 @@ function parsePackaging(packagingStr) {
       return { multiplier: count, retailUnit: u };
     }
   }
-  return { multiplier: 1, retailUnit: clean };
+  return { multiplier: 1, retailUnit: clean.slice(0, 20) };
 }
 
 function normalizeCoreTokens(name) {
@@ -76,9 +77,10 @@ function areProductsMatching(name1, name2) {
  * Idempotent: won't duplicate items if called multiple times for the same order.
  * Multiplies wholesale cartons by packaging count to retail units (e.g. 2 thùng 24 lon -> +48 lon).
  * Uses fuzzy core token matching so variations like "Nước Dasani" and "Nước lọc Dasani" sync to same item.
+ * Safeguards string lengths and unique constraints for SQL Server.
  */
 async function syncOrderToStoreInventory(tx, buyerId, order) {
-  if (!order || !order.id || !order.items || order.items.length === 0) return;
+  if (!order || !order.id || !order.items || order.items.length === 0) return { skipped: true, reason: 'No items' };
 
   // Check idempotency: if stock movement already recorded for this order, skip
   const orderTag = `[ĐƠN SỈ #${order.id}]`;
@@ -94,26 +96,51 @@ async function syncOrderToStoreInventory(tx, buyerId, order) {
   const supplierName = order.supplier?.businessName || 'Chủ vựa';
   const syncedItems = [];
 
+  // Check driver info for damaged items in incident reports
+  const driverInfo = deliveryService.getDriverInfo(order.id);
+  const damagedMap = new Map();
+  if (driverInfo?.incidentReport?.damagedItems && Array.isArray(driverInfo.incidentReport.damagedItems)) {
+    for (const d of driverInfo.incidentReport.damagedItems) {
+      const key = d.productId ? `pid_${d.productId}` : `name_${(d.productName || '').trim().toLowerCase()}`;
+      const qty = Number(d.damagedUnits || d.damagedCount || d.damagedQty || d.quantity || 0);
+      damagedMap.set(key, (damagedMap.get(key) || 0) + qty);
+    }
+  }
+
   // Load existing inventory items for this store owner to match by core tokens
   const existingStoreItems = await tx.inventoryItem.findMany({
     where: { ownerId: buyerId },
   });
 
   for (const line of order.items) {
-    const productName = line.productName.trim();
+    const rawProductName = (line.productName || '').trim();
+    const cleanProductName = rawProductName.slice(0, 100);
     const pkg = line.packaging ? line.packaging.trim() : '';
     const { multiplier, retailUnit } = parsePackaging(pkg);
+    const cleanRetailUnit = retailUnit.slice(0, 20);
     const orderedCartons = Number(line.quantity) || 1;
-    const totalQuantity = orderedCartons * multiplier;
+    const grossQuantity = orderedCartons * multiplier;
+
+    // Subtract damaged items if any
+    const damagedKeyPid = `pid_${line.productId}`;
+    const damagedKeyName = `name_${rawProductName.toLowerCase()}`;
+    const damagedQty = damagedMap.get(damagedKeyPid) || damagedMap.get(damagedKeyName) || 0;
+    const totalQuantity = Math.max(0, grossQuantity - damagedQty);
+
     const cartonPrice = Math.round(numberValue(line.unitPrice || 0));
     const retailUnitPrice = multiplier > 1 && cartonPrice > 0 ? Math.round(cartonPrice / multiplier) : cartonPrice;
 
-    // Look for existing inventory item for this store owner (exact or fuzzy core name)
-    const existing = existingStoreItems.find((it) => areProductsMatching(it.name, productName));
+    // Look for existing inventory item for this store owner (fuzzy core name or exact)
+    let existing = existingStoreItems.find((it) => areProductsMatching(it.name, rawProductName));
+    if (!existing && typeof tx.inventoryItem.findFirst === 'function') {
+      existing = await tx.inventoryItem.findFirst({
+        where: { ownerId: buyerId, name: cleanProductName },
+      });
+    }
 
     if (existing) {
       const nextQuantity = existing.quantity + totalQuantity;
-      const effectiveUnit = existing.unit || retailUnit;
+      const effectiveUnit = (existing.unit || cleanRetailUnit).slice(0, 20);
       const updated = await tx.inventoryItem.update({
         where: { id: existing.id },
         data: {
@@ -122,8 +149,8 @@ async function syncOrderToStoreInventory(tx, buyerId, order) {
         },
       });
 
-      // Create lot if model exists
-      if (tx.inventoryLot) {
+      // Create lot if model exists and quantity > 0
+      if (tx.inventoryLot && totalQuantity > 0) {
         await tx.inventoryLot.create({
           data: {
             itemId: existing.id,
@@ -134,17 +161,17 @@ async function syncOrderToStoreInventory(tx, buyerId, order) {
         });
       }
 
-      // Record stock movement
+      // Record stock movement (Standard type RECEIPT)
       const note = `Tự động nhập kho từ đơn sỉ #${order.id} [${orderedCartons} x ${pkg || 'thùng'} -> +${totalQuantity} ${effectiveUnit}] [NCC: ${supplierName}] ${orderTag}`;
       await tx.stockMovement.create({
         data: {
           id: randomUUID(),
           itemId: existing.id,
-          type: 'IMPORT',
+          type: 'RECEIPT',
           quantityChange: totalQuantity,
           quantityBefore: existing.quantity,
           quantityAfter: nextQuantity,
-          productName: existing.name,
+          productName: existing.name.slice(0, 100),
           unit: effectiveUnit,
           note: note.slice(0, 250),
           createdAt: new Date(),
@@ -155,20 +182,43 @@ async function syncOrderToStoreInventory(tx, buyerId, order) {
       syncedItems.push(updated);
     } else {
       // Create new inventory item with retail unit and expanded quantity
-      const newItem = await tx.inventoryItem.create({
-        data: {
-          ownerId: buyerId,
-          name: productName,
-          unit: retailUnit,
-          quantity: totalQuantity,
-          purchasePrice: retailUnitPrice > 0 ? retailUnitPrice : null,
-          sellingPrice: retailUnitPrice > 0 ? Math.round(retailUnitPrice * 1.2) : null,
-          lowThreshold: 10,
-        },
-      });
+      let newItem = null;
+      try {
+        newItem = await tx.inventoryItem.create({
+          data: {
+            ownerId: buyerId,
+            name: cleanProductName,
+            unit: cleanRetailUnit,
+            quantity: totalQuantity,
+            purchasePrice: retailUnitPrice > 0 ? retailUnitPrice : null,
+            sellingPrice: retailUnitPrice > 0 ? Math.round(retailUnitPrice * 1.2) : null,
+            lowThreshold: 10,
+          },
+        });
+      } catch (err) {
+        // Fallback if unique constraint hit
+        if (err.code === 'P2002' || err.message?.includes('unique') || err.message?.includes('duplicate')) {
+          const fallbackExisting = typeof tx.inventoryItem.findFirst === 'function'
+            ? await tx.inventoryItem.findFirst({
+                where: { ownerId: buyerId, name: cleanProductName },
+              })
+            : null;
+          if (fallbackExisting) {
+            const nextQuantity = fallbackExisting.quantity + totalQuantity;
+            newItem = await tx.inventoryItem.update({
+              where: { id: fallbackExisting.id },
+              data: {
+                quantity: nextQuantity,
+                purchasePrice: retailUnitPrice > 0 ? retailUnitPrice : fallbackExisting.purchasePrice,
+              },
+            });
+          }
+        }
+        if (!newItem) throw err;
+      }
 
-      // Create lot if model exists
-      if (tx.inventoryLot) {
+      // Create lot if model exists and quantity > 0
+      if (tx.inventoryLot && totalQuantity > 0) {
         await tx.inventoryLot.create({
           data: {
             itemId: newItem.id,
@@ -179,18 +229,18 @@ async function syncOrderToStoreInventory(tx, buyerId, order) {
         });
       }
 
-      // Record stock movement
-      const note = `Tự động tạo mới & nhập kho từ đơn sỉ #${order.id} [${orderedCartons} x ${pkg || 'thùng'} -> +${totalQuantity} ${retailUnit}] [NCC: ${supplierName}] ${orderTag}`;
+      // Record stock movement (Standard type RECEIPT)
+      const note = `Tự động tạo mới & nhập kho từ đơn sỉ #${order.id} [${orderedCartons} x ${pkg || 'thùng'} -> +${totalQuantity} ${cleanRetailUnit}] [NCC: ${supplierName}] ${orderTag}`;
       await tx.stockMovement.create({
         data: {
           id: randomUUID(),
           itemId: newItem.id,
-          type: 'IMPORT',
+          type: 'RECEIPT',
           quantityChange: totalQuantity,
           quantityBefore: 0,
           quantityAfter: totalQuantity,
-          productName,
-          unit: retailUnit,
+          productName: cleanProductName,
+          unit: cleanRetailUnit,
           note: note.slice(0, 250),
           createdAt: new Date(),
         },
@@ -207,4 +257,7 @@ async function syncOrderToStoreInventory(tx, buyerId, order) {
 
 module.exports = {
   syncOrderToStoreInventory,
+  parsePackaging,
+  normalizeCoreTokens,
+  areProductsMatching,
 };

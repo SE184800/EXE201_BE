@@ -341,22 +341,135 @@ function createOrderRoutes(prisma, requireAuth) {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id < 1 || id > 2147483647) return res.status(400).json({ message: 'Mã đơn hàng không hợp lệ.' });
     const { method, amount } = req.body || {};
-    if (!['COD', 'QR'].includes(method)) {
-      return res.status(400).json({ message: 'Phương thức thanh toán phải là COD hoặc QR.' });
+    if (!['COD', 'QR', 'WALLET'].includes(method)) {
+      return res.status(400).json({ message: 'Phương thức thanh toán phải là COD, QR hoặc WALLET.' });
     }
     try {
       const buyerId = req.auth.user.id;
       const current = await prisma.wholesaleOrder.findFirst({ where: { id, buyerId }, include });
       if (!current) throw problem(404, 'Không tìm thấy đơn hàng.');
 
+      const driverInfo = deliveryService.getDriverInfo(id);
+      let lossAmount = 0;
+      if (driverInfo?.incidentReport?.action === 'DEDUCT_COD' && Array.isArray(driverInfo.incidentReport.damagedItems)) {
+        for (const it of driverInfo.incidentReport.damagedItems) {
+          lossAmount += Number(it.lossAmount || 0);
+        }
+      }
+      const depositPaid = current.depositStatus === 'PAID' ? current.depositAmount.toNumber() : 0;
+      const subtotalNum = current.subtotal.toNumber();
+      const deliveryFeeNum = current.deliveryFee.toNumber();
+      const adjustedTotal = Math.max(0, subtotalNum - lossAmount) + deliveryFeeNum;
+      const remainingAmount = Math.max(0, adjustedTotal - depositPaid);
+      const payAmount = Number(amount) > 0 ? Number(amount) : remainingAmount;
+
+      if (method === 'WALLET') {
+        const wallet = await walletService.ensureWallet(prisma, buyerId);
+        if (wallet.balance.lessThan(payAmount)) {
+          return res.status(400).json({
+            message: `Số dư ví khả dụng không đủ (còn ${wallet.balance.toNumber().toLocaleString('vi-VN')} đ, thiếu ${(payAmount - wallet.balance.toNumber()).toLocaleString('vi-VN')} đ). Vui lòng nạp thêm tiền hoặc chọn thanh toán COD / Quét mã VietQR.`,
+            code: 'INSUFFICIENT_WALLET_BALANCE',
+            availableBalance: wallet.balance.toNumber(),
+            requiredAmount: payAmount,
+          });
+        }
+
+        // Trừ tiền từ ví cửa hàng và ghi nhận giao dịch
+        await prisma.$transaction(async (tx) => {
+          const w = await walletService.ensureWallet(tx, buyerId);
+          await walletService.applyBalance(tx, {
+            wallet: w,
+            userId: buyerId,
+            type: 'ORDER_PAYMENT',
+            direction: 'DEBIT',
+            amount: payAmount,
+            reference: `OP-WALLET-${id}-${Date.now()}`,
+            orderId: id,
+            note: `Thanh toán tiền hàng còn lại đơn #${id} qua Ví hệ thống`,
+          });
+
+          // Chuyển tiền sang ví chủ vựa
+          if (current.supplier?.userId) {
+            const supplierWallet = await walletService.ensureWallet(tx, current.supplier.userId);
+            const commission = current.commissionRate ? current.commissionRate.toNumber() : 0;
+            const commAmount = commission > 0 ? Math.round(payAmount * commission / 100) : 0;
+            const supplierNet = payAmount - commAmount;
+            await walletService.applyBalance(tx, {
+              wallet: supplierWallet,
+              userId: current.supplier.userId,
+              type: 'ORDER_RECEIVE',
+              direction: 'CREDIT',
+              amount: supplierNet,
+              reference: `OP-RECV-WALLET-${id}-${Date.now()}`,
+              orderId: id,
+              note: `Nhận tiền thanh toán còn lại đơn #${id} từ ví cửa hàng`,
+            });
+          }
+        });
+
+        // Đánh dấu thanh toán thành công tức thì
+        const paymentInfo = deliveryService.savePaymentInfo(id, {
+          method: 'WALLET',
+          amount: payAmount,
+          status: 'CONFIRMED',
+          storePaidAt: new Date().toISOString(),
+          supplierConfirmedAt: new Date().toISOString(),
+        });
+
+        // Chuyển trạng thái đơn sang COMPLETED
+        const updated = await prisma.wholesaleOrder.update({
+          where: { id },
+          data: {
+            status: 'COMPLETED',
+            deliveredAt: current.deliveredAt || new Date(),
+            commissionAmount: current.commissionRate === null ? null : current.subtotal.mul(current.commissionRate).div(100).toDecimalPlaces(2),
+          },
+          include,
+        });
+
+        // Giải phóng cọc ký quỹ cho chủ vựa
+        if (depositPaid > 0) {
+          try {
+            await walletService.releaseEscrow(
+              buyerId,
+              current.supplier.userId,
+              current.id,
+              depositPaid,
+              current.commissionRate ? current.commissionRate.toNumber() : 0,
+            );
+          } catch (err) {
+            console.error('Lỗi giải phóng cọc khi thanh toán ví:', err.message);
+          }
+        }
+
+        // Tự động nhập kho cửa hàng ngay lập tức
+        try {
+          await syncOrderToStoreInventory(prisma, buyerId, updated);
+        } catch (err) {
+          console.error('Lỗi tự động nhập kho từ thanh toán ví:', err.message);
+        }
+
+        return res.json({
+          success: true,
+          order: serialize(updated),
+          paymentInfo,
+          message: `Đã thanh toán thành công ${payAmount.toLocaleString('vi-VN')} đ bằng Ví hệ thống. Đơn hàng đã hoàn tất và hàng đã được nhập vào kho.`,
+        });
+      }
+
+      // COD hoặc QR
       const paymentInfo = deliveryService.savePaymentInfo(id, {
         method,
-        amount: Number(amount) || Number(current.total) - Number(current.depositAmount),
+        amount: payAmount,
         status: 'PENDING_SUPPLIER_CONFIRM',
         storePaidAt: new Date().toISOString(),
       });
 
-      res.json({ success: true, paymentInfo, message: 'Đã gửi xác nhận thanh toán. Vui lòng đợi Chủ vựa xác nhận đã nhận đủ tiền.' });
+      res.json({
+        success: true,
+        paymentInfo,
+        message: 'Đã gửi xác nhận thanh toán. Vui lòng đợi Chủ vựa xác nhận đã nhận đủ tiền.',
+      });
     } catch (error) { next(error); }
   });
 
@@ -395,12 +508,12 @@ function createOrderRoutes(prisma, requireAuth) {
 
       // Automatically sync order items to store owner inventory
       try {
-        await syncOrderToStoreInventory(prisma, buyerId, current);
+        await syncOrderToStoreInventory(prisma, buyerId, updated);
       } catch (err) {
         console.error('Lỗi tự động nhập kho từ đơn hàng:', err.message);
       }
 
-      res.json({ success: true, order: serialize(updated), message: 'Đơn hàng đã hoàn tất thành công.' });
+      res.json({ success: true, order: serialize(updated), message: 'Đơn hàng đã hoàn tất thành công và đã đồng bộ hàng vào kho.' });
     } catch (error) { next(error); }
   });
   router.use((error, req, res, next) => error.status ? res.status(error.status).json({ message: error.message }) : next(error));

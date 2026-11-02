@@ -6,8 +6,8 @@
     "vehicleType": "Xe ba gác",
     "licensePlate": "51-T2 123.45",
     "deliveryNotes": "Hàng nặng, cần người đỡ khi dỡ hàng",
-    "supplierId": 2,
-    "lastUsedAt": "2026-10-31T14:29:49.469Z"
+    "supplierId": null,
+    "lastUsedAt": "2026-11-02T04:28:00.004Z"
   },
   {
     "id": "drv-1",

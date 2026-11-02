@@ -744,7 +744,7 @@ function createSupplierService(prisma) {
     const profile = await requireProfile(userId);
     const order = await prisma.wholesaleOrder.findFirst({
       where: { id: orderId, supplierId: profile.id },
-      include: { buyer: true, items: true },
+      include: { buyer: true, items: true, supplier: true },
     });
     if (!order) throw problem(404, 'Không tìm thấy đơn hàng.');
 
@@ -754,7 +754,7 @@ function createSupplierService(prisma) {
       confirmedBy: userId,
     });
 
-    if (order.status === 'ISSUE_HANDLING') {
+    if (order.status === 'ISSUE_HANDLING' || order.status === 'SHIPPING') {
       await prisma.wholesaleOrder.update({
         where: { id: order.id },
         data: {
@@ -763,6 +763,35 @@ function createSupplierService(prisma) {
           commissionAmount: order.commissionRate === null ? null : order.subtotal.mul(order.commissionRate).div(100).toDecimalPlaces(2),
         },
       });
+    }
+
+    // Quyết toán ví nếu đơn trả bằng ví
+    try {
+      await settleOrderToSupplier(prisma, order);
+    } catch (err) {
+      console.error('Lỗi quyết toán ví cho chủ vựa:', err.message);
+    }
+
+    // Giải phóng tiền cọc ký quỹ cho chủ vựa
+    if (numberValue(order.depositAmount || 0) > 0 && order.depositStatus === 'PAID') {
+      try {
+        await walletService.releaseEscrow(
+          order.buyerId,
+          profile.userId,
+          order.id,
+          numberValue(order.depositAmount),
+          order.commissionRate ? numberValue(order.commissionRate) : 0,
+        );
+      } catch (err) {
+        console.error('Lỗi giải phóng cọc khi chủ vựa xác nhận thanh toán:', err.message);
+      }
+    }
+
+    // Tự động nhập hàng vào kho cửa hàng
+    try {
+      await syncOrderToStoreInventory(prisma, order.buyerId, order);
+    } catch (err) {
+      console.error('Lỗi tự động nhập kho từ confirmPayment:', err.message);
     }
 
     return {

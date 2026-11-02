@@ -1,5 +1,34 @@
 [
   {
+    "id": "CRQ-679793-820",
+    "storeId": 101,
+    "storeName": "Tạp hóa Bác Ba",
+    "storePhone": "0901234567",
+    "storeAddress": "123 Đường Số 5, Q8",
+    "supplierId": 202,
+    "supplierName": "Vựa Anh Bảy",
+    "itemId": 501,
+    "productName": "Nước ép trái cây lên men",
+    "unit": "thùng",
+    "type": "EXCHANGE_EXPIRY",
+    "currentQty": 2,
+    "requestedQty": 5,
+    "expiryDate": "2026-11-05",
+    "status": "COMPLETED",
+    "note": "Hàng còn 8 ngày hết hạn, cần đổi date mới gấp",
+    "driverInfo": {
+      "driverName": "Nguyễn Văn Tài",
+      "driverPhone": "0912345678",
+      "vehicleType": "Xe ba gác",
+      "licensePlate": "59X1-12345",
+      "estimatedDeliveryTime": "Hôm nay lúc 14:00"
+    },
+    "newExpiryDate": "2027-05-15",
+    "supplierNotes": "Đã chuẩn bị 5 thùng lô sản xuất mới nhất",
+    "createdAt": "2026-11-02T04:27:59.793Z",
+    "updatedAt": "2026-11-02T04:27:59.800Z"
+  },
+  {
     "id": "CRQ-887622-579",
     "storeId": 101,
     "storeName": "Tạp hóa Bác Ba",

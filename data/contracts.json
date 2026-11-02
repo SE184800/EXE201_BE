@@ -333,6 +333,45 @@
         "qrPayload": "https://supplymind.vn/verify-contract?num=SM-HD-2026-382236&hash=ad736dc7543bc6def1d9e7d4df91f9f40d2eaf56d3324337f88ba5c2f68864ed"
       }
     },
+    "382479": {
+      "userId": 382479,
+      "username": "test_store_382479",
+      "role": "STORE_OWNER",
+      "contractNumber": "SM-HD-2026-382479",
+      "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEASyg0+TKwltCngxwey7QPjjQ3wTI0F03d0Es+kthHP30=\n-----END PUBLIC KEY-----\n",
+      "privateKey": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIOrYX/ywEtI3aJNFOR+oODTHiTSI+FtajBU7P9jhcqLE\n-----END PRIVATE KEY-----\n",
+      "rawPrivateKey": "MC4CAQAwBQYDK2VwBCIEIOrYX/ywEtI3aJNFOR+oODTHiTSI+FtajBU7P9jhcqLE",
+      "rawPublicKey": "MCowBQYDK2VwAyEASyg0+TKwltCngxwey7QPjjQ3wTI0F03d0Es+kthHP30=",
+      "isSigned": true,
+      "createdAt": "2026-11-02T04:27:59.895Z",
+      "signedAt": "2026-11-02T04:27:59.906Z",
+      "contractHash": "d6460bc76b0c4d55a3973851c0cc1b0312ae8baeb9b837b3f7cbbdcb1b61ef45",
+      "signature": "s53UbtHJjys2mJ6V2xdqyWmzQ57B38pxb+nYQSDZ2Khxemfrsde+vdwNG10XIH+v1MA0MINlB0cmKfgaKUXpBQ==",
+      "signerInfo": {
+        "name": "Nguyen Van Test",
+        "email": "",
+        "phone": "0901234567",
+        "businessName": "Tap Hoa Test 382479",
+        "taxCode": "0399887766",
+        "address": "888 Đường Nguyễn Trãi, Quận 5, TP.HCM",
+        "locationType": "STREET_FRONT",
+        "latitude": 10.75,
+        "longitude": 106.66
+      },
+      "stamp": {
+        "certificateId": "SM-CERT-D6460BC76B0C",
+        "status": "VERIFIED_VALID",
+        "signedBy": "Tap Hoa Test 382479",
+        "representative": "Nguyen Van Test",
+        "signingMethod": "Khóa bí mật cá nhân (Private Key Ed25519)",
+        "authority": "SUPPLYMIND PLATFORM ESCROW CA",
+        "algorithm": "Ed25519-SHA256 (Luật Giao dịch điện tử 2023)",
+        "signedAt": "2026-11-02T04:27:59.906Z",
+        "ipAddress": "127.0.0.1",
+        "qrPayload": "https://supplymind.vn/verify-contract?num=SM-HD-2026-382479&hash=d6460bc76b0c4d55a3973851c0cc1b0312ae8baeb9b837b3f7cbbdcb1b61ef45&method=PRIVATE_KEY"
+      },
+      "signingMethod": "PRIVATE_KEY"
+    },
     "412370": {
       "userId": 412370,
       "username": "test_store_412370",
@@ -406,6 +445,45 @@
         "ipAddress": "127.0.0.1",
         "qrPayload": "https://supplymind.vn/verify-contract?num=SM-HD-2026-431139&hash=350e91d23ecfc8df6d911857c7684c0cf1c23e87430b7d82e7c4e84c65592c91"
       }
+    },
+    "883062": {
+      "userId": 883062,
+      "username": "user_883062",
+      "role": "STORE_OWNER",
+      "contractNumber": "SM-HD-2026-883062",
+      "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA4CyDndXkxJ0znedpLC9kh1UyBXBLOoQyuR9FIoMpCn8=\n-----END PUBLIC KEY-----\n",
+      "privateKey": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEILyBSEmOHENyHv3VluB9tEolRpMYvZulwvT1T8zaIpVa\n-----END PRIVATE KEY-----\n",
+      "rawPrivateKey": "MC4CAQAwBQYDK2VwBCIEILyBSEmOHENyHv3VluB9tEolRpMYvZulwvT1T8zaIpVa",
+      "rawPublicKey": "MCowBQYDK2VwAyEA4CyDndXkxJ0znedpLC9kh1UyBXBLOoQyuR9FIoMpCn8=",
+      "isSigned": true,
+      "createdAt": "2026-11-02T04:28:14.089Z",
+      "signedAt": "2026-11-02T04:28:14.101Z",
+      "contractHash": "755fbaf1a7ddd0030083eb90d049308246cfcde411c8cadfcdaeaaee3523328d",
+      "signature": "IBTIu/3dtzG0zX1Ur+oAVYmlxkfz4Wgu8oTQQd6x5dd2xJNHGvRM+RGGG3vX3iN0VhuL18IGYz+gWiXOWj0PAA==",
+      "signerInfo": {
+        "name": "Nguyễn Văn Test",
+        "email": "",
+        "phone": "0901234567",
+        "businessName": "Tạp Hóa Test",
+        "taxCode": "",
+        "address": "123 Đường Test",
+        "locationType": "STREET_FRONT",
+        "latitude": null,
+        "longitude": null
+      },
+      "stamp": {
+        "certificateId": "VNEID-CERT-755FBAF1A7DD",
+        "status": "VERIFIED_VALID",
+        "signedBy": "Tạp Hóa Test",
+        "representative": "Nguyễn Văn Test",
+        "signingMethod": "Định danh điện tử VNeID Mức 2 (Sinh trắc học FaceID / C06)",
+        "authority": "TRUNG TÂM DỮ LIỆU QUỐC GIA VỀ DÂN CƯ (C06) & SUPPLYMIND CA",
+        "algorithm": "Ed25519-SHA256 (Luật Giao dịch điện tử 2023)",
+        "signedAt": "2026-11-02T04:28:14.101Z",
+        "ipAddress": "1.2.3.4",
+        "qrPayload": "https://supplymind.vn/verify-contract?num=SM-HD-2026-883062&hash=755fbaf1a7ddd0030083eb90d049308246cfcde411c8cadfcdaeaaee3523328d&method=VNEID"
+      },
+      "signingMethod": "VNEID"
     },
     "909164": {
       "userId": 909164,
