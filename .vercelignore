@@ -7,3 +7,10 @@ tests
 prisma/seed*.js
 *.md
 render.yaml
+data
+.local-mail
+*.log
+update-uploads.cjs
+
+fix-escrow.cjs
+update-profile-fixtures.cjs

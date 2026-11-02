@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const documents = require('./documentStorage');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 
@@ -27,6 +28,7 @@ function ensureFiles() {
 }
 
 function loadItems() {
+  if (documents.active()) return documents.readDocument('consignment_items', {});
   ensureFiles();
   if (itemsCache) return itemsCache;
   try {
@@ -38,6 +40,7 @@ function loadItems() {
 }
 
 function persistItems() {
+  if (documents.active()) return documents.writeDocument('consignment_items', documents.readDocument('consignment_items', {}));
   ensureFiles();
   try {
     const tmp = `${itemsFile}.tmp`;
@@ -49,6 +52,7 @@ function persistItems() {
 }
 
 function loadRequests() {
+  if (documents.active()) return documents.readDocument('consignment_requests', []);
   ensureFiles();
   if (requestsCache) return requestsCache;
   try {
@@ -60,6 +64,7 @@ function loadRequests() {
 }
 
 function persistRequests() {
+  if (documents.active()) return documents.writeDocument('consignment_requests', documents.readDocument('consignment_requests', []));
   ensureFiles();
   try {
     const tmp = `${requestsFile}.tmp`;
@@ -71,6 +76,7 @@ function persistRequests() {
 }
 
 function loadQuotes() {
+  if (documents.active()) return documents.readDocument('consignment_quotes', {});
   ensureFiles();
   if (quotesCache) return quotesCache;
   try {
@@ -82,6 +88,7 @@ function loadQuotes() {
 }
 
 function persistQuotes() {
+  if (documents.active()) return documents.writeDocument('consignment_quotes', documents.readDocument('consignment_quotes', {}));
   ensureFiles();
   try {
     const tmp = `${quotesFile}.tmp`;

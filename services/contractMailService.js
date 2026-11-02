@@ -114,7 +114,7 @@ async function sendPrivateKeyEmail({ to, user, contract, config = {} }) {
   console.log('====================================================');
   console.log(`[CONTRACT KEY EMAIL] Gửi Private Key tới ${to}`);
   console.log(`Số hợp đồng: ${contractNumber}`);
-  console.log(`Khóa bí mật (Private Key): ${rawPrivateKey}`);
+  // Never write private keys to application logs.
   console.log('====================================================');
 
   const gmailUser = (config?.gmail?.user || process.env.GMAIL_USER || '').trim();

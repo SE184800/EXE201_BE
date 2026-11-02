@@ -82,3 +82,35 @@ Có 12 migration trong repo. Giữ nguyên tên đầy đủ, kể cả các mig
 - `GET /api/catalog/suppliers`: danh sách vựa có hàng đang hiển thị. Chỉ trả thông tin gian hàng, không công bố email, tài khoản đăng nhập hay mật khẩu.
 
 Đăng bán lưu SQL thật. Gian hàng phải được admin xác minh trước khi sản phẩm xuất hiện trên Tìm nguồn sỉ. Trang này hỗ trợ xem/tìm/lọc và đặt đơn; chủ vựa duyệt đơn rồi cập nhật tiến độ giao. Hàng thực nhận vẫn cần được chủ tạp hóa ghi nhận vào kho. Test `catalog.test.js` kiểm tra việc công bố, ẩn/đăng lại, sửa giá, cô lập vựa, CSRF, khóa tài khoản, phân trang và duyệt đồng thời. Bộ test chạy tuần tự giữa các file; kiểm thử đồng thời vẫn thực hiện trong từng bài test.
+
+## Chạy trên máy khác sau khi clone Git
+
+Cài Node.js 24 kèm npm trên máy của bạn. Đóng toàn bộ VS Code và mở lại sau khi cài, rồi kiểm tra `node -v` và `npm -v`.
+
+Trong thư mục backend (không cần đặt ở ổ D:):
+
+```powershell
+npm ci
+Copy-Item .env.example .env
+```
+
+Chỉ sao chép `.env.example` lần đầu; giữ cấu hình `.env` riêng nếu đã có. Cấu hình `DATABASE_URL` theo SQL Server của máy bạn, tạo database `supplymindAI` và bật TCP/IP trên đúng cổng. Điền `JWT_SECRET` và `SEED_PASSWORD` theo mục Chạy local ở trên. Sau đó:
+
+```powershell
+npm run db:generate
+npm run db:migrate
+npm run db:seed
+npm run dev
+```
+
+Dừng backend bằng Ctrl+C trước khi `npm ci` hoặc generate Prisma trên Windows để tránh lỗi EPERM do khóa DLL. Mỗi lần chạy tiếp chỉ cần `npm run dev`.
+
+Commit source, `package.json`, `package-lock.json`, `.env.example` và toàn bộ `prisma/migrations`. `.env`, `node_modules`, `.local-tools` và cấu hình PATH là dữ liệu riêng của máy, không đưa lên Git. Database trên máy bạn không tự chuyển qua Git; máy khác chạy migration và seed để tạo database riêng.
+
+Nếu PowerShell báo `npm is not recognized`, máy đó chưa cài Node.js/npm vào PATH hoặc terminal đang dùng PATH cũ. Đây là cấu hình máy, không phải lỗi npm script trong repository.
+
+## Dữ liệu demo bổ sung (không xóa dữ liệu hiện có)
+
+Sau khi migrate và seed tài khoản, chạy `npm run db:seed:demo`. Script chỉ dành cho local, tạo dữ liệu có tiền tố `[DEMO]`, giữ mật khẩu và bản ghi đã có. Chạy lại không tạo trùng dữ liệu mẫu. Tạo 8 sản phẩm/kho, lịch sử bán 30 ngày có giá bán, lô sắp hết hạn/hết hạn, kế hoạch nhập, các trạng thái đơn hàng/cọc/hoàn cọc, báo giá, khiếu nại, thuê bao và thanh toán mô phỏng, ngày lễ và nhật ký quản trị. Mật khẩu ba tài khoản ban đầu lấy từ `SEED_PASSWORD` của từng máy. Không có giao dịch ngân hàng thực; tài khoản ngân hàng mẫu không dùng để chuyển tiền.
+
+Tính năng gọi mô hình AI cần API key riêng trong `.env`; dữ liệu demo không thay thế API key. Không tạo sẵn phiên đăng nhập hoặc token khôi phục mật khẩu.

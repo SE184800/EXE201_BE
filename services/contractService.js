@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const documents = require('./documentStorage');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
@@ -15,6 +16,7 @@ function ensureDataFile() {
 }
 
 function getContractsData() {
+  if (documents.active()) return documents.readDocument('contracts', { contracts: {} });
   ensureDataFile();
   try {
     const raw = fs.readFileSync(contractsFile, 'utf8');
@@ -25,6 +27,7 @@ function getContractsData() {
 }
 
 function saveContractsData(data) {
+  if (documents.active()) return documents.writeDocument('contracts', data);
   ensureDataFile();
   const tmp = `${contractsFile}.tmp.${Date.now()}`;
   fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');

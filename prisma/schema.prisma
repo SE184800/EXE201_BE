@@ -74,6 +74,8 @@ model InventoryItem {
 }
 
 model InventoryLot {
+  sourceOrderId Int?
+  sourceOrder WholesaleOrder? @relation(fields: [sourceOrderId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   id            Int           @id @default(autoincrement())
   itemId        Int
   quantity      Int           @default(0)
@@ -82,6 +84,7 @@ model InventoryLot {
   purchasePrice Int?
   item          InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
 
+  @@index([sourceOrderId])
   @@index([itemId, expiryDate, receivedAt])
   @@map("inventory_lots")
 }
@@ -192,6 +195,8 @@ model HolidayConfig {
 }
 
 model WholesaleOrder {
+  inventoryImportedAt DateTime?
+  inventoryLots InventoryLot[]
   commissionRate             Decimal?             @db.Decimal(5, 2)
   commissionAmount           Decimal?             @db.Decimal(18, 2)
   deliveredAt                DateTime?
@@ -284,6 +289,8 @@ model SupplierQuoteLine {
   packaging   String          @db.NVarChar(50)
   quantity    Int
   unitPrice   Decimal         @db.Decimal(18, 2)
+  originalUnitPrice Decimal?  @db.Decimal(18, 2)
+  discountRate Decimal       @default(0) @db.Decimal(5, 2)
   lineTotal   Decimal         @db.Decimal(18, 2)
   quote       SupplierQuote   @relation(fields: [quoteId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   product     SupplierProduct @relation(fields: [productId], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -621,4 +628,21 @@ model Refund {
 
   @@index([orderId])
   @@map("refunds")
+}
+
+// Durable metadata for serverless deployments; JSON validity is checked by migration.
+model ApplicationDocument {
+  key String @id @db.VarChar(100)
+  payload String @db.NVarChar(Max)
+  updatedAt DateTime @default(now())
+  @@map("application_documents")
+}
+
+model ApplicationUpload {
+  filename String @id @db.VarChar(150)
+  contentType String @db.VarChar(100)
+  content Bytes @db.VarBinary(Max)
+  ownerId Int
+  createdAt DateTime @default(now())
+  @@map("application_uploads")
 }

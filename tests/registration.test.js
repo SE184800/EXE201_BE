@@ -167,11 +167,11 @@ test('SQL chống trùng email/phone ngay cả khi bỏ qua API', async () => {
   }
 });
 
-test.skip('giới hạn đăng ký trả JSON tiếng Việt và Retry-After; CSRF vẫn được kiểm tra', async () => {
-  const app = createApp(prisma, config);
+test('giới hạn đăng ký trả JSON tiếng Việt và Retry-After; CSRF vẫn được kiểm tra', async () => {
+  const app = createApp(prisma, { ...config, production: true });
   for (let i = 0; i < 5; i++) await register(app, {}).expect(400);
   const response = await register(app, {}).expect(429);
-  assert.match(response.body.message, /đăng ký quá nhiều lần/);
+  assert.match(response.body.message, /quá nhiều lần/);
   assert.ok(Number(response.headers['retry-after']) > 0);
   await request(app).post('/api/auth/register').send(fixture()).expect(403);
 });

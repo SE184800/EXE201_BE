@@ -18,6 +18,7 @@ const TRANSACTION_TYPES = Object.freeze({
   SANDBOX_DEPOSIT: 'SANDBOX_DEPOSIT',
   SANDBOX_WITHDRAWAL: 'SANDBOX_WITHDRAWAL',
   QR_DEPOSIT: 'QR_DEPOSIT',
+  SUBSCRIPTION_PAYMENT: 'SUBSCRIPTION_PAYMENT',
   ESCROW_LOCK: 'ESCROW_LOCK',
   ESCROW_RELEASE: 'ESCROW_RELEASE',
   ESCROW_RECEIVED: 'ESCROW_RECEIVED',
@@ -461,7 +462,22 @@ function createWalletService(prisma, qrBank = {}) {
   async function createSandboxDepositRequest(userId, body = {}) {
     const amount = parseAmount(body.amount);
     const note = text(body.note, 500);
+    if (body.requestId != null && (typeof body.requestId !== 'string' || !UUID.test(body.requestId))) {
+      throw problem(400, 'Mã yêu cầu nạp thử không hợp lệ.');
+    }
+    const requestReference = body.requestId ? `SANDBOX-REQ-${body.requestId}` : null;
     return prisma.$transaction(async tx => {
+      if (requestReference) {
+        const previous = await tx.walletTransaction.findUnique({ where: { reference: requestReference } });
+        if (previous) {
+          if (previous.userId !== userId) throw problem(409, 'Mã yêu cầu đã được dùng cho tài khoản khác.');
+          const saved = await tx.depositRequest.findFirstOrThrow({
+            where: { userId, reference: requestReference },
+            include: { user: { select: { id: true, name: true, username: true } } },
+          });
+          return serializeDeposit(saved);
+        }
+      }
       const request = await tx.depositRequest.create({
         data: {
           userId,
@@ -471,7 +487,7 @@ function createWalletService(prisma, qrBank = {}) {
           bankName: 'SANDBOX',
           bankAccountNumber: 'SANDBOX',
           bankAccountHolder: 'SANDBOX',
-          reference: `SANDBOX-DEP-${Date.now()}`,
+          reference: requestReference || `SANDBOX-DEP-${Date.now()}`,
           note: note || null,
           status: 'PENDING',
         },
@@ -490,7 +506,7 @@ function createWalletService(prisma, qrBank = {}) {
         type: TRANSACTION_TYPES.SANDBOX_DEPOSIT,
         direction: 'CREDIT',
         amount,
-        reference: `SANDBOX-DEP-${request.id}`,
+        reference: requestReference || `SANDBOX-DEP-${request.id}`,
         method: METHODS.SANDBOX,
         note: note || 'Nạp tiền ảo (sandbox).',
       });
@@ -1368,4 +1384,44 @@ const walletService = {
   },
 };
 
+// Escrow is a separate flow from a bank deposit. A legacy bank transfer must
+// never be turned into newly credited wallet money. Serialize transitions by
+// order and use the ledger to make callbacks/retries idempotent.
+for (const method of ['lockEscrow', 'releaseEscrow', 'refundEscrow', 'confiscateEscrow']) {
+  const original = walletService[method];
+  walletService[method] = async function (...args) {
+    const isLock = method === 'lockEscrow';
+    const isRefund = method === 'refundEscrow';
+    const orderId = args[isLock || isRefund ? 1 : 2];
+    const buyerId = args[0];
+    const amount = toDecimal(args[isLock || isRefund ? 2 : 3] || 0);
+    if (amount.lessThanOrEqualTo(0)) return;
+    const optionIndex = isLock || isRefund ? 4 : 5;
+    const externalTx = args[optionIndex]?.tx;
+    const run = async tx => {
+      const resource = `SupplyMindEscrow:${orderId}`;
+      const result = await tx.$queryRaw`DECLARE @result INT; EXEC @result = sys.sp_getapplock @Resource = ${resource}, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 10000; SELECT @result AS code;`;
+      if (result[0].code < 0) throw problem(409, 'Khoản cọc đang được xử lý. Vui lòng thử lại.');
+      const locked = await tx.walletTransaction.findFirst({ where: { orderId, type: TRANSACTION_TYPES.ESCROW_LOCK } });
+      if (isLock) {
+        if (locked) {
+          if (locked.userId !== buyerId || !locked.amount.equals(amount)) throw problem(409, 'Khoản ký quỹ không khớp.');
+          return;
+        }
+      } else {
+        if (!locked) return;
+        if (locked.userId !== buyerId || !locked.amount.equals(amount)) throw problem(409, 'Khoản ký quỹ không khớp.');
+        const completed = await tx.walletTransaction.findFirst({ where: { orderId, type: { in: [TRANSACTION_TYPES.ESCROW_RELEASE, TRANSACTION_TYPES.ESCROW_REFUND, TRANSACTION_TYPES.PENALTY_CONFISCATION] } } });
+        if (completed) return;
+        const wallet = await ensureWallet(tx, buyerId);
+        if (wallet.heldBalance.lessThan(amount)) throw problem(409, 'Số tiền ký quỹ không đủ để xử lý.');
+      }
+      const parameters = [...args];
+      parameters[optionIndex] = { tx };
+      return original.apply(walletService, parameters);
+    };
+    if (externalTx) return run(externalTx);
+    return defaultDb.$transaction(run, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 20000 });
+  };
+}
 module.exports.walletService = walletService;

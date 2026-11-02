@@ -227,7 +227,7 @@ async function sendOtpMail({ to, name, otp, config, type = "registration" }) {
     ? `SupplyMind AI\n\nMã xác thực khôi phục mật khẩu của bạn là: ${otp}\n\nVui lòng sử dụng mã này để xác nhận bạn là chủ nhân tài khoản liên kết với email. Mã có hiệu lực trong vòng 60 giây. Tuyệt đối không chia sẻ mã này cho người khác.`
     : `SupplyMind AI\n\nMã xác thực tài khoản của bạn là: ${otp}\n\nMã có hiệu lực trong vòng 60 giây. Vui lòng không chia sẻ mã này cho người khác.`;
 
-  console.log(`[OTP ${isForgot ? 'FORGOT PASSWORD' : 'REGISTRATION'}] Mã xác thực gửi tới ${to}: >>> ${otp} <<< (Hạn 60s)`);
+  console.log(`[OTP ${isForgot ? 'FORGOT PASSWORD' : 'REGISTRATION'}] Mã xác thực gửi tới ${to} (ẩn mã OTP)`);
   console.log('====================================================');
 
   const gmailUser = (config?.gmail?.user || process.env.GMAIL_USER || '').trim();
