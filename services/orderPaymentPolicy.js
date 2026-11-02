@@ -19,9 +19,9 @@ function paymentDue(order, driverInfo) {
   return Math.max(0, total - (order.depositStatus === 'PAID' ? Number(order.depositAmount) : 0));
 }
 
-function fullyPaidByWallet(order) {
+function fullyPaidByWallet(order, driverInfo) {
   const payment = order.orderPayment;
-  return Boolean(payment && !payment.refund && ['PAID', 'SETTLED'].includes(payment.status) && Number(payment.amount) >= Number(order.total));
+  return Boolean(payment && !payment.refund && ['PAID', 'SETTLED'].includes(payment.status) && Number(payment.amount) >= paymentDue(order, driverInfo));
 }
 
 module.exports = { paymentDue, fullyPaidByWallet };

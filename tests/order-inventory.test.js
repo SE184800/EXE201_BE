@@ -31,6 +31,7 @@ before(async () => {
 after(async () => {
   const ids = users.map(user => user.id);
   await prisma.auditLog.deleteMany({ where: { actorId: { in: ids } } });
+  await prisma.walletTransaction.deleteMany({ where: { userId: { in: ids } } });
   await prisma.inventoryItem.deleteMany({ where: { ownerId: { in: ids } } });
   await prisma.orderComplaint.deleteMany({ where: { orderId: { in: orderIds } } });
   await prisma.orderPayment.deleteMany({ where: { orderId: { in: orderIds } } });
@@ -268,4 +269,58 @@ test('production blocks simulated deposits for ordinary accounts', async () => {
     if (old === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = old;
   }
+});
+
+test('contract endpoint rejects forged VNeID evidence without creating a signature', async () => {
+  await request(app).post('/api/contracts/sign').set(csrf).set('Cookie', cookies.get(buyer.id)).send({ method: 'VNEID', agreedTerms: true, vneidData: { level: 2, verifiedAt: new Date().toISOString() }, privateKey: {} }).expect(503);
+});
+
+test('wallet payment rejects insufficient funds without creating a payment', async () => {
+  const purchase = await order('insufficient wallet', { unpaid: true, status: 'ISSUE_HANDLING' });
+  await prisma.wallet.upsert({ where: { userId: buyer.id }, update: { balance: 0 }, create: { userId: buyer.id, balance: 0 } });
+  await cashPayment(purchase.id, { method: 'WALLET' }).expect(409);
+  assert.equal(await prisma.orderPayment.findUnique({ where: { orderId: purchase.id } }), null);
+  assert.equal(await prisma.walletTransaction.count({ where: { orderId: purchase.id, type: 'ORDER_PAYMENT' } }), 0);
+  assert.equal((await prisma.wholesaleOrder.findUniqueOrThrow({ where: { id: purchase.id } })).status, 'ISSUE_HANDLING');
+});
+
+test('wallet remainder is debited once; payment and held deposit settle only on completion', async () => {
+  const purchase = await order('wallet settlement', { unpaid: true, status: 'ISSUE_HANDLING' });
+  await prisma.wallet.upsert({ where: { userId: buyer.id }, update: { balance: 200000, heldBalance: 0 }, create: { userId: buyer.id, balance: 200000 } });
+  const { walletService } = require('../services/walletService');
+  await walletService.lockEscrow(buyer.id, purchase.id, 20000, 'Test deposit');
+  await prisma.wholesaleOrder.update({ where: { id: purchase.id }, data: { depositAmount: 20000, depositStatus: 'PAID', depositReference: 'VI_HE_THONG' } });
+  const beforeSupplier = Number((await prisma.wallet.findUnique({ where: { userId: supplier.id } }))?.balance || 0);
+  const results = await Promise.all([cashPayment(purchase.id, { method: 'WALLET' }), cashPayment(purchase.id, { method: 'WALLET' })]);
+  assert.deepEqual(results.map(result => result.status), [200, 200]);
+  const buyerWallet = await prisma.wallet.findUniqueOrThrow({ where: { userId: buyer.id } });
+  assert.equal(Number(buyerWallet.balance), 104000);
+  assert.equal(Number(buyerWallet.heldBalance), 20000);
+  assert.equal(Number((await prisma.wallet.findUnique({ where: { userId: supplier.id } }))?.balance || 0), beforeSupplier);
+  assert.equal(await prisma.walletTransaction.count({ where: { orderId: purchase.id, type: 'ORDER_PAYMENT' } }), 1);
+  assert.equal((await prisma.wholesaleOrder.findUniqueOrThrow({ where: { id: purchase.id } })).inventoryImportedAt, null);
+  const complete = () => request(app).post(`/api/orders/${purchase.id}/complete`).set(csrf).set('Cookie', cookies.get(buyer.id)).send({});
+  const finished = await Promise.all([complete(), complete()]);
+  assert.deepEqual(finished.map(result => result.status), [200, 200]);
+  assert.equal(Number((await prisma.wallet.findUniqueOrThrow({ where: { userId: supplier.id } })).balance), beforeSupplier + 96000);
+  assert.equal(Number((await prisma.wallet.findUniqueOrThrow({ where: { userId: buyer.id } })).heldBalance), 0);
+  assert.equal(await prisma.walletTransaction.count({ where: { orderId: purchase.id, type: 'ESCROW_RELEASE' } }), 1);
+  assert.equal(await prisma.walletTransaction.count({ where: { orderId: purchase.id, type: 'ORDER_RECEIVE' } }), 1);
+});
+
+test('legacy full-wallet payments return a separately held deposit instead of crediting it twice', async () => {
+  const purchase = await order('legacy full wallet', { unpaid: true, status: 'ISSUE_HANDLING' });
+  await prisma.wallet.update({ where: { userId: buyer.id }, data: { balance: 200000, heldBalance: 0 } });
+  const { walletService, createWalletService } = require('../services/walletService');
+  await walletService.lockEscrow(buyer.id, purchase.id, 20000, 'Legacy test');
+  await prisma.wholesaleOrder.update({ where: { id: purchase.id }, data: { depositAmount: 20000, depositStatus: 'PAID', depositReference: 'VI_HE_THONG' } });
+  await createWalletService(prisma).payOrder(buyer.id, purchase.id);
+  await prisma.wholesaleOrder.update({ where: { id: purchase.id }, data: { status: 'DELIVERED' } });
+  const beforeSupplier = Number((await prisma.wallet.findUniqueOrThrow({ where: { userId: supplier.id } })).balance);
+  await request(app).post(`/api/orders/${purchase.id}/complete`).set(csrf).set('Cookie', cookies.get(buyer.id)).send({}).expect(200);
+  const buyerWallet = await prisma.wallet.findUniqueOrThrow({ where: { userId: buyer.id } });
+  assert.equal(Number(buyerWallet.balance), 104000);
+  assert.equal(Number(buyerWallet.heldBalance), 0);
+  assert.equal(Number((await prisma.wallet.findUniqueOrThrow({ where: { userId: supplier.id } })).balance), beforeSupplier + 96000);
+  assert.equal(await prisma.walletTransaction.count({ where: { orderId: purchase.id, type: 'ESCROW_REFUND' } }), 1);
 });

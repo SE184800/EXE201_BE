@@ -83,8 +83,10 @@ function createContractRoutes(prisma, requireAuth) {
   // POST /api/contracts/sign
   router.post('/sign', async (req, res) => {
     const { method = 'PRIVATE_KEY', privateKey, agreedTerms, vneidData } = req.body || {};
+    if (method === 'VNEID') return res.status(503).json({ success: false, message: 'VNeID chưa được kết nối. Hãy dùng khóa cá nhân.' });
+    if (method !== 'PRIVATE_KEY') return res.status(400).json({ success: false, message: 'Phương thức ký chưa được hỗ trợ.' });
 
-    if (!agreedTerms) {
+    if (agreedTerms !== true) {
       return res.status(400).json({
         success: false,
         message: 'Vui lòng tích chọn đồng ý với tất cả điều khoản hợp đồng trước khi xác nhận.',
@@ -114,9 +116,7 @@ function createContractRoutes(prisma, requireAuth) {
 
       return res.json({
         success: true,
-        message: method === 'VNEID'
-          ? 'Ký số xác thực danh tính điện tử qua VNeID Mức 2 thành công!'
-          : 'Ký kết hợp đồng điện tử thành công! Chào mừng bạn gia nhập nền tảng SupplyMind.',
+        message: 'Đã ký bằng khóa cá nhân của tài khoản.',
         contract: {
           userId: signedContract.userId,
           contractNumber: signedContract.contractNumber,

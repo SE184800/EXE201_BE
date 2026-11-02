@@ -169,7 +169,7 @@ function validateTaxCodeChecksum(rawTaxCode) {
   if (checkDigit !== digits[9]) {
     return {
       valid: false,
-      error: `Chữ số kiểm tra không khớp (tính toán: ${checkDigit}, thực tế: ${digits[9]}). Dãy số không tồn tại trên hệ thống thuế quốc gia.`,
+      error: `Chữ số kiểm tra không khớp (tính toán: ${checkDigit}, thực tế: ${digits[9]}). Đây chỉ là kiểm tra chữ số, không phải tra cứu cơ sở dữ liệu thuế.`,
     };
   }
 
@@ -190,43 +190,12 @@ function validateTaxCodeChecksum(rawTaxCode) {
  * Tra cuu thong tin phap nhan theo Ma so thue
  */
 async function lookupTaxCode(rawTaxCode) {
-  const check = validateTaxCodeChecksum(rawTaxCode);
-  if (!check.valid) {
-    const err = new Error(check.error);
-    err.status = 400;
-    throw err;
-  }
-
-  const taxCode = check.cleanTaxCode;
-
-  // 1. Kiem tra co so mau da xac thuc truoc
-  if (VERIFIED_SAMPLE_BUSINESSES[taxCode]) {
-    return {
-      verified: true,
-      source: 'Cơ sở dữ liệu Thuế Quốc gia & Hệ thống SupplyMind',
-      data: VERIFIED_SAMPLE_BUSINESSES[taxCode],
-    };
-  }
-
-  // 2. Neu ma so thue vuot qua kiem tra Checksum hop le:
-  // Tra ve thong tin phap nhan duoc xac thuc theo quy chuan co quan thue
-  const isBranch = Boolean(check.branchCode);
-  const businessType = isBranch ? 'Chi nhánh / Địa điểm kinh doanh phụ thuộc' : 'Hộ kinh doanh / Cơ sở kinh doanh đã đăng ký thuế';
-  const taxAuthority = `Cục Thuế ${check.provinceName}`;
-
+  const clean = typeof rawTaxCode === 'string' ? rawTaxCode.trim().replace(/\s+/g, '') : '';
+  if (!/^(\d{10}|\d{10}-?\d{3})$/.test(clean)) throw Object.assign(new Error('Nhập mã số thuế gồm 10 hoặc 13 chữ số.'), { status: 400 });
   return {
-    verified: true,
-    source: `Hệ thống xác thực mã định danh thuế ${check.provinceName} (Modulo 11)`,
-    data: {
-      taxCode,
-      businessName: `HỘ KINH DOANH CƠ SỞ MST ${taxCode}`,
-      representative: 'Đại diện hợp pháp cơ sở kinh doanh',
-      address: `Khu vực quản lý: ${check.provinceName}`,
-      businessType,
-      status: 'NNT đang hoạt động (Đã được cấp GCN Đăng ký kinh doanh & Đăng ký thuế)',
-      issuedDate: 'Đã xác thực hợp lệ',
-      taxAuthority,
-    },
+    verified: false, formatValid: true, source: 'Kiểm tra định dạng, chưa kết nối tra cứu thuế',
+    message: 'Đúng định dạng. Chưa xác minh thông tin đăng ký. Hãy nhập thông tin theo giấy tờ.',
+    data: { taxCode: clean, businessName: '', representative: '', address: '', businessType: '', status: 'Chưa xác minh', issuedDate: '', taxAuthority: '' },
   };
 }
 

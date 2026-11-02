@@ -11,6 +11,7 @@ const { walletService, settleOrderToSupplier } = require('../services/walletServ
 const { validateDeliveryTime, pendingRequest } = require('../services/reschedulePolicy');
 const { orderQuery } = require('../services/orderQuery');
 const { paymentDue, fullyPaidByWallet } = require('../services/orderPaymentPolicy');
+const { payReceivedOrder } = require('../services/receivedOrderPayment');
 const { visibleSupplierWhere, audit } = require('../services/platformPolicy');
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const problem = (status, message) => Object.assign(new Error(message), { status });
@@ -323,6 +324,12 @@ function createOrderRoutes(prisma, requireAuth) {
     }
     try {
       const buyerId = req.auth.user.id;
+      if (method === 'WALLET') {
+        const result = await payReceivedOrder(prisma, buyerId, id, amount, include);
+        const payment = result.order.orderPayment;
+        const paymentInfo = deliveryService.savePaymentInfo(id, { method: 'WALLET', amount: Number(payment.amount), status: 'CONFIRMED', storePaidAt: payment.paidAt?.toISOString() || new Date().toISOString() });
+        return res.json({ success: true, paymentInfo, order: serialize(result.order), message: result.alreadyPaid ? 'Đơn này đã được trả bằng ví.' : 'Đã trừ tiền ví. Bạn có thể hoàn tất đơn.' });
+      }
       const current = await prisma.wholesaleOrder.findFirst({ where: { id, buyerId }, include });
       if (!current) throw problem(404, 'Không tìm thấy đơn hàng.');
 
@@ -354,44 +361,36 @@ function createOrderRoutes(prisma, requireAuth) {
   });
 
   router.post('/:id/complete', requireRole('STORE_OWNER'), async (req, res, next) => {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id) || id < 1 || id > 2147483647) return res.status(400).json({ message: 'Mã đơn hàng không hợp lệ.' });
+    const id = Number(req.params.id), buyerId = req.auth.user.id;
+    if (!Number.isInteger(id) || id < 1 || id > 2147483647) return res.status(400).json({ message: 'Mã đơn không hợp lệ.' });
     try {
-      const buyerId = req.auth.user.id;
-      const current = await prisma.wholesaleOrder.findFirst({ where: { id, buyerId }, include });
-      if (!current) throw problem(404, 'Không tìm thấy đơn hàng.');
-
-      const driverInfo = deliveryService.getDriverInfo(id);
-      if (current.status === 'COMPLETED') return res.json({ success: true, order: serialize(current), message: 'Đơn hàng đã hoàn tất.' });
-      if (current.status !== 'DELIVERED') throw problem(409, 'Cần nhận hàng và đối soát thanh toán trước khi hoàn tất.');
-      if (current.complaint && ['OPEN', 'IN_REVIEW'].includes(current.complaint.status)) throw problem(409, 'Cần xử lý xong sự cố trước khi hoàn tất đơn.');
-      const paidWallet = current.orderPayment && !current.orderPayment.refund && ['PAID', 'SETTLED'].includes(current.orderPayment.status) && Number(current.orderPayment.amount) >= Number(current.total);
-      if (driverInfo?.paymentInfo?.status !== 'CONFIRMED' && !paidWallet) {
-        throw problem(400, 'Chủ vựa chưa xác nhận đã nhận thanh toán. Vui lòng đợi Chủ vựa xác nhận trước khi hoàn tất.');
-      }
-
-      const updated = await prisma.wholesaleOrder.update({
-        where: { id },
-        data: {
-          status: 'COMPLETED',
-          deliveredAt: current.deliveredAt || new Date(),
-          commissionAmount: current.commissionRate === null ? null : current.subtotal.mul(current.commissionRate).div(100).toDecimalPlaces(2),
-        },
-        include,
-      });
-
-      // Release escrow if any
-      const depositNum = current.depositAmount.toNumber();
-      if (depositNum > 0 && current.depositStatus === 'PAID') {
-        try {
-          await walletService.releaseEscrow(buyerId, current.supplier.userId, current.id, depositNum, current.commissionRate ? current.commissionRate.toNumber() : 0);
-        } catch (err) {
-          console.error('Lỗi giải phóng cọc khi hoàn tất đơn:', err.message);
+      const updated = await prisma.$transaction(async tx => {
+        const resource = 'SupplyMindOrderPayment:' + id;
+        const lock = await tx.$queryRaw`DECLARE @result INT; EXEC @result = sys.sp_getapplock @Resource = ${resource}, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 10000; SELECT @result AS code;`;
+        if (lock[0].code < 0) throw problem(409, 'Đơn đang được xử lý. Hãy thử lại.');
+        const current = await tx.wholesaleOrder.findFirst({ where: { id, buyerId }, include });
+        if (!current) throw problem(404, 'Không tìm thấy đơn hàng.');
+        if (current.status === 'COMPLETED') return current;
+        if (current.status !== 'DELIVERED') throw problem(409, 'Nhận hàng và trả đủ tiền trước khi hoàn tất.');
+        if (current.complaint && ['OPEN', 'IN_REVIEW'].includes(current.complaint.status)) throw problem(409, 'Cần xử lý xong sự cố trước khi hoàn tất đơn.');
+        const driver = deliveryService.getDriverInfo(id);
+        if (driver?.paymentInfo?.status !== 'CONFIRMED' && !fullyPaidByWallet(current, driver)) throw problem(409, 'Chủ vựa chưa xác nhận tiền thanh toán.');
+        if (current.orderPayment?.refund) throw problem(409, 'Đơn đã hoàn tiền, không thể hoàn tất.');
+        const saved = await tx.wholesaleOrder.update({ where: { id }, data: { status: 'COMPLETED', deliveredAt: current.deliveredAt || new Date(), commissionAmount: current.commissionRate === null ? null : current.subtotal.mul(current.commissionRate).div(100).toDecimalPlaces(2) }, include });
+        await settleOrderToSupplier(tx, saved);
+        if (current.depositStatus === 'PAID' && Number(current.depositAmount) > 0) {
+          const gross = paymentDue({ ...current, depositStatus: 'NONE' }, driver);
+          if (current.orderPayment && Number(current.orderPayment.amount) >= gross) {
+            // Older wallet endpoints collected the full order even when a deposit was held.
+            await walletService.refundEscrow(buyerId, id, Number(current.depositAmount), 'Hoàn cọc đã tính trong khoản thanh toán đủ', { tx });
+          } else {
+            await walletService.releaseEscrow(buyerId, current.supplier.userId, id, Number(current.depositAmount), Number(current.commissionRate || 0), { tx });
+          }
         }
-      }
-
-
-      res.json({ success: true, order: serialize(updated), message: 'Đơn hàng đã hoàn tất thành công.' });
+        await audit(tx, buyerId, 'ORDER_COMPLETED', 'ORDER', id, {});
+        return tx.wholesaleOrder.findUniqueOrThrow({ where: { id }, include });
+      }, { isolationLevel: 'Serializable', maxWait: 10000, timeout: 30000 });
+      res.json({ success: true, order: serialize(updated), message: 'Đã hoàn tất đơn.' });
     } catch (error) { next(error); }
   });
   router.post('/:id/import-inventory', requireRole('STORE_OWNER'), async (req, res, next) => {
@@ -427,7 +426,7 @@ function createOrderRoutes(prisma, requireAuth) {
       res.json({ success: true, ...receipt, order: serialize(result.order), message: result.alreadyImported ? 'Đơn này đã được thêm vào kho trước đó; không cộng lại số lượng.' : 'Đã thêm ' + result.count + ' mặt hàng vào kho. Hàng nhập được lưu thành lô riêng theo đơn.' });
     } catch (error) { next(error); }
   });
-  router.use((error, req, res, next) => error.status || error.code === 'P2034' ? res.status(error.status || 409).json({ message: error.status ? error.message : 'Kho vừa thay đổi. Vui lòng thử nhập lại đơn.' }) : next(error));
+  router.use((error, req, res, next) => error.status || error.code === 'P2034' ? res.status(error.status || 409).json({ message: error.status ? error.message : 'Đơn hoặc số dư vừa thay đổi. Hãy tải lại và thử lại.' }) : next(error));
   return router;
 }
 module.exports = { createOrderRoutes };

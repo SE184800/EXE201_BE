@@ -176,11 +176,18 @@ function getOrCreateUserContract(user, profileInfo = {}) {
     }
   }
 
-  return contract;
+  return presentContract(contract);
+}
+
+function presentContract(contract) {
+  if (!contract || contract.signingMethod !== 'VNEID') return contract;
+  return { ...contract, isSigned: false, stamp: contract.stamp ? { ...contract.stamp,
+    status: 'UNVERIFIED', authority: 'Chưa xác minh VNeID', signingMethod: 'Bản thử nghiệm chưa xác minh',
+  } : null };
 }
 
 function signContract(userId, signPayload, agreedTerms, clientMeta = {}) {
-  if (!agreedTerms) {
+  if (agreedTerms !== true) {
     const err = new Error('Vui lòng tích chọn đồng ý với tất cả điều khoản hợp đồng trước khi ký.');
     err.status = 400;
     throw err;
@@ -201,44 +208,17 @@ function signContract(userId, signPayload, agreedTerms, clientMeta = {}) {
   const textBuffer = Buffer.from(canonicalText, 'utf8');
 
   let signature;
-  let signingMethodLabel = 'Khóa bí mật cá nhân (Private Key Ed25519)';
-  let authorityLabel = 'SUPPLYMIND PLATFORM ESCROW CA';
+  const signingMethodLabel = 'Khóa cá nhân Ed25519';
+  const authorityLabel = 'SupplyMind · chữ ký nội bộ';
 
   if (method === 'VNEID') {
-    // Phuong thuc Ky so xac thuc qua VNeID Muc do 2 (Remote Signing / HSM)
-    // Khoa bi mat duoc bao ve va kich hoat boi xac thuc sinh trac hoc VNeID
-    const keyToUse = contract.privateKey;
-    try {
-      signature = crypto.sign(null, textBuffer, keyToUse);
-    } catch (signErr) {
-      const err = new Error('Lỗi ký số qua hạ tầng chứng thực VNeID.');
-      err.status = 500;
-      err.detail = signErr.message;
-      throw err;
-    }
-
-    signingMethodLabel = 'Định danh điện tử VNeID Mức 2 (Sinh trắc học FaceID / C06)';
-    authorityLabel = 'TRUNG TÂM DỮ LIỆU QUỐC GIA VỀ DÂN CƯ (C06) & SUPPLYMIND CA';
-  } else {
-    // Phuong thuc nhap tay Private Key truyen thong
-    const enteredPrivateKey = typeof signPayload === 'string' ? signPayload : signPayload?.privateKey;
-    const normalizedKey = normalizePrivateKey(enteredPrivateKey);
-    try {
-      signature = crypto.sign(null, textBuffer, normalizedKey);
-    } catch (signErr) {
-      const err = new Error('Khóa bí mật cá nhân (Private Key) không đúng định dạng Ed25519 hoặc bị lỗi ký.');
-      err.status = 400;
-      err.detail = signErr.message;
-      throw err;
-    }
-
-    const isVerified = crypto.verify(null, textBuffer, contract.publicKey, signature);
-    if (!isVerified) {
-      const err = new Error('Khóa bí mật (Private Key) không khớp với Khóa công khai của tài khoản này. Vui lòng kiểm tra lại khóa được cấp.');
-      err.status = 400;
-      throw err;
-    }
+    throw Object.assign(new Error('VNeID chưa được kết nối. Không thể xác thực hoặc ký bằng VNeID.'), { status: 503 });
   }
+  if (method !== 'PRIVATE_KEY') throw Object.assign(new Error('Phương thức ký chưa được hỗ trợ.'), { status: 400 });
+  const enteredPrivateKey = typeof signPayload === 'string' ? signPayload : signPayload?.privateKey;
+  const normalizedKey = normalizePrivateKey(enteredPrivateKey);
+  try { signature = crypto.sign(null, textBuffer, normalizedKey); }
+  catch { throw Object.assign(new Error('Khóa ký không đúng định dạng Ed25519.'), { status: 400 }); }
 
   // Xac thuc lai chu ky voi Public Key de dam bao tinh toan ven tuyet doi
   const isSignatureValid = crypto.verify(null, textBuffer, contract.publicKey, signature);
@@ -257,16 +237,16 @@ function signContract(userId, signPayload, agreedTerms, clientMeta = {}) {
   contract.signature = signature.toString('base64');
   contract.signingMethod = method;
   contract.stamp = {
-    certificateId: method === 'VNEID' ? `VNEID-CERT-${contractHash.slice(0, 12).toUpperCase()}` : `SM-CERT-${contractHash.slice(0, 12).toUpperCase()}`,
+    certificateId: `SM-CERT-${contractHash.slice(0, 12).toUpperCase()}`,
     status: 'VERIFIED_VALID',
     signedBy: contract.signerInfo.businessName || contract.signerInfo.name,
     representative: contract.signerInfo.name,
     signingMethod: signingMethodLabel,
     authority: authorityLabel,
-    algorithm: 'Ed25519-SHA256 (Luật Giao dịch điện tử 2023)',
+    algorithm: 'Ed25519',
     signedAt,
     ipAddress: clientMeta.ip || '127.0.0.1',
-    qrPayload: `https://supplymind.vn/verify-contract?num=${contract.contractNumber}&hash=${contractHash}&method=${method}`,
+    qrPayload: JSON.stringify({ type: 'SUPPLYMIND_INTERNAL_SIGNATURE', contractNumber: contract.contractNumber, hash: contractHash, method }),
   };
 
   data.contracts[userIdStr] = contract;
@@ -277,7 +257,7 @@ function signContract(userId, signPayload, agreedTerms, clientMeta = {}) {
 
 function getContractByUserId(userId) {
   const data = getContractsData();
-  return data.contracts[String(userId)] || null;
+  return presentContract(data.contracts[String(userId)] || null);
 }
 
 module.exports = {

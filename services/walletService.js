@@ -1046,7 +1046,7 @@ function createWalletService(prisma, qrBank = {}) {
       if (order.buyerId !== buyerId) {
         throw problem(403, 'Bạn không có quyền thanh toán đơn hàng này.');
       }
-      if (['REJECTED', 'DELIVERED'].includes(order.status)) {
+      if (['REJECTED', 'DELIVERED', 'COMPLETED'].includes(order.status)) {
         throw problem(409, 'Đơn hàng không ở trạng thái có thể thanh toán bằng ví.');
       }
       const existing = await tx.orderPayment.findUnique({ where: { orderId } });
