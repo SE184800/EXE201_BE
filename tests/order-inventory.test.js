@@ -121,6 +121,14 @@ test('two concurrent clicks and a later replay add stock and lots exactly once',
   assert.equal(item.quantity, 48);
   assert.equal(item.lots.length, 1);
   assert.equal(item.movements.length, 1);
+  const history = await request(app).get(`/api/inventory/history?itemId=${item.id}&type=RECEIPT`)
+    .set('Cookie', cookies.get(buyer.id)).expect(200);
+  assert.equal(history.body.movements.length, 1);
+  const receipt = history.body.movements[0];
+  assert.equal(receipt.quantityChange, 48);
+  assert.equal(receipt.quantityBefore, 0);
+  assert.equal(receipt.quantityAfter, 48);
+  assert.ok(receipt.note.includes(`[ĐƠN SỈ #${purchase.id}]`));
 });
 
 test('a later line failure rolls back earlier lines, lots, stock history and the order marker', async () => {
