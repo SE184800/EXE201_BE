@@ -14,12 +14,9 @@ function parsePackaging(value) {
 }
 function importBlockReason(order, driverInfo) {
   if (order.inventoryImportedAt) return null;
-  if (order.status !== 'COMPLETED') return 'Chỉ thêm vào kho sau khi đơn hàng đã hoàn tất.';
+  if (!['ISSUE_HANDLING', 'DELIVERED', 'COMPLETED'].includes(order.status)) return 'Nhận và kiểm hàng trước khi nhập kho.';
   if (order.complaint && ['OPEN', 'IN_REVIEW'].includes(order.complaint.status)) return 'Cần xử lý xong khiếu nại trước khi thêm vào kho.';
   if (driverInfo?.incidentReport?.damagedItems?.length) return 'Đơn có báo cáo hàng hỏng. Cần nhập theo số lượng thực nhận để tránh cộng cả hàng hỏng.';
-  const payment = order.orderPayment;
-  const walletPaid = payment && !payment.refund && ['PAID', 'SETTLED'].includes(payment.status) && Number(payment.amount) >= Number(order.total);
-  if (!walletPaid && driverInfo?.paymentInfo?.status !== 'CONFIRMED') return 'Chủ vựa cần xác nhận đã nhận đủ tiền trước khi thêm vào kho.';
   return null;
 }
 // Call inside a Serializable transaction. Marker, stock, lots and history
@@ -42,7 +39,7 @@ async function syncOrderToStoreInventory(tx, buyerId, order) {
     return { alreadyImported: true, count: 0 };
   }
   const importedAt = new Date();
-  const claimed = await tx.wholesaleOrder.updateMany({ where: { id: order.id, buyerId, status: 'COMPLETED', inventoryImportedAt: null }, data: { inventoryImportedAt: importedAt } });
+  const claimed = await tx.wholesaleOrder.updateMany({ where: { id: order.id, buyerId, status: { in: ['ISSUE_HANDLING', 'DELIVERED', 'COMPLETED'] }, inventoryImportedAt: null }, data: { inventoryImportedAt: importedAt } });
   if (!claimed.count) {
     const saved = await tx.wholesaleOrder.findFirst({ where: { id: order.id, buyerId } });
     if (saved?.inventoryImportedAt) return { alreadyImported: true, count: 0 };

@@ -7,7 +7,6 @@ const { serializeOrder } = require('../services/supplierService');
 const systemConfigService = require('../services/systemConfigService');
 const { activeAccountWhere, accountAvailable, audit } = require('../services/platformPolicy');
 const consignmentService = require('../services/consignmentService');
-const inventorySupplierService = require('../services/inventorySupplierService');
 
 const DAY = 86400000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -70,6 +69,8 @@ function serializeQuote(quote) {
       packaging: line.packaging,
       quantity: line.quantity,
       unitPrice: number(line.unitPrice),
+      originalUnitPrice: number(line.originalUnitPrice ?? line.unitPrice),
+      discountRate: number(line.discountRate),
       lineTotal: number(line.lineTotal),
     })),
   };
@@ -140,6 +141,7 @@ function createSupplierQuoteRoutes(prisma, requireAuth) {
       lines.some(line => !line || !Number.isInteger(line.productId) || line.productId < 1 || line.productId > 2147483647 ||
         !Number.isInteger(line.quantity) || line.quantity < 1 || line.quantity > 2147483647 ||
         !hasTwoDecimals(line.unitPrice) || line.unitPrice < minUnitPrice || line.unitPrice > 1000000000 ||
+        (line.discountRate !== undefined && (!hasTwoDecimals(line.discountRate) || line.discountRate < 0 || line.discountRate > 100)) ||
         typeof line.expectedUpdatedAt !== 'string' || !Number.isFinite(Date.parse(line.expectedUpdatedAt))) ||
       new Set(lines.map(line => line.productId)).size !== lines.length) {
       return res.status(400).json({ message: 'Kiểm tra cửa hàng, hạn báo giá, phí giao, tỷ lệ cọc và 1–50 mặt hàng.' });
@@ -161,8 +163,11 @@ function createSupplierQuoteRoutes(prisma, requireAuth) {
           const product = products.find(item => item.id === line.productId);
           if (product.updatedAt.toISOString() !== new Date(line.expectedUpdatedAt).toISOString()) throw problem(409, `${product.name} vừa thay đổi. Tải lại sản phẩm trước khi báo giá.`);
           if (line.quantity > product.stockQty) throw problem(409, `${product.name} hiện chỉ còn ${product.stockQty} × ${product.packaging}.`);
-          const unitPrice = new Prisma.Decimal(line.unitPrice);
-          return { productId: product.id, productName: product.name, packaging: product.packaging, quantity: line.quantity, unitPrice, lineTotal: unitPrice.mul(line.quantity) };
+          const originalUnitPrice = new Prisma.Decimal(line.unitPrice);
+          const discountRate = line.discountRate ?? 0;
+          const unitPrice = originalUnitPrice.mul(new Prisma.Decimal(100).sub(discountRate)).div(100).toDecimalPlaces(2);
+          if (!isConsignment && unitPrice.lessThanOrEqualTo(0)) throw problem(400, 'Giá sau giảm phải lớn hơn 0.');
+          return { productId: product.id, productName: product.name, packaging: product.packaging, quantity: line.quantity, originalUnitPrice, discountRate, unitPrice, lineTotal: unitPrice.mul(line.quantity) };
         });
         const subtotal = snapshots.reduce((sum, line) => sum.add(line.lineTotal), new Prisma.Decimal(0));
         const total = subtotal.add(deliveryFee);
@@ -298,51 +303,7 @@ function createStoreQuoteRoutes(prisma, requireAuth) {
         const changed = await tx.supplierQuote.updateMany({ where: { id: quote.id, status: 'SENT', version: quote.version }, data: { status: 'ACCEPTED', respondedAt: new Date(), orderId: created.id, version: { increment: 1 } } });
         if (!changed.count) throw problem(409, 'Báo giá vừa được xử lý. Tải lại danh sách.');
 
-        // If this was a consignment / marketing trial quote, auto-sync into store inventory
-        const consignment = consignmentService.getQuoteConsignment(quote.id);
-        if (consignment?.isConsignment) {
-          for (const line of quote.lines) {
-            try {
-              const existing = await tx.inventoryItem.findFirst({ where: { ownerId: req.auth.user.id, name: line.productName } });
-              let invItemId = existing?.id;
-              if (existing) {
-                await tx.inventoryItem.updateMany({
-                  where: { id: existing.id, ownerId: req.auth.user.id },
-                  data: { quantity: existing.quantity + line.quantity }
-                });
-              } else {
-                const createdItem = await tx.inventoryItem.create({
-                  data: {
-                    ownerId: req.auth.user.id,
-                    name: line.productName,
-                    unit: line.packaging || 'cái',
-                    quantity: line.quantity,
-                    purchasePrice: 0,
-                    sellingPrice: Number(line.unitPrice) > 0 ? Number(line.unitPrice) : Math.round((Number(consignment.settlementPrice) || 20000) * 1.25),
-                    lowThreshold: Math.max(1, Math.floor(line.quantity * 0.2)),
-                  }
-                });
-                invItemId = createdItem.id;
-              }
-              if (invItemId) {
-                inventorySupplierService.setSupplier(invItemId, quote.supplier.businessName);
-                consignmentService.setItemConsignment(invItemId, {
-                  isConsignment: true,
-                  settlementPrice: consignment.settlementPrice || 0,
-                  autoRestock: consignment.autoRestock !== false,
-                  autoExchangeExpiry: consignment.autoExchangeExpiry !== false,
-                  supplierName: quote.supplier.businessName,
-                  supplierId: quote.supplier.id,
-                  supplierPhone: quote.supplier.user?.phone || null,
-                  termsNote: consignment.termsNote,
-                });
-              }
-            } catch (syncErr) {
-              console.error('Không thể tự động đồng bộ hàng ký gửi vào kho:', syncErr.message);
-            }
-          }
-        }
-
+        // Goods enter inventory only after receipt, through the order import action.
         await audit(tx, req.auth.user.id, 'QUOTE_ACCEPTED', 'QUOTE', quote.id, { orderId: created.id, depositAmount: depositAmount.toString() });
         await audit(tx, req.auth.user.id, 'ORDER_CREATED_FROM_QUOTE', 'ORDER', created.id, { quoteId: quote.id, supplierId: quote.supplierId });
         return created;

@@ -8,11 +8,13 @@ const deliveryService = require('../services/deliveryService');
 const deliveryFeeService = require('../services/deliveryFeeService');
 const { syncOrderToStoreInventory, importBlockReason } = require('../services/inventorySyncService');
 const { walletService, settleOrderToSupplier } = require('../services/walletService');
+const { validateDeliveryTime, pendingRequest } = require('../services/reschedulePolicy');
 const { orderQuery } = require('../services/orderQuery');
+const { paymentDue, fullyPaidByWallet } = require('../services/orderPaymentPolicy');
 const { visibleSupplierWhere, audit } = require('../services/platformPolicy');
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const problem = (status, message) => Object.assign(new Error(message), { status });
-const include = { buyer: true, items: true, supplier: { include: { user: true } }, complaint: true, orderPayment: { include: { refund: { select: { id: true } } } } };
+const include = { buyer: true, items: true, sourceQuote: true, supplier: { include: { user: true } }, complaint: true, orderPayment: { include: { refund: { select: { id: true } } } } };
 const serialize = order => ({
   ...serializeOrder(order),
   supplier: order.supplier ? {
@@ -20,7 +22,7 @@ const serialize = order => ({
     businessName: order.supplier.businessName,
     warehouseAddress: order.supplier.warehouseAddress || null,
     deliveryRadiusKm: order.supplier.deliveryRadiusKm ? Number(order.supplier.deliveryRadiusKm) : 10,
-    phone: order.supplier.user?.phone || '0908 123 789',
+    phone: order.supplier.user?.phone || null,
     bankName: order.supplier.bankName || null,
     bankAccountNumber: order.supplier.bankAccountNumber || null,
     bankAccountHolder: order.supplier.bankAccountHolder || null,
@@ -161,9 +163,9 @@ function createOrderRoutes(prisma, requireAuth) {
             depositStatus: numDeposit > 0 ? (useWalletEscrow ? 'PAID' : 'PENDING') : 'NONE',
             depositReference: useWalletEscrow ? 'VI_HE_THONG' : null,
             depositPaidAt: useWalletEscrow ? new Date() : null,
-            depositBankName: numDeposit > 0 ? (supplier.bankName || 'Sacombank') : null,
-            depositBankAccountNumber: numDeposit > 0 ? (supplier.bankAccountNumber || '050138052378') : null,
-            depositBankAccountHolder: numDeposit > 0 ? (supplier.bankAccountHolder || 'LE TRAN MINH DUC') : null,
+            depositBankName: numDeposit > 0 ? supplier.bankName || null : null,
+            depositBankAccountNumber: numDeposit > 0 ? supplier.bankAccountNumber || null : null,
+            depositBankAccountHolder: numDeposit > 0 ? supplier.bankAccountHolder || null : null,
             items: { create: snapshots },
           },
           include,
@@ -223,6 +225,7 @@ function createOrderRoutes(prisma, requireAuth) {
     } catch (error) { next(error); }
   });
   router.post('/:id/deposit/sandbox', requireRole('STORE_OWNER'), async (req, res, next) => {
+    if (process.env.NODE_ENV === 'production' && !req.auth.user.username.startsWith('demo_')) return res.status(403).json({ message: 'Thử nghiệm chỉ dành cho tài khoản demo.' });
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id < 1 || id > 2147483647) return res.status(400).json({ message: 'Mã đơn hàng không hợp lệ.' });
     try {
@@ -233,66 +236,40 @@ function createOrderRoutes(prisma, requireAuth) {
   });
   router.post('/:id/reschedule', requireRole('STORE_OWNER'), async (req, res, next) => {
     const id = Number(req.params.id);
-    if (!Number.isInteger(id) || id < 1 || id > 2147483647) return res.status(400).json({ message: 'Mã đơn hàng không hợp lệ.' });
-    const { rescheduleTime, reason } = req.body || {};
-    if (!rescheduleTime || typeof rescheduleTime !== 'string') {
-      return res.status(400).json({ message: 'Vui lòng chọn thời gian hẹn dời giao hàng.' });
-    }
+    if (!Number.isInteger(id) || id < 1 || id > 2147483647) return res.status(400).json({ message: 'Mã đơn không hợp lệ.' });
     try {
-      const buyerId = req.auth.user.id;
-      const current = await prisma.wholesaleOrder.findFirst({ where: { id, buyerId }, include });
+      const { rescheduleTime, reason = '' } = req.body || {};
+      validateDeliveryTime(rescheduleTime);
+      if (typeof reason !== 'string' || reason.trim().length > 250) throw problem(400, 'Lý do tối đa 250 ký tự.');
+      const current = await prisma.wholesaleOrder.findFirst({ where: { id, buyerId: req.auth.user.id }, include });
       if (!current) throw problem(404, 'Không tìm thấy đơn hàng.');
-      if (!['PREPARING', 'SHIPPING', 'ISSUE_HANDLING'].includes(current.status)) {
-        throw problem(400, 'Chỉ có thể hẹn dời lịch khi đơn hàng đang chuẩn bị, trên đường vận chuyển hoặc tiếp nhận xử lý.');
-      }
-      const count = (current.note?.match(/\[YÊU CẦU DỜI LỊCH GIAO/g) || []).length;
-      if (count >= 2) {
-        throw problem(400, 'Đơn hàng đã được hẹn dời 2 lần (mức tối đa). Vui lòng liên hệ trực tiếp với chủ vựa để thỏa thuận giao nhận.');
-      }
-      const tag = `[YÊU CẦU DỜI LỊCH GIAO #${count + 1}]: Hẹn lúc ${rescheduleTime.trim()}${reason && reason.trim() ? ` (Lý do: ${reason.trim()})` : ''} - [CHỜ_VỰA_XÁC_NHẬN]`;
-      const updatedNote = current.note ? `${current.note} | ${tag}` : tag;
-      const updated = await prisma.wholesaleOrder.update({
-        where: { id },
-        data: { note: updatedNote },
-        include,
-      });
-      res.json({ order: serialize(updated) });
+      if (!['PREPARING', 'SHIPPING'].includes(current.status)) throw problem(409, 'Chỉ đổi giờ trước khi nhận hàng.');
+      if (pendingRequest(current, deliveryService.getDriverInfo(id))) throw problem(409, 'Đã có đề nghị đổi giờ đang chờ chủ vựa trả lời.');
+      deliveryService.saveRescheduleRequest(id, { requestedTime: rescheduleTime, reason: reason.trim(), requestedAt: new Date().toISOString(), requestedBy: req.auth.user.id, status: 'PENDING' });
+      await audit(prisma, req.auth.user.id, 'DELIVERY_TIME_REQUESTED', 'ORDER', id, { rescheduleTime });
+      res.json({ order: serialize(current), message: 'Đã gửi giờ muốn nhận. Chờ chủ vựa xác nhận.' });
     } catch (error) { next(error); }
   });
 
   router.post('/:id/reschedule-response', requireRole('SUPPLIER'), async (req, res, next) => {
     const id = Number(req.params.id);
-    if (!Number.isInteger(id) || id < 1 || id > 2147483647) return res.status(400).json({ message: 'Mã đơn hàng không hợp lệ.' });
-    const { action, note } = req.body || {};
-    if (!['ACCEPT', 'REJECT'].includes(action)) {
-      return res.status(400).json({ message: 'Hành động không hợp lệ (ACCEPT hoặc REJECT).' });
-    }
+    const { action, note = '' } = req.body || {};
+    if (!Number.isInteger(id) || id < 1 || id > 2147483647 || !['ACCEPT', 'REJECT'].includes(action) || typeof note !== 'string' || note.trim().length > 250) return res.status(400).json({ message: 'Kiểm tra đơn, lựa chọn và lời nhắn tối đa 250 ký tự.' });
     try {
       const profile = await prisma.supplierProfile.findUnique({ where: { userId: req.auth.user.id } });
       if (!profile) throw problem(404, 'Không tìm thấy hồ sơ chủ vựa.');
       const current = await prisma.wholesaleOrder.findFirst({ where: { id, supplierId: profile.id }, include });
       if (!current) throw problem(404, 'Không tìm thấy đơn hàng.');
-
-      let updatedTag = '';
+      if (!['PREPARING', 'SHIPPING'].includes(current.status)) throw problem(409, 'Đơn đã nhận hoặc kết thúc, không thể đổi giờ.');
+      const request = pendingRequest(current, deliveryService.getDriverInfo(id));
+      if (!request) throw problem(409, 'Không có đề nghị đổi giờ đang chờ trả lời.');
       if (action === 'ACCEPT') {
-        const match = current.note ? current.note.match(/Hẹn lúc\s+([^()\[\]|]+?)(?:\s*\(|\s*-|\s*\||$)/) : null;
-        const newTime = match && match[1] ? match[1].trim() : null;
-        if (newTime) {
-          deliveryService.updateEstimatedDeliveryTime(id, newTime);
-        }
-        updatedTag = `[VỰA ĐÃ ĐỒNG Ý DỜI LỊCH GIAO]${newTime ? ` (Hẹn mới: ${newTime})` : ''}${note && note.trim() ? `: ${note.trim()}` : ''}`;
-      } else {
-        const rejectReason = note && note.trim().length >= 3 ? note.trim() : 'Vựa không thể dời giờ do xe đã kín tuyến hoặc hàng cần bảo quản';
-        updatedTag = `[VỰA TỪ CHỐI DỜI LỊCH GIAO]: ${rejectReason}. Vui lòng sắp xếp người nhận hoặc liên hệ vựa.`;
+        validateDeliveryTime(request.requestedTime);
+        deliveryService.updateEstimatedDeliveryTime(id, request.requestedTime);
       }
-
-      const updatedNote = current.note ? `${current.note} | ${updatedTag}` : updatedTag;
-      const updated = await prisma.wholesaleOrder.update({
-        where: { id },
-        data: { note: updatedNote },
-        include,
-      });
-      res.json({ order: serialize(updated), message: action === 'ACCEPT' ? 'Đã chấp nhận dời lịch giao hàng.' : 'Đã phản hồi không thể dời lịch.' });
+      deliveryService.saveRescheduleRequest(id, { ...request, status: action === 'ACCEPT' ? 'ACCEPTED' : 'REJECTED', responseNote: note.trim(), respondedAt: new Date().toISOString(), respondedBy: req.auth.user.id });
+      await audit(prisma, req.auth.user.id, 'DELIVERY_TIME_RESPONDED', 'ORDER', id, { action, requestedTime: request.requestedTime });
+      res.json({ order: serialize(current), message: action === 'ACCEPT' ? 'Đã xác nhận giờ giao.' : 'Đã từ chối đổi giờ. Giữ lịch giao cũ.' });
     } catch (error) { next(error); }
   });
 
@@ -349,9 +326,21 @@ function createOrderRoutes(prisma, requireAuth) {
       const current = await prisma.wholesaleOrder.findFirst({ where: { id, buyerId }, include });
       if (!current) throw problem(404, 'Không tìm thấy đơn hàng.');
 
+      if (fullyPaidByWallet(current)) throw problem(409, 'Đơn đã trả đủ bằng ví, không cần trả thêm.');
+      if (current.complaint && ['OPEN', 'IN_REVIEW'].includes(current.complaint.status)) throw problem(409, 'Cần xử lý xong sự cố trước khi trả tiền.');
+      const driverInfo = deliveryService.getDriverInfo(id);
+      const previous = driverInfo?.paymentInfo;
+      if (['PENDING_SUPPLIER_CONFIRM', 'CONFIRMED'].includes(previous?.status)) {
+        if (previous.method !== method) throw problem(409, 'Đơn đã báo trả tiền bằng phương thức khác.');
+        return res.json({ success: true, paymentInfo: previous, message: previous.status === 'CONFIRMED' ? 'Chủ vựa đã nhận tiền.' : 'Đã báo trả tiền. Chờ chủ vựa xác nhận.' });
+      }
+      if (!['ISSUE_HANDLING', 'DELIVERED'].includes(current.status)) throw problem(409, 'Chỉ báo trả tiền sau khi đã nhận hàng.');
+      if (method === 'QR' && (!current.supplier.bankName || !current.supplier.bankAccountHolder || !/^\d{6,30}$/.test(current.supplier.bankAccountNumber || ''))) throw problem(409, 'Chủ vựa chưa có tài khoản nhận tiền hợp lệ.');
+      const due = paymentDue(current, driverInfo);
+      if (amount !== undefined && (typeof amount !== 'number' || !Number.isFinite(amount) || Math.abs(amount - due) > 0.01)) throw problem(400, 'Số tiền đã thay đổi. Hãy tải lại đơn.');
       const paymentInfo = deliveryService.savePaymentInfo(id, {
         method,
-        amount: Number(amount) || Number(current.total) - Number(current.depositAmount),
+        amount: due,
         status: 'PENDING_SUPPLIER_CONFIRM',
         storePaidAt: new Date().toISOString(),
       });
@@ -371,6 +360,7 @@ function createOrderRoutes(prisma, requireAuth) {
       const driverInfo = deliveryService.getDriverInfo(id);
       if (current.status === 'COMPLETED') return res.json({ success: true, order: serialize(current), message: 'Đơn hàng đã hoàn tất.' });
       if (current.status !== 'DELIVERED') throw problem(409, 'Cần nhận hàng và đối soát thanh toán trước khi hoàn tất.');
+      if (current.complaint && ['OPEN', 'IN_REVIEW'].includes(current.complaint.status)) throw problem(409, 'Cần xử lý xong sự cố trước khi hoàn tất đơn.');
       const paidWallet = current.orderPayment && !current.orderPayment.refund && ['PAID', 'SETTLED'].includes(current.orderPayment.status) && Number(current.orderPayment.amount) >= Number(current.total);
       if (driverInfo?.paymentInfo?.status !== 'CONFIRMED' && !paidWallet) {
         throw problem(400, 'Chủ vựa chưa xác nhận đã nhận thanh toán. Vui lòng đợi Chủ vựa xác nhận trước khi hoàn tất.');
@@ -418,7 +408,15 @@ function createOrderRoutes(prisma, requireAuth) {
         return { ...receipt, order: saved };
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: 10000, timeout: 30000 });
       for (const update of result.supplierUpdates || []) {
-        try { require('../services/inventorySupplierService').setSupplier(update.itemId, update.supplierName); }
+        try {
+          require('../services/inventorySupplierService').setSupplier(update.itemId, update.supplierName);
+          const quote = result.order.sourceQuote;
+          const consignment = quote && require('../services/consignmentService').getQuoteConsignment(quote.id);
+          if (consignment?.isConsignment) require('../services/consignmentService').setItemConsignment(update.itemId, {
+            ...consignment, supplierId: result.order.supplierId, supplierName: update.supplierName,
+            supplierPhone: result.order.supplier.user?.phone || null,
+          });
+        }
         catch (error) { console.warn('Không lưu được tên NCC sau nhập kho:', error.message); }
       }
       const { supplierUpdates, ...receipt } = result;

@@ -3,15 +3,15 @@ const { moderateContent } = require('./contentModerationService');
 const deliveryService = require('./deliveryService');
 const { settleOrderToSupplier, refundPaidOrder, walletService } = require('./walletService');
 const { importBlockReason } = require('./inventorySyncService');
+const { paymentDue } = require('./orderPaymentPolicy');
 const ORDER_STATUSES = Object.freeze([
   'PENDING', 'APPROVED', 'REJECTED', 'PREPARING', 'SHIPPING', 'ISSUE_HANDLING', 'DELIVERED', 'COMPLETED',
 ]);
 
 const STATUS_LABELS = Object.freeze({
-  COMPLETED: 'Hoàn tất',
   PENDING: 'Chờ duyệt', APPROVED: 'Đã duyệt', REJECTED: 'Đã từ chối',
   PREPARING: 'Đang soạn đơn', SHIPPING: 'Đang vận chuyển',
-  ISSUE_HANDLING: 'Tiếp nhận xử lý', DELIVERED: 'Đã giao', COMPLETED: 'Hoàn tất',
+  ISSUE_HANDLING: 'Đang kiểm hàng', DELIVERED: 'Đã giao', COMPLETED: 'Hoàn tất',
 });
 
 const TRANSITIONS = Object.freeze({
@@ -751,6 +751,11 @@ function createSupplierService(prisma) {
     });
     if (!order) throw problem(404, 'Không tìm thấy đơn hàng.');
 
+    const driverInfo = deliveryService.getDriverInfo(order.id);
+    const previous = driverInfo?.paymentInfo;
+    if (previous?.status === 'CONFIRMED') return { success: true, paymentInfo: previous, message: 'Đã xác nhận nhận tiền.' };
+    if (!['ISSUE_HANDLING', 'DELIVERED'].includes(order.status) || previous?.status !== 'PENDING_SUPPLIER_CONFIRM') throw problem(409, 'Cửa hàng chưa báo trả tiền cho đơn đã nhận.');
+    if (!Number.isFinite(Number(previous.amount)) || Math.abs(Number(previous.amount) - paymentDue(order, driverInfo)) > 0.01) throw problem(409, 'Số tiền cần đối chiếu lại trước khi xác nhận.');
     const paymentInfo = deliveryService.savePaymentInfo(order.id, {
       status: 'CONFIRMED',
       supplierConfirmedAt: new Date().toISOString(),

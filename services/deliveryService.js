@@ -285,9 +285,9 @@ function updateEstimatedDeliveryTime(orderId, newTime) {
   const key = String(orderId);
   const existing = store[key] || {
     orderId: Number(orderId),
-    driverName: 'Chủ vựa tự giao / Xe vựa',
-    driverPhone: '0908123789',
-    vehicleType: 'Xe ba gác chở hàng',
+    driverName: '',
+    driverPhone: '',
+    vehicleType: '',
     createdAt: new Date().toISOString(),
   };
   existing.estimatedDeliveryTime = String(newTime).trim();
@@ -295,6 +295,16 @@ function updateEstimatedDeliveryTime(orderId, newTime) {
   store[key] = existing;
   persistDeliveries();
   return existing;
+}
+
+function saveRescheduleRequest(orderId, request) {
+  const store = loadDeliveries();
+  const record = store[String(orderId)] || { orderId: Number(orderId) };
+  record.rescheduleRequest = request;
+  record.updatedAt = new Date().toISOString();
+  store[String(orderId)] = record;
+  persistDeliveries();
+  return request;
 }
 
 module.exports = {
@@ -309,4 +319,5 @@ module.exports = {
   savePackingChecklist,
   saveIncidentReport,
   savePaymentInfo,
+  saveRescheduleRequest,
 };

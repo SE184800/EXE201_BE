@@ -34,6 +34,7 @@ after(async () => {
   await prisma.inventoryItem.deleteMany({ where: { ownerId: { in: ids } } });
   await prisma.orderComplaint.deleteMany({ where: { orderId: { in: orderIds } } });
   await prisma.orderPayment.deleteMany({ where: { orderId: { in: orderIds } } });
+  if (supplierProfile) await prisma.supplierQuote.deleteMany({ where: { supplierId: supplierProfile.id } });
   await prisma.wholesaleOrder.deleteMany({ where: { id: { in: orderIds } } });
   await prisma.user.deleteMany({ where: { id: { in: ids } } });
   await prisma.$disconnect();
@@ -51,7 +52,7 @@ async function order(label, options = {}) {
 }
 const importOrder = (id, user = buyer) => request(app).post(`/api/orders/${id}/import-inventory`).set(csrf).set('Cookie', cookies.get(user.id)).send({});
 
-test('only the owning store can import a completed, fully paid order', async () => {
+test('only the owning store can import an order after receipt', async () => {
   const ready = await order('authorization');
   await request(app).post(`/api/orders/${ready.id}/import-inventory`).set(csrf).send({}).expect(401);
   await importOrder(ready.id, other).expect(404);
@@ -59,9 +60,19 @@ test('only the owning store can import a completed, fully paid order', async () 
   await importOrder(ready.id, users[3]).expect(403);
   const pending = await order('pending', { status: 'PENDING' });
   await importOrder(pending.id).expect(409);
-  const unpaid = await order('unpaid', { unpaid: true });
+  const unpaid = await order('unpaid', { unpaid: true, status: 'SHIPPING' });
   await importOrder(unpaid.id).expect(409);
   assert.equal(await prisma.inventoryItem.count({ where: { ownerId: buyer.id } }), 0);
+});
+
+test('received goods can enter inventory before payment without marking the order paid or complete', async () => {
+  const purchase = await order('received unpaid', { unpaid: true, status: 'ISSUE_HANDLING' });
+  await importOrder(purchase.id).expect(200);
+  const saved = await prisma.wholesaleOrder.findUniqueOrThrow({ where: { id: purchase.id }, include: { orderPayment: true } });
+  assert.equal(saved.status, 'ISSUE_HANDLING');
+  assert.equal(saved.orderPayment, null);
+  assert.ok(saved.inventoryImportedAt);
+  await importOrder(purchase.id).expect(200);
 });
 
 test('a new product is created, expanded to retail units, and given its own source lot', async () => {
@@ -157,4 +168,104 @@ test('completed orders can be filtered and delivery never silently adds inventor
   assert.equal(await prisma.inventoryItem.count({ where: { ownerId: buyer.id, name: `${prefix} manual only` } }), 0);
   const result = await request(app).get('/api/orders?status=COMPLETED').set('Cookie', cookies.get(buyer.id)).expect(200);
   assert.ok(result.body.orders.every(order => order.status === 'COMPLETED'));
+});
+
+const cashPayment = (id, body = { method: 'COD' }) => request(app).post(`/api/orders/${id}/pay`).set(csrf).set('Cookie', cookies.get(buyer.id)).send(body);
+const confirmCash = id => request(app).post(`/api/supplier/orders/${id}/confirm-payment`).set(csrf).set('Cookie', cookies.get(supplier.id)).send({});
+
+test('cash reporting requires received goods, derives the amount on the server, and preserves confirmation on replay', async () => {
+  const purchase = await order('cash review', { unpaid: true, status: 'PENDING' });
+  await cashPayment(purchase.id).expect(409);
+  await confirmCash(purchase.id).expect(409);
+  await prisma.wholesaleOrder.update({ where: { id: purchase.id }, data: { status: 'ISSUE_HANDLING', depositAmount: 20000, depositStatus: 'PENDING' } });
+  await cashPayment(purchase.id, { method: 'COD', amount: 1 }).expect(400);
+  const submitted = await cashPayment(purchase.id).expect(200);
+  assert.equal(submitted.body.paymentInfo.amount, 96000, 'an unpaid deposit must not reduce the amount due');
+  await cashPayment(purchase.id).expect(200);
+  await confirmCash(purchase.id).expect(200);
+  const replay = await cashPayment(purchase.id).expect(200);
+  assert.equal(replay.body.paymentInfo.status, 'CONFIRMED');
+  assert.equal((await prisma.wholesaleOrder.findUniqueOrThrow({ where: { id: purchase.id } })).status, 'DELIVERED');
+  await request(app).post(`/api/orders/${purchase.id}/complete`).set(csrf).set('Cookie', cookies.get(buyer.id)).send({}).expect(200);
+});
+
+test('a paid deposit is subtracted, wallet payments cannot be collected again, and missing bank details block QR', async () => {
+  const cash = await order('paid deposit', { unpaid: true, status: 'ISSUE_HANDLING' });
+  await prisma.wholesaleOrder.update({ where: { id: cash.id }, data: { depositAmount: 20000, depositStatus: 'PAID' } });
+  const result = await cashPayment(cash.id).expect(200);
+  assert.equal(result.body.paymentInfo.amount, 76000);
+  const wallet = await order('wallet paid');
+  await cashPayment(wallet.id).expect(409);
+  const missingBank = await order('missing bank', { unpaid: true, status: 'ISSUE_HANDLING' });
+  await cashPayment(missingBank.id, { method: 'QR' }).expect(409);
+});
+
+test('store proposes a delivery time; only the supplier confirms it; a later proposal remains pending', async () => {
+  const purchase = await order('reschedule', { unpaid: true, status: 'PREPARING' });
+  const date = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10).split('-').reverse().join('/');
+  const propose = time => request(app).post(`/api/orders/${purchase.id}/reschedule`).set(csrf).set('Cookie', cookies.get(buyer.id)).send({ rescheduleTime: `${time} ngày ${date}`, reason: 'Store closed in the morning' });
+  const respond = (action, user = supplier) => request(app).post(`/api/orders/${purchase.id}/reschedule-response`).set(csrf).set('Cookie', cookies.get(user.id)).send({ action });
+  await propose('10:00').expect(200);
+  assert.equal(delivery.getDriverInfo(purchase.id).estimatedDeliveryTime, undefined);
+  await propose('11:00').expect(409);
+  await respond('ACCEPT', buyer).expect(403);
+  await respond('ACCEPT').expect(200);
+  assert.equal(delivery.getDriverInfo(purchase.id).estimatedDeliveryTime, `10:00 ngày ${date}`);
+  await propose('12:00').expect(200);
+  assert.equal(delivery.getDriverInfo(purchase.id).rescheduleRequest.status, 'PENDING');
+  await respond('REJECT').expect(200);
+  assert.equal(delivery.getDriverInfo(purchase.id).estimatedDeliveryTime, `10:00 ngày ${date}`);
+  await prisma.wholesaleOrder.update({ where: { id: purchase.id }, data: { status: 'DELIVERED' } });
+  await propose('13:00').expect(409);
+});
+
+test('unresolved complaints prevent payment reporting and completing an order', async () => {
+  const purchase = await order('complaint guard', { status: 'DELIVERED' });
+  await prisma.orderComplaint.create({ data: { orderId: purchase.id, buyerId: buyer.id, supplierId: supplierProfile.id, reason: 'DAMAGED', description: 'Test damaged goods', status: 'OPEN' } });
+  await request(app).post(`/api/orders/${purchase.id}/complete`).set(csrf).set('Cookie', cookies.get(buyer.id)).send({}).expect(409);
+});
+
+test('marketing quote discount is persisted and accepting a quote preserves the net price without importing stock', async () => {
+  const body = { buyerId: buyer.id, title: prefix + ' discount quote', validUntil: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10), deliveryFee: 0, depositRate: 0, note: '', lines: [{ productId: product.id, quantity: 2, unitPrice: 48000, discountRate: 10, expectedUpdatedAt: product.updatedAt.toISOString() }] };
+  const create = await request(app).post('/api/supplier/quotes').set(csrf).set('Cookie', cookies.get(supplier.id)).send(body).expect(201);
+  const quote = create.body.quote;
+  assert.equal(quote.lines[0].originalUnitPrice, 48000);
+  assert.equal(quote.lines[0].discountRate, 10);
+  assert.equal(quote.lines[0].unitPrice, 43200);
+  assert.equal(quote.total, 86400);
+  const before = await prisma.inventoryItem.count({ where: { ownerId: buyer.id } });
+  const accept = await request(app).post(`/api/quotes/${quote.id}/accept`).set(csrf).set('Cookie', cookies.get(buyer.id)).send({ requestId: randomUUID(), recipientName: buyer.name, recipientPhone: '0908123456', deliveryAddress: '45 Nguyen Trai, Ho Chi Minh City', note: '' }).expect(201);
+  orderIds.push(accept.body.order.id);
+  assert.equal(accept.body.order.items[0].unitPrice, 43200);
+  assert.equal(accept.body.order.total, 86400);
+  assert.equal(await prisma.inventoryItem.count({ where: { ownerId: buyer.id } }), before);
+  await request(app).post('/api/supplier/quotes').set(csrf).set('Cookie', cookies.get(supplier.id)).send({ ...body, lines: [{ ...body.lines[0], discountRate: 101 }] }).expect(400);
+});
+
+test('consignment acceptance waits for physical receipt and then imports once with its consignment label', async () => {
+  const fresh = await prisma.supplierProduct.findUniqueOrThrow({ where: { id: product.id } });
+  const before = await prisma.inventoryItem.count({ where: { ownerId: buyer.id } });
+  const created = await request(app).post('/api/supplier/quotes').set(csrf).set('Cookie', cookies.get(supplier.id)).send({ buyerId: buyer.id, title: prefix + ' consignment', validUntil: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10), deliveryFee: 0, depositRate: 0, note: '', isConsignment: true, settlementPrice: 20000, lines: [{ productId: product.id, quantity: 1, unitPrice: 0, expectedUpdatedAt: fresh.updatedAt.toISOString() }] }).expect(201);
+  const accepted = await request(app).post(`/api/quotes/${created.body.quote.id}/accept`).set(csrf).set('Cookie', cookies.get(buyer.id)).send({ requestId: randomUUID(), recipientName: buyer.name, recipientPhone: '0908123456', deliveryAddress: '45 Nguyen Trai, Ho Chi Minh City', note: '' }).expect(201);
+  const id = accepted.body.order.id;
+  orderIds.push(id);
+  assert.equal(await prisma.inventoryItem.count({ where: { ownerId: buyer.id } }), before);
+  await importOrder(id).expect(409);
+  await prisma.wholesaleOrder.update({ where: { id }, data: { status: 'ISSUE_HANDLING' } });
+  await importOrder(id).expect(200);
+  const result = await request(app).get('/api/inventory').set('Cookie', cookies.get(buyer.id)).expect(200);
+  assert.equal(result.body.items.find(item => item.name === product.name).isConsignment, true);
+  const again = await importOrder(id).expect(200);
+  assert.equal(again.body.alreadyImported, true);
+});
+
+test('production blocks simulated deposits for ordinary accounts', async () => {
+  const old = process.env.NODE_ENV;
+  try {
+    process.env.NODE_ENV = 'production';
+    await request(app).post('/api/orders/1/deposit/sandbox').set(csrf).set('Cookie', cookies.get(buyer.id)).send({}).expect(403);
+  } finally {
+    if (old === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = old;
+  }
 });
