@@ -63,6 +63,7 @@ function publicUser(user) {
     id: user.id,
     username: user.username,
     name: user.name,
+    email: user.email,
     role: user.role.code,
   };
 }
@@ -259,6 +260,6 @@ async function login(username, password) {
   async function logout(sessionId) {
     await prisma.authSession.deleteMany({ where: { id: sessionId } });
   }
-  return { login, register, authenticate, logout, verifyRenewalToken };
+  return { login, register, authenticate, logout, verifyRenewalToken, findRegistrationConflict };
 }
 module.exports = { createAuthService, COOKIE_NAME, cookieOptions, publicUser };

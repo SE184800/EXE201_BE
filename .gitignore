@@ -7,3 +7,8 @@ node_modules
 .env*.local
 dev-out.log
 dev-err.log
+
+# Local tooling and runtime files
+.local-tools/
+*.log
+data/

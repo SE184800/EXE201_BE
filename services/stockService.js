@@ -1,64 +1,151 @@
 const { randomUUID } = require('node:crypto');
 const { expiryInfo } = require('./inventoryExpiry');
 const { audit } = require('./platformPolicy');
+const inventorySupplierService = require('./inventorySupplierService');
+const consignmentService = require('./consignmentService');
 function problem(status, message) { return Object.assign(new Error(message), { status }); }
 async function record(tx, item, before, type, note, id = randomUUID(), unitSalePrice = null, occurredAt = null) {
   return tx.stockMovement.create({ data: { id, itemId: item.id, type, quantityChange: item.quantity - before, quantityBefore: before, quantityAfter: item.quantity, productName: item.name, unit: item.unit, note, unitSalePrice, ...(occurredAt ? { createdAt: occurredAt } : {}) } });
 }
 function createStockService(prisma) {
   async function create(ownerId, data) {
+    const {
+      supplierName,
+      isConsignment,
+      settlementPrice,
+      autoRestock,
+      autoExchangeExpiry,
+      termsNote,
+      ...itemData
+    } = data;
     return prisma.$transaction(async (tx) => {
-      const existing = await tx.inventoryItem.findFirst({ where: { ownerId, name: data.name } });
+      const existing = await tx.inventoryItem.findFirst({ where: { ownerId, name: itemData.name } });
       if (existing) {
-        if (existing.unit.trim().toLocaleLowerCase('vi') !== data.unit.trim().toLocaleLowerCase('vi')) {
+        if (existing.unit.trim().toLocaleLowerCase('vi') !== itemData.unit.trim().toLocaleLowerCase('vi')) {
           throw problem(409, `“${existing.name}” đang dùng đơn vị ${existing.unit}. Hãy giữ đúng đơn vị khi tạo lô mới.`);
         }
-        const quantity = existing.quantity + data.quantity;
+        const quantity = existing.quantity + itemData.quantity;
         if (quantity > 2147483647) throw problem(400, 'Số lượng sau khi nhập vượt giới hạn lưu trữ.');
-        const nearestExpiry = data.expiryDate && (!existing.expiryDate || data.expiryDate < existing.expiryDate)
-          ? data.expiryDate
+        const nearestExpiry = itemData.expiryDate && (!existing.expiryDate || itemData.expiryDate < existing.expiryDate)
+          ? itemData.expiryDate
           : existing.expiryDate;
         const changed = await tx.inventoryItem.updateMany({
           where: { id: existing.id, ownerId, quantity: existing.quantity, updatedAt: existing.updatedAt },
           data: {
             quantity,
             unit: existing.unit,
-            purchasePrice: data.purchasePrice,
-            sellingPrice: data.sellingPrice,
+            purchasePrice: itemData.purchasePrice,
+            sellingPrice: itemData.sellingPrice,
             expiryDate: nearestExpiry,
           },
         });
         if (!changed.count) throw problem(409, 'Kho vừa thay đổi. Tải lại rồi tạo lô mới.');
         const item = await tx.inventoryItem.findUniqueOrThrow({ where: { id: existing.id } });
-        if (data.quantity > 0 && tx.inventoryLot) await tx.inventoryLot.create({
+        if (itemData.quantity > 0 && tx.inventoryLot) await tx.inventoryLot.create({
           data: {
             itemId: item.id,
-            quantity: data.quantity,
+            quantity: itemData.quantity,
             receivedAt: new Date(),
-            expiryDate: data.expiryDate || null,
-            purchasePrice: data.purchasePrice,
+            expiryDate: itemData.expiryDate || null,
+            purchasePrice: itemData.purchasePrice,
           },
         });
-        await record(tx, item, existing.quantity, 'RECEIPT', 'Nhập thêm từ form Thêm sản phẩm');
-        await audit(tx, ownerId, 'INVENTORY_RECEIVED', 'INVENTORY', item.id, { quantity: data.quantity, total: quantity });
-        return item;
+        if (supplierName !== undefined && supplierName !== null) {
+          inventorySupplierService.setSupplier(item.id, supplierName);
+        }
+        if (isConsignment !== undefined) {
+          if (isConsignment) {
+            consignmentService.setItemConsignment(item.id, {
+              isConsignment: true,
+              settlementPrice,
+              autoRestock,
+              autoExchangeExpiry,
+              termsNote,
+              supplierName: supplierName || inventorySupplierService.getSupplier(item.id),
+            });
+          } else {
+            consignmentService.deleteItemConsignment(item.id);
+          }
+        }
+        const consignment = consignmentService.getItemConsignment(item.id);
+        await record(tx, item, existing.quantity, 'RECEIPT', `Nhập thêm từ form Thêm sản phẩm${consignment?.isConsignment ? ' [Ký gửi tiếp thị 0đ]' : ''}${supplierName ? ` [NCC: ${supplierName}]` : ''}`);
+        await audit(tx, ownerId, 'INVENTORY_RECEIVED', 'INVENTORY', item.id, { quantity: itemData.quantity, total: quantity, supplierName, isConsignment });
+        return {
+          ...item,
+          supplierName: inventorySupplierService.getSupplier(item.id),
+          isConsignment: Boolean(consignment?.isConsignment),
+          settlementPrice: consignment?.settlementPrice || 0,
+          autoRestock: consignment?.autoRestock !== false,
+          autoExchangeExpiry: consignment?.autoExchangeExpiry !== false,
+        };
       }
-      const item = await tx.inventoryItem.create({ data: { ...data, ownerId } });
+      const item = await tx.inventoryItem.create({ data: { ...itemData, ownerId } });
       if (item.quantity > 0 && tx.inventoryLot) await tx.inventoryLot.create({ data: { itemId: item.id, quantity: item.quantity, expiryDate: item.expiryDate, purchasePrice: item.purchasePrice } });
-      await record(tx, item, 0, 'OPENING', 'Tồn ban đầu khi tạo sản phẩm');
-      await audit(tx, ownerId, 'INVENTORY_CREATED', 'INVENTORY', item.id, { name: item.name, quantity: item.quantity, purchasePrice: item.purchasePrice, sellingPrice: item.sellingPrice });
-      return item;
+      if (supplierName !== undefined && supplierName !== null) {
+        inventorySupplierService.setSupplier(item.id, supplierName);
+      }
+      if (isConsignment !== undefined) {
+        if (isConsignment) {
+          consignmentService.setItemConsignment(item.id, {
+            isConsignment: true,
+            settlementPrice,
+            autoRestock,
+            autoExchangeExpiry,
+            termsNote,
+            supplierName,
+          });
+        } else {
+          consignmentService.deleteItemConsignment(item.id);
+        }
+      }
+      const consignment = consignmentService.getItemConsignment(item.id);
+      await record(tx, item, 0, 'OPENING', `Tồn ban đầu khi tạo sản phẩm${consignment?.isConsignment ? ' [Ký gửi tiếp thị 0đ]' : ''}${supplierName ? ` [NCC: ${supplierName}]` : ''}`);
+      await audit(tx, ownerId, 'INVENTORY_CREATED', 'INVENTORY', item.id, { name: item.name, quantity: item.quantity, purchasePrice: item.purchasePrice, sellingPrice: item.sellingPrice, supplierName, isConsignment });
+      return {
+        ...item,
+        supplierName: inventorySupplierService.getSupplier(item.id),
+        isConsignment: Boolean(consignment?.isConsignment),
+        settlementPrice: consignment?.settlementPrice || 0,
+        autoRestock: consignment?.autoRestock !== false,
+        autoExchangeExpiry: consignment?.autoExchangeExpiry !== false,
+      };
     }, { isolationLevel: 'Serializable' });
   }
   async function edit(ownerId, id, data, expectedUpdatedAt) {
+    const {
+      supplierName,
+      isConsignment,
+      settlementPrice,
+      autoRestock,
+      autoExchangeExpiry,
+      termsNote,
+      ...itemData
+    } = data;
     return prisma.$transaction(async (tx) => {
       const old = await tx.inventoryItem.findFirst({ where: { id, ownerId } });
       if (!old) throw problem(404, 'Không tìm thấy sản phẩm trong kho của bạn.');
       if (expectedUpdatedAt && old.updatedAt.toISOString() !== expectedUpdatedAt) throw problem(409, 'Kho đã thay đổi. Tải lại kho và chọn Sửa lại để tránh ghi đè số lượng mới.');
-      if (old.unit !== data.unit && old.quantity > 0) throw problem(400, 'Chỉ đổi đơn vị khi tồn kho bằng 0 để tránh sai số lượng.');
-      const changed = await tx.inventoryItem.updateMany({ where: { id, ownerId, quantity: old.quantity, updatedAt: old.updatedAt }, data });
+      if (old.unit !== itemData.unit && old.quantity > 0) throw problem(400, 'Chỉ đổi đơn vị khi tồn kho bằng 0 để tránh sai số lượng.');
+      const changed = await tx.inventoryItem.updateMany({ where: { id, ownerId, quantity: old.quantity, updatedAt: old.updatedAt }, data: itemData });
       if (!changed.count) throw problem(409, 'Kho vừa thay đổi. Vui lòng tải lại và thử lại.');
-      if (data.quantity !== old.quantity) await record(tx, { ...old, ...data }, old.quantity, 'ADJUSTMENT', 'Điều chỉnh số tồn thủ công');
+      if (supplierName !== undefined) {
+        inventorySupplierService.setSupplier(id, supplierName);
+      }
+      if (isConsignment !== undefined) {
+        if (isConsignment) {
+          consignmentService.setItemConsignment(id, {
+            isConsignment: true,
+            settlementPrice,
+            autoRestock,
+            autoExchangeExpiry,
+            termsNote,
+            supplierName: supplierName || inventorySupplierService.getSupplier(id),
+          });
+        } else {
+          consignmentService.deleteItemConsignment(id);
+        }
+      }
+      if (itemData.quantity !== old.quantity) await record(tx, { ...old, ...itemData }, old.quantity, 'ADJUSTMENT', 'Điều chỉnh số tồn thủ công');
       await audit(tx, ownerId, 'INVENTORY_UPDATED', 'INVENTORY', id, { before: { quantity: old.quantity, unit: old.unit, purchasePrice: old.purchasePrice, sellingPrice: old.sellingPrice }, after: data });
       return { success: true };
     });
@@ -152,13 +239,17 @@ function createStockService(prisma) {
               purchasePrice: row.purchasePrice ?? existing.purchasePrice,
             },
           });
-          const note = `Nhập kho từ Excel${row.note ? ` · ${row.note}` : ''}`.slice(0, 250);
+          if (row.supplierName) {
+            inventorySupplierService.setSupplier(item.id, row.supplierName);
+          }
+          const note = `Nhập kho từ Excel${row.supplierName ? ` [NCC: ${row.supplierName}]` : ''}${row.note ? ` · ${row.note}` : ''}`.slice(0, 250);
           await record(tx, item, existing.quantity, 'RECEIPT', note, undefined, null, row.receivedAt);
           await audit(tx, ownerId, 'INVENTORY_IMPORTED', 'INVENTORY', item.id, {
             rowNumber: row.rowNumber,
             quantity: row.quantity,
             before: existing.quantity,
             after: quantity,
+            supplierName: row.supplierName || null,
           });
           updatedCount += 1;
         } else {
@@ -173,6 +264,9 @@ function createStockService(prisma) {
               expiryDate: row.expiryDate ?? null,
             },
           });
+          if (row.supplierName) {
+            inventorySupplierService.setSupplier(item.id, row.supplierName);
+          }
           await tx.inventoryLot.create({
             data: {
               itemId: item.id,
@@ -182,12 +276,13 @@ function createStockService(prisma) {
               purchasePrice: row.purchasePrice ?? null,
             },
           });
-          const note = `Tạo sản phẩm từ Excel${row.note ? ` · ${row.note}` : ''}`.slice(0, 250);
+          const note = `Tạo sản phẩm từ Excel${row.supplierName ? ` [NCC: ${row.supplierName}]` : ''}${row.note ? ` · ${row.note}` : ''}`.slice(0, 250);
           await record(tx, item, 0, 'OPENING', note, undefined, null, row.receivedAt);
           await audit(tx, ownerId, 'INVENTORY_IMPORTED', 'INVENTORY', item.id, {
             rowNumber: row.rowNumber,
             quantity: row.quantity,
             created: true,
+            supplierName: row.supplierName || null,
           });
           createdCount += 1;
         }

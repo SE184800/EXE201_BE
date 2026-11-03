@@ -4,7 +4,9 @@ const { Prisma } = require('@prisma/client');
 const { requireRole } = require('../middlewares/authMiddleware');
 const { normalizePhone } = require('../services/registrationValidation');
 const { serializeOrder } = require('../services/supplierService');
+const systemConfigService = require('../services/systemConfigService');
 const { activeAccountWhere, accountAvailable, audit } = require('../services/platformPolicy');
+const consignmentService = require('../services/consignmentService');
 
 const DAY = 86400000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -23,6 +25,7 @@ function quoteStatus(quote) {
 }
 
 function serializeQuote(quote) {
+  const consignment = consignmentService.getQuoteConsignment(quote.id);
   return {
     id: quote.id,
     title: quote.title,
@@ -40,6 +43,11 @@ function serializeQuote(quote) {
     version: quote.version,
     createdAt: quote.createdAt,
     updatedAt: quote.updatedAt,
+    isConsignment: Boolean(consignment?.isConsignment),
+    settlementPrice: consignment?.settlementPrice || 0,
+    autoRestock: consignment?.autoRestock !== false,
+    autoExchangeExpiry: consignment?.autoExchangeExpiry !== false,
+    termsNote: consignment?.termsNote || null,
     supplier: quote.supplier ? {
       id: quote.supplier.id,
       businessName: quote.supplier.businessName,
@@ -61,6 +69,8 @@ function serializeQuote(quote) {
       packaging: line.packaging,
       quantity: line.quantity,
       unitPrice: number(line.unitPrice),
+      originalUnitPrice: number(line.originalUnitPrice ?? line.unitPrice),
+      discountRate: number(line.discountRate),
       lineTotal: number(line.lineTotal),
     })),
   };
@@ -75,6 +85,7 @@ const quoteInclude = {
 function createSupplierQuoteRoutes(prisma, requireAuth) {
   const router = express.Router();
   router.use(requireAuth, requireRole('SUPPLIER'));
+  router.get('/config', (req, res) => res.json(systemConfigService.getConfig().escrowDeposit));
 
   router.get('/prospects', async (req, res, next) => {
     const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
@@ -116,6 +127,12 @@ function createSupplierQuoteRoutes(prisma, requireAuth) {
     const note = typeof body.note === 'string' ? body.note.trim() : '';
     const { buyerId, validUntil, deliveryFee, depositRate, lines } = body;
     const today = vnDate(new Date());
+    const maxAllowedDeposit = systemConfigService.getConfig().escrowDeposit?.maxDepositRate ?? 50;
+    if (typeof depositRate === 'number' && depositRate > maxAllowedDeposit) {
+      return res.status(400).json({ message: `Tỷ lệ ký quỹ (${depositRate}%) vượt quá mức trần tối đa của sàn (${maxAllowedDeposit}%). Vui lòng điều chỉnh lại.` });
+    }
+    const isConsignment = Boolean(body.isConsignment);
+    const minUnitPrice = isConsignment ? 0 : 0.01;
     if (!Number.isInteger(buyerId) || buyerId < 1 || buyerId > 2147483647 || title.length < 2 || title.length > 150 ||
       !dateOnly(validUntil) || validUntil < today || new Date(validUntil) - new Date(today) > 90 * DAY ||
       !hasTwoDecimals(deliveryFee) || deliveryFee < 0 || deliveryFee > 1000000000 ||
@@ -123,7 +140,8 @@ function createSupplierQuoteRoutes(prisma, requireAuth) {
       !Array.isArray(lines) || lines.length < 1 || lines.length > 50 ||
       lines.some(line => !line || !Number.isInteger(line.productId) || line.productId < 1 || line.productId > 2147483647 ||
         !Number.isInteger(line.quantity) || line.quantity < 1 || line.quantity > 2147483647 ||
-        !hasTwoDecimals(line.unitPrice) || line.unitPrice < 0.01 || line.unitPrice > 1000000000 ||
+        !hasTwoDecimals(line.unitPrice) || line.unitPrice < minUnitPrice || line.unitPrice > 1000000000 ||
+        (line.discountRate !== undefined && (!hasTwoDecimals(line.discountRate) || line.discountRate < 0 || line.discountRate > 100)) ||
         typeof line.expectedUpdatedAt !== 'string' || !Number.isFinite(Date.parse(line.expectedUpdatedAt))) ||
       new Set(lines.map(line => line.productId)).size !== lines.length) {
       return res.status(400).json({ message: 'Kiểm tra cửa hàng, hạn báo giá, phí giao, tỷ lệ cọc và 1–50 mặt hàng.' });
@@ -145,8 +163,11 @@ function createSupplierQuoteRoutes(prisma, requireAuth) {
           const product = products.find(item => item.id === line.productId);
           if (product.updatedAt.toISOString() !== new Date(line.expectedUpdatedAt).toISOString()) throw problem(409, `${product.name} vừa thay đổi. Tải lại sản phẩm trước khi báo giá.`);
           if (line.quantity > product.stockQty) throw problem(409, `${product.name} hiện chỉ còn ${product.stockQty} × ${product.packaging}.`);
-          const unitPrice = new Prisma.Decimal(line.unitPrice);
-          return { productId: product.id, productName: product.name, packaging: product.packaging, quantity: line.quantity, unitPrice, lineTotal: unitPrice.mul(line.quantity) };
+          const originalUnitPrice = new Prisma.Decimal(line.unitPrice);
+          const discountRate = line.discountRate ?? 0;
+          const unitPrice = originalUnitPrice.mul(new Prisma.Decimal(100).sub(discountRate)).div(100).toDecimalPlaces(2);
+          if (!isConsignment && unitPrice.lessThanOrEqualTo(0)) throw problem(400, 'Giá sau giảm phải lớn hơn 0.');
+          return { productId: product.id, productName: product.name, packaging: product.packaging, quantity: line.quantity, originalUnitPrice, discountRate, unitPrice, lineTotal: unitPrice.mul(line.quantity) };
         });
         const subtotal = snapshots.reduce((sum, line) => sum.add(line.lineTotal), new Prisma.Decimal(0));
         const total = subtotal.add(deliveryFee);
@@ -160,7 +181,16 @@ function createSupplierQuoteRoutes(prisma, requireAuth) {
           },
           include: quoteInclude,
         });
-        await audit(tx, req.auth.user.id, 'QUOTE_SENT', 'QUOTE', created.id, { buyerId, total: total.toString(), depositRate: String(depositRate), lines: snapshots.length });
+        await audit(tx, req.auth.user.id, 'QUOTE_SENT', 'QUOTE', created.id, { buyerId, total: total.toString(), depositRate: String(depositRate), lines: snapshots.length, isConsignment });
+        if (isConsignment) {
+          consignmentService.setQuoteConsignment(created.id, {
+            isConsignment: true,
+            settlementPrice: typeof body.settlementPrice === 'number' && body.settlementPrice >= 0 ? body.settlementPrice : 0,
+            autoRestock: body.autoRestock !== false,
+            autoExchangeExpiry: body.autoExchangeExpiry !== false,
+            termsNote: typeof body.termsNote === 'string' ? body.termsNote.trim() : 'Cam kết đổi trả 100% khi cận date và giao bù hàng khi hết.',
+          });
+        }
         return created;
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
       res.status(201).json({ quote: serializeQuote(quote) });
@@ -195,6 +225,7 @@ function createSupplierQuoteRoutes(prisma, requireAuth) {
 function createStoreQuoteRoutes(prisma, requireAuth) {
   const router = express.Router();
   router.use(requireAuth, requireRole('STORE_OWNER'));
+  router.get('/config', (req, res) => res.json(systemConfigService.getConfig().escrowDeposit));
 
   router.get('/', async (req, res, next) => {
     const page = req.query.page === undefined ? 1 : Number(req.query.page);
@@ -271,6 +302,8 @@ function createStoreQuoteRoutes(prisma, requireAuth) {
         });
         const changed = await tx.supplierQuote.updateMany({ where: { id: quote.id, status: 'SENT', version: quote.version }, data: { status: 'ACCEPTED', respondedAt: new Date(), orderId: created.id, version: { increment: 1 } } });
         if (!changed.count) throw problem(409, 'Báo giá vừa được xử lý. Tải lại danh sách.');
+
+        // Goods enter inventory only after receipt, through the order import action.
         await audit(tx, req.auth.user.id, 'QUOTE_ACCEPTED', 'QUOTE', quote.id, { orderId: created.id, depositAmount: depositAmount.toString() });
         await audit(tx, req.auth.user.id, 'ORDER_CREATED_FROM_QUOTE', 'ORDER', created.id, { quoteId: quote.id, supplierId: quote.supplierId });
         return created;

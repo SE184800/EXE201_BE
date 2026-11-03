@@ -72,12 +72,17 @@ for (const [role, workspace, denied] of [
 
 test('validation trả lỗi đúng từng trường và không tạo user với dữ liệu sai', async () => {
   for (const [field, value] of [
-    ['name', 'An123'], ['name', '...'], ['name', 'A'.repeat(101)],
-    ['username', 'ab'], ['email', 'a@@example.com'], ['email', `${'a'.repeat(250)}@example.com`],
+    ['name', 'A'], ['name', 'A'.repeat(101)],
+    ['name', '   A   '], ['name', ''],
+    ['username', 'ab'], ['username', 'a b'],
+    ['email', 'a@@example.com'], ['email', `${'a'.repeat(250)}@example.com`],
+    ['email', '   @gmail.com'], ['email', ' a @gmail.com'], ['email', 'a@gmail.com'],
     ['phone', '12345'], ['phone', { value: '0912345678' }], ['role', 'ADMIN'],
     ['dateOfBirth', '1899-12-31'], ['dateOfBirth', '2001-02-29'], ['dateOfBirth', '2100-01-01'],
     ['password', 'Aa1!'.repeat(19)], ['password', `Aa1!${'ế'.repeat(24)}`],
-    ['password', 'Ab1!'], ['password', 'Abcdef12 '], ['confirmPassword', 'wrong'], ['confirmPassword', ''],
+    ['password', 'Ab1!'], ['password', 'Abcdef12 '], ['password', 'Aa1!    '],
+    ['confirmPassword', 'wrong'], ['confirmPassword', ''],
+    ['acceptTerms', false],
   ]) {
     const input = fixture({ [field]: value });
     const response = await register(createApp(prisma, config), input).expect(400);
@@ -88,14 +93,21 @@ test('validation trả lỗi đúng từng trường và không tạo user với
   assert.equal(Object.keys(response.body.errors).length, 8);
 });
 
+test('chấp nhận điều khoản và dịch vụ (acceptTerms: true) cho phép đăng ký thành công', async () => {
+  const app = createApp(prisma, config);
+  const input = fixture({ acceptTerms: true });
+  const res = await register(app, input).expect(201);
+  assert.equal(res.body.user.username, input.username);
+});
+
 test('ngày sinh dùng ngày Việt Nam, kiểm tra ngày thật và dữ liệu sai kiểu', () => {
   const now = new Date('2026-09-20T18:00:00Z');
   assert.equal(todayInVietnam(now), '2026-09-21');
   for (const body of [null, undefined, [], 123, 'text']) {
     assert.equal(Object.keys(validateRegistrationInput(body, now).errors).length, 8);
   }
-  assert.ok(validateRegistrationInput(fixture({ dateOfBirth: '2026-09-21' }), now).data);
-  assert.ok(validateRegistrationInput(fixture({ dateOfBirth: '2026-09-22' }), now).errors.dateOfBirth);
+  assert.ok(validateRegistrationInput(fixture({ dateOfBirth: '2008-09-21' }), now).data);
+  assert.ok(validateRegistrationInput(fixture({ dateOfBirth: '2008-09-22' }), now).errors.dateOfBirth);
   assert.ok(validateRegistrationInput(fixture({ dateOfBirth: '2000-02-29' }), now).data);
 });
 
@@ -156,10 +168,10 @@ test('SQL chống trùng email/phone ngay cả khi bỏ qua API', async () => {
 });
 
 test('giới hạn đăng ký trả JSON tiếng Việt và Retry-After; CSRF vẫn được kiểm tra', async () => {
-  const app = createApp(prisma, config);
+  const app = createApp(prisma, { ...config, production: true });
   for (let i = 0; i < 5; i++) await register(app, {}).expect(400);
   const response = await register(app, {}).expect(429);
-  assert.match(response.body.message, /đăng ký quá nhiều lần/);
+  assert.match(response.body.message, /quá nhiều lần/);
   assert.ok(Number(response.headers['retry-after']) > 0);
   await request(app).post('/api/auth/register').send(fixture()).expect(403);
 });

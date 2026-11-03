@@ -26,6 +26,8 @@ const { createAdminRoutes } = require('./routes/adminRoutes');
 const { createComplaintRoutes } = require('./routes/complaintRoutes');
 const { createSupplierQuoteRoutes, createStoreQuoteRoutes } = require('./routes/quoteRoutes');
 const { createSubscriptionRoutes } = require('./routes/subscriptionRoutes');
+const { createContractRoutes } = require('./routes/contractRoutes');
+const { createTaxRoutes } = require('./routes/taxRoutes');
 const { createWalletRoutes, createAdminWalletRoutes } = require('./routes/walletRoutes');
 const { createSubscriptionGate } = require('./middlewares/subscriptionMiddleware');
 
@@ -95,6 +97,10 @@ function createApp(prisma, config) {
   });
 
   // Health check
+  if (process.env.VERCEL === '1' || process.env.SQL_DOCUMENT_STORAGE === 'true') {
+    app.use('/api', (req, res, next) => req.path === '/health' ? next() : require('./services/documentStorage').documentMiddleware(prisma)(req, res, next));
+  }
+
   app.get('/api/health', (req, res) => {
     res.json({
       status: 'ok',
@@ -176,6 +182,8 @@ function createApp(prisma, config) {
   app.use('/api/quotes', createStoreQuoteRoutes(prisma, requireAuth));
   app.use('/api/supplier/quotes', createSupplierQuoteRoutes(prisma, requireAuth));
   app.use('/api/complaints', createComplaintRoutes(prisma, requireAuth));
+  app.use('/api/contracts', createContractRoutes(prisma, requireAuth));
+  app.use('/api/tax', createTaxRoutes());
 
   app.use(
     '/api/profile',
@@ -229,9 +237,10 @@ function createApp(prisma, config) {
   // SERVE STATIC UPLOADS
   // =========================
   const uploadsDir = path.join(__dirname, 'public/uploads');
-  if (!fs.existsSync(uploadsDir)) {
+  if (!require('./services/uploadStorage').sqlEnabled() && !fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
   }
+  if (require('./services/uploadStorage').sqlEnabled()) app.get('/uploads/:filename', require('./services/uploadStorage').serveSqlUpload(prisma));
   app.use('/uploads', express.static(uploadsDir));
 
   // =========================
