@@ -1,4 +1,6 @@
 const { audit, problem } = require('./platformPolicy');
+const { Prisma } = require('@prisma/client');
+const { ensureWallet, applyBalance, createWalletService } = require('./walletService');
 
 const MONTHLY_PRICE = 19000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -80,6 +82,11 @@ function serializeSubscription(subscription, payments = [], now = new Date()) {
 }
 
 function createSubscriptionService(prisma) {
+  async function withWallet(db, userId, subscription) {
+    const wallet = await db.wallet.findUnique({ where: { userId } });
+    return { ...subscription, walletBalance: Number(wallet?.balance || 0), paymentSource: 'WALLET' };
+  }
+
   async function get(user) {
     if (user.role === 'ADMIN') return serializeSubscription(null);
     const current = await refreshStatus(prisma, await ensureSubscription(prisma, user));
@@ -88,7 +95,7 @@ function createSubscriptionService(prisma) {
       orderBy: [{ paidAt: 'desc' }, { id: 'desc' }],
       take: 24,
     });
-    return serializeSubscription(current, payments);
+    return withWallet(prisma, user.id, serializeSubscription(current, payments));
   }
 
   async function renew(user, requestId) {
@@ -101,7 +108,15 @@ function createSubscriptionService(prisma) {
         if (previous.subscriptionId !== current.id) throw problem(409, 'Mã gia hạn đã được dùng cho tài khoản khác.');
         const saved = await tx.subscription.findUniqueOrThrow({ where: { id: current.id } });
         const payments = await tx.subscriptionPayment.findMany({ where: { subscriptionId: current.id }, orderBy: [{ paidAt: 'desc' }, { id: 'desc' }], take: 24 });
-        return serializeSubscription(saved, payments);
+        return withWallet(tx, user.id, serializeSubscription(saved, payments));
+      }
+      const wallet = await ensureWallet(tx, user.id);
+      if (wallet.balance.lessThan(MONTHLY_PRICE)) {
+        const error = problem(409, 'Số dư ví chưa đủ 19.000đ. Vui lòng nạp thêm tiền để mua gói Basic.');
+        error.code = 'INSUFFICIENT_WALLET_BALANCE';
+        error.walletBalance = Number(wallet.balance);
+        error.requiredAmount = MONTHLY_PRICE;
+        throw error;
       }
       const now = new Date();
       const futureEnds = [
@@ -110,11 +125,16 @@ function createSubscriptionService(prisma) {
       ].filter(value => value && value > now);
       const periodStart = futureEnds.length ? new Date(Math.max(...futureEnds.map(value => value.getTime()))) : now;
       const periodEnd = addCalendarMonth(periodStart);
-      const reference = `SIM-SUB-${current.id}-${Date.now()}`;
+      const reference = `SUB-${requestId}`;
+      await applyBalance(tx, {
+        wallet, userId: user.id, type: 'SUBSCRIPTION_PAYMENT', direction: 'DEBIT',
+        amount: new Prisma.Decimal(MONTHLY_PRICE), reference, method: 'WALLET',
+        note: 'Mua gói SupplyMind Basic 1 tháng.',
+      });
       await tx.subscriptionPayment.create({
         data: {
           subscriptionId: current.id, requestId, amount: MONTHLY_PRICE,
-          status: 'PAID', method: 'SIMULATED', reference, periodStart, periodEnd,
+          status: 'PAID', method: 'WALLET', reference, periodStart, periodEnd,
         },
       });
       const saved = await tx.subscription.update({
@@ -125,10 +145,10 @@ function createSubscriptionService(prisma) {
         },
       });
       await audit(tx, user.id, 'SUBSCRIPTION_RENEWED', 'SUBSCRIPTION', current.id, {
-        amount: MONTHLY_PRICE, method: 'SIMULATED', reference, periodStart, periodEnd,
+        amount: MONTHLY_PRICE, method: 'WALLET', reference, periodStart, periodEnd,
       });
       const payments = await tx.subscriptionPayment.findMany({ where: { subscriptionId: current.id }, orderBy: [{ paidAt: 'desc' }, { id: 'desc' }], take: 24 });
-      return serializeSubscription(saved, payments);
+      return withWallet(tx, user.id, serializeSubscription(saved, payments));
     }, { isolationLevel: 'Serializable' });
   }
 
@@ -136,18 +156,36 @@ function createSubscriptionService(prisma) {
     if (user.role === 'ADMIN') return { hasAccess: true, subscription: serializeSubscription(null) };
     const subscription = await refreshStatus(prisma, await ensureSubscription(prisma, user));
     const serialized = serializeSubscription(subscription);
-    return { hasAccess: serialized.hasAccess, subscription: serialized };
+    return {
+      hasAccess: serialized.hasAccess,
+      subscription: serialized.hasAccess ? serialized : await withWallet(prisma, user.id, serialized),
+    };
   }
 
-  async function renewByUserId(userId, requestId) {
+  async function recoveryUser(userId) {
     const user = await prisma.user.findUnique({ where: { id: userId }, include: { role: true } });
     if (!user || !user.isActive || (user.suspendedUntil && user.suspendedUntil > new Date())) {
       throw problem(403, 'Tài khoản đang bị quản trị viên khóa.');
     }
-    return renew({ id: user.id, role: user.role.code }, requestId);
+    if (user.role.code === 'ADMIN') throw problem(400, 'Tài khoản Admin không cần gia hạn.');
+    return { id: user.id, role: user.role.code };
   }
 
-  return { get, renew, renewByUserId, access };
+  async function renewByUserId(userId, requestId) {
+    return renew(await recoveryUser(userId), requestId);
+  }
+
+  async function topUpByUserId(userId, requestId) {
+    const user = await recoveryUser(userId);
+    if (typeof requestId !== 'string' || !UUID.test(requestId)) throw problem(400, 'Mã yêu cầu nạp thử không hợp lệ.');
+    // Same demo wallet as the wallet screen; never presented as a bank transfer.
+    await createWalletService(prisma).createSandboxDepositRequest(userId, {
+      amount: 5000000, requestId, note: 'Nạp thử để mua lại gói sử dụng (tiền hệ thống phục vụ demo).',
+    });
+    return get(user);
+  }
+
+  return { get, renew, renewByUserId, topUpByUserId, access };
 }
 
 module.exports = { createSubscriptionService, addCalendarMonth, serializeSubscription, MONTHLY_PRICE };

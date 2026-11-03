@@ -18,6 +18,7 @@ const TRANSACTION_TYPES = Object.freeze({
   SANDBOX_DEPOSIT: 'SANDBOX_DEPOSIT',
   SANDBOX_WITHDRAWAL: 'SANDBOX_WITHDRAWAL',
   QR_DEPOSIT: 'QR_DEPOSIT',
+  SUBSCRIPTION_PAYMENT: 'SUBSCRIPTION_PAYMENT',
 });
 
 // REAL money needs an admin review, SANDBOX money settles instantly.
@@ -455,7 +456,22 @@ function createWalletService(prisma, qrBank = {}) {
   async function createSandboxDepositRequest(userId, body = {}) {
     const amount = parseAmount(body.amount);
     const note = text(body.note, 500);
+    if (body.requestId != null && (typeof body.requestId !== 'string' || !UUID.test(body.requestId))) {
+      throw problem(400, 'Mã yêu cầu nạp thử không hợp lệ.');
+    }
+    const requestReference = body.requestId ? `SANDBOX-REQ-${body.requestId}` : null;
     return prisma.$transaction(async tx => {
+      if (requestReference) {
+        const previous = await tx.walletTransaction.findUnique({ where: { reference: requestReference } });
+        if (previous) {
+          if (previous.userId !== userId) throw problem(409, 'Mã yêu cầu đã được dùng cho tài khoản khác.');
+          const saved = await tx.depositRequest.findFirstOrThrow({
+            where: { userId, reference: requestReference },
+            include: { user: { select: { id: true, name: true, username: true } } },
+          });
+          return serializeDeposit(saved);
+        }
+      }
       const request = await tx.depositRequest.create({
         data: {
           userId,
@@ -465,7 +481,7 @@ function createWalletService(prisma, qrBank = {}) {
           bankName: 'SANDBOX',
           bankAccountNumber: 'SANDBOX',
           bankAccountHolder: 'SANDBOX',
-          reference: `SANDBOX-DEP-${Date.now()}`,
+          reference: requestReference || `SANDBOX-DEP-${Date.now()}`,
           note: note || null,
           status: 'PENDING',
         },
@@ -484,7 +500,7 @@ function createWalletService(prisma, qrBank = {}) {
         type: TRANSACTION_TYPES.SANDBOX_DEPOSIT,
         direction: 'CREDIT',
         amount,
-        reference: `SANDBOX-DEP-${request.id}`,
+        reference: requestReference || `SANDBOX-DEP-${request.id}`,
         method: METHODS.SANDBOX,
         note: note || 'Nạp tiền ảo (sandbox).',
       });
