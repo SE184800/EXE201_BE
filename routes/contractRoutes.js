@@ -82,8 +82,7 @@ function createContractRoutes(prisma, requireAuth) {
 
   // POST /api/contracts/sign
   router.post('/sign', async (req, res) => {
-    const { method = 'PRIVATE_KEY', privateKey, agreedTerms, vneidData } = req.body || {};
-    if (method === 'VNEID') return res.status(503).json({ success: false, message: 'VNeID chưa được kết nối. Hãy dùng khóa cá nhân.' });
+    const { method = 'PRIVATE_KEY', privateKey, agreedTerms } = req.body || {};
     if (method !== 'PRIVATE_KEY') return res.status(400).json({ success: false, message: 'Phương thức ký chưa được hỗ trợ.' });
 
     if (agreedTerms !== true) {
@@ -93,13 +92,11 @@ function createContractRoutes(prisma, requireAuth) {
       });
     }
 
-    if (method !== 'VNEID') {
-      if (!privateKey || typeof privateKey !== 'string' || !privateKey.trim()) {
-        return res.status(400).json({
-          success: false,
-          message: 'Vui lòng dán khóa bí mật cá nhân (Private Key) để thực hiện ký số.',
-        });
-      }
+    if (!privateKey || typeof privateKey !== 'string' || !privateKey.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Vui lòng dán khóa bí mật cá nhân (Private Key) để thực hiện ký số.',
+      });
     }
 
     try {
@@ -108,7 +105,6 @@ function createContractRoutes(prisma, requireAuth) {
         {
           method,
           privateKey: privateKey ? privateKey.trim() : undefined,
-          vneidData,
         },
         Boolean(agreedTerms),
         { ip: req.ip || req.headers['x-forwarded-for'] || '127.0.0.1' }

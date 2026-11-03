@@ -12,11 +12,11 @@ test('tax numbers never imply a verified registered business without a provider'
   }
   await assert.rejects(lookupTaxCode('abc'), error => error.status === 400);
 });
-test('VNeID cannot sign on client-supplied evidence without a provider', () => {
+test('VNeID cannot sign on client-supplied evidence after removal', () => {
   const id = 880000 + Math.floor(Math.random() * 100000);
   const contract = getOrCreateUserContract({ id, username: 'test_' + id, name: 'Test' }, { storeName: 'Test store', storeAddress: 'Test address' });
   assert.equal(contract.isSigned, false);
-  assert.throws(() => signContract(id, { method: 'VNEID', vneidData: { level: 2, verifiedAt: new Date().toISOString() } }, true), error => error.status === 503);
+  assert.throws(() => signContract(id, { method: 'VNEID', vneidData: { level: 2, verifiedAt: new Date().toISOString() } }, true), error => error.status === 400);
   assert.equal(getContractByUserId(id).isSigned, false);
   assert.throws(() => signContract(id, { method: 'UNKNOWN' }, true), error => error.status === 400);
 });

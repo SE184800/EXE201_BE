@@ -272,7 +272,7 @@ test('production blocks simulated deposits for ordinary accounts', async () => {
 });
 
 test('contract endpoint rejects forged VNeID evidence without creating a signature', async () => {
-  await request(app).post('/api/contracts/sign').set(csrf).set('Cookie', cookies.get(buyer.id)).send({ method: 'VNEID', agreedTerms: true, vneidData: { level: 2, verifiedAt: new Date().toISOString() }, privateKey: {} }).expect(503);
+  await request(app).post('/api/contracts/sign').set(csrf).set('Cookie', cookies.get(buyer.id)).send({ method: 'VNEID', agreedTerms: true, vneidData: { level: 2, verifiedAt: new Date().toISOString() }, privateKey: {} }).expect(400);
 });
 
 test('wallet payment rejects insufficient funds without creating a payment', async () => {

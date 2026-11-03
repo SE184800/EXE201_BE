@@ -180,9 +180,10 @@ function getOrCreateUserContract(user, profileInfo = {}) {
 }
 
 function presentContract(contract) {
-  if (!contract || contract.signingMethod !== 'VNEID') return contract;
+  // Keep old unsupported signatures invalid after removal.
+  if (!contract || !contract.signingMethod || contract.signingMethod === 'PRIVATE_KEY') return contract;
   return { ...contract, isSigned: false, stamp: contract.stamp ? { ...contract.stamp,
-    status: 'UNVERIFIED', authority: 'Chưa xác minh VNeID', signingMethod: 'Bản thử nghiệm chưa xác minh',
+    status: 'UNVERIFIED', authority: 'Phương thức ký không còn hỗ trợ', signingMethod: 'Bản thử nghiệm chưa xác minh',
   } : null };
 }
 
@@ -211,9 +212,6 @@ function signContract(userId, signPayload, agreedTerms, clientMeta = {}) {
   const signingMethodLabel = 'Khóa cá nhân Ed25519';
   const authorityLabel = 'SupplyMind · chữ ký nội bộ';
 
-  if (method === 'VNEID') {
-    throw Object.assign(new Error('VNeID chưa được kết nối. Không thể xác thực hoặc ký bằng VNeID.'), { status: 503 });
-  }
   if (method !== 'PRIVATE_KEY') throw Object.assign(new Error('Phương thức ký chưa được hỗ trợ.'), { status: 400 });
   const enteredPrivateKey = typeof signPayload === 'string' ? signPayload : signPayload?.privateKey;
   const normalizedKey = normalizePrivateKey(enteredPrivateKey);
