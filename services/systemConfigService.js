@@ -52,6 +52,33 @@ const DEFAULT_CONFIG = {
     escrowHoldDays: 3, // 3 days hold before completion
     description: 'Chính sách tỷ lệ phần trăm ký quỹ bảo đảm và đặt cọc đơn hàng sỉ toàn sàn.',
   },
+  orderAndDelivery: {
+    orderAutoCancelHours: 4, // 4 giờ vựa phải nhận đơn trước khi tự hủy & hoàn cọc
+    complaintWindowHours: 24, // 24 giờ khiếu nại sau khi giao
+    deliveryAllowedStartHour: 5, // 05:00 sáng
+    deliveryAllowedEndHour: 21, // 21:00 tối
+    autoCompleteDeliveredHours: 48, // 48 giờ tự động hoàn tất nếu không khiếu nại
+    allowWeekendDelivery: true,
+  },
+  consignment: {
+    maxConsignmentItemsPerStore: 5, // Tối đa 5 mặt hàng ký gửi / cặp tiệm - vựa
+    settlementCycleDays: 7, // Chu kỳ nhắc nhở kết toán định kỳ (ngày)
+    allowConsignmentForUnverified: false, // Chỉ vựa đã xác minh mới được ký gửi
+  },
+  walletLimits: {
+    minDepositAmount: 50000, // Nạp tối thiểu 50.000đ
+    minWithdrawalAmount: 100000, // Rút tối thiểu 100.000đ
+    maxDailyWithdrawalAmount: 50000000, // Rút tối đa 50.000.000đ/ngày
+    autoApproveWithdrawalThreshold: 2000000, // Dưới 2.000.000đ tự động duyệt
+  },
+  systemNotice: {
+    maintenanceMode: false,
+    maintenanceMessage: 'Hệ thống SupplyMind đang bảo trì nâng cấp hệ thống định kỳ. Quý khách vui lòng quay lại sau.',
+    announcementEnabled: false,
+    announcementTitle: 'Thông báo từ Ban Quản Trị Sàn SupplyMind',
+    announcementContent: '',
+    announcementType: 'INFO', // 'INFO' | 'WARNING' | 'ALERT'
+  },
   updatedAt: new Date().toISOString(),
   updatedBy: null,
 };
@@ -88,6 +115,22 @@ function loadConfig() {
         ...DEFAULT_CONFIG.escrowDeposit,
         ...(parsed.escrowDeposit || {}),
       },
+      orderAndDelivery: {
+        ...DEFAULT_CONFIG.orderAndDelivery,
+        ...(parsed.orderAndDelivery || {}),
+      },
+      consignment: {
+        ...DEFAULT_CONFIG.consignment,
+        ...(parsed.consignment || {}),
+      },
+      walletLimits: {
+        ...DEFAULT_CONFIG.walletLimits,
+        ...(parsed.walletLimits || {}),
+      },
+      systemNotice: {
+        ...DEFAULT_CONFIG.systemNotice,
+        ...(parsed.systemNotice || {}),
+      },
       updatedAt: parsed.updatedAt || new Date().toISOString(),
       updatedBy: parsed.updatedBy || null,
     };
@@ -120,6 +163,10 @@ function updateConfig(actorId, updates = {}) {
 
   const nextAi = { ...current.aiModeration };
   const nextEscrow = { ...current.escrowDeposit };
+  const nextOrder = { ...current.orderAndDelivery };
+  const nextConsignment = { ...current.consignment };
+  const nextWallet = { ...current.walletLimits };
+  const nextNotice = { ...current.systemNotice };
 
   if (updates.aiModeration) {
     const ai = updates.aiModeration;
@@ -193,9 +240,86 @@ function updateConfig(actorId, updates = {}) {
     }
   }
 
+  if (updates.orderAndDelivery) {
+    const o = updates.orderAndDelivery;
+    if (typeof o.orderAutoCancelHours === 'number' && o.orderAutoCancelHours >= 1 && o.orderAutoCancelHours <= 72) {
+      nextOrder.orderAutoCancelHours = Math.round(o.orderAutoCancelHours);
+    }
+    if (typeof o.complaintWindowHours === 'number' && o.complaintWindowHours >= 1 && o.complaintWindowHours <= 168) {
+      nextOrder.complaintWindowHours = Math.round(o.complaintWindowHours);
+    }
+    if (typeof o.deliveryAllowedStartHour === 'number' && o.deliveryAllowedStartHour >= 0 && o.deliveryAllowedStartHour <= 23) {
+      nextOrder.deliveryAllowedStartHour = Math.round(o.deliveryAllowedStartHour);
+    }
+    if (typeof o.deliveryAllowedEndHour === 'number' && o.deliveryAllowedEndHour >= 1 && o.deliveryAllowedEndHour <= 24) {
+      nextOrder.deliveryAllowedEndHour = Math.round(o.deliveryAllowedEndHour);
+    }
+    if (typeof o.autoCompleteDeliveredHours === 'number' && o.autoCompleteDeliveredHours >= 1 && o.autoCompleteDeliveredHours <= 168) {
+      nextOrder.autoCompleteDeliveredHours = Math.round(o.autoCompleteDeliveredHours);
+    }
+    if (typeof o.allowWeekendDelivery === 'boolean') {
+      nextOrder.allowWeekendDelivery = o.allowWeekendDelivery;
+    }
+  }
+
+  if (updates.consignment) {
+    const c = updates.consignment;
+    if (typeof c.maxConsignmentItemsPerStore === 'number' && c.maxConsignmentItemsPerStore >= 1 && c.maxConsignmentItemsPerStore <= 50) {
+      nextConsignment.maxConsignmentItemsPerStore = Math.round(c.maxConsignmentItemsPerStore);
+    }
+    if (typeof c.settlementCycleDays === 'number' && c.settlementCycleDays >= 1 && c.settlementCycleDays <= 60) {
+      nextConsignment.settlementCycleDays = Math.round(c.settlementCycleDays);
+    }
+    if (typeof c.allowConsignmentForUnverified === 'boolean') {
+      nextConsignment.allowConsignmentForUnverified = c.allowConsignmentForUnverified;
+    }
+  }
+
+  if (updates.walletLimits) {
+    const w = updates.walletLimits;
+    if (typeof w.minDepositAmount === 'number' && w.minDepositAmount >= 10000) {
+      nextWallet.minDepositAmount = Math.round(w.minDepositAmount);
+    }
+    if (typeof w.minWithdrawalAmount === 'number' && w.minWithdrawalAmount >= 10000) {
+      nextWallet.minWithdrawalAmount = Math.round(w.minWithdrawalAmount);
+    }
+    if (typeof w.maxDailyWithdrawalAmount === 'number' && w.maxDailyWithdrawalAmount >= 500000) {
+      nextWallet.maxDailyWithdrawalAmount = Math.round(w.maxDailyWithdrawalAmount);
+    }
+    if (typeof w.autoApproveWithdrawalThreshold === 'number' && w.autoApproveWithdrawalThreshold >= 0) {
+      nextWallet.autoApproveWithdrawalThreshold = Math.round(w.autoApproveWithdrawalThreshold);
+    }
+  }
+
+  if (updates.systemNotice) {
+    const n = updates.systemNotice;
+    if (typeof n.maintenanceMode === 'boolean') {
+      nextNotice.maintenanceMode = n.maintenanceMode;
+    }
+    if (typeof n.maintenanceMessage === 'string') {
+      nextNotice.maintenanceMessage = n.maintenanceMessage.slice(0, 500);
+    }
+    if (typeof n.announcementEnabled === 'boolean') {
+      nextNotice.announcementEnabled = n.announcementEnabled;
+    }
+    if (typeof n.announcementTitle === 'string') {
+      nextNotice.announcementTitle = n.announcementTitle.slice(0, 150);
+    }
+    if (typeof n.announcementContent === 'string') {
+      nextNotice.announcementContent = n.announcementContent.slice(0, 1000);
+    }
+    if (['INFO', 'WARNING', 'ALERT'].includes(n.announcementType)) {
+      nextNotice.announcementType = n.announcementType;
+    }
+  }
+
   const newConfig = {
     aiModeration: nextAi,
     escrowDeposit: nextEscrow,
+    orderAndDelivery: nextOrder,
+    consignment: nextConsignment,
+    walletLimits: nextWallet,
+    systemNotice: nextNotice,
     updatedAt: new Date().toISOString(),
     updatedBy: actorId || null,
   };

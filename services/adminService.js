@@ -473,6 +473,12 @@ function createAdminService(prisma, config) {
         restrictedWordsCount: updated.aiModeration?.restrictedKeywords?.length,
         defaultDepositRate: updated.escrowDeposit?.defaultDepositRate,
         maxDepositRate: updated.escrowDeposit?.maxDepositRate,
+        orderAutoCancelHours: updated.orderAndDelivery?.orderAutoCancelHours,
+        complaintWindowHours: updated.orderAndDelivery?.complaintWindowHours,
+        maxConsignmentItems: updated.consignment?.maxConsignmentItemsPerStore,
+        minDepositAmount: updated.walletLimits?.minDepositAmount,
+        maintenanceMode: updated.systemNotice?.maintenanceMode,
+        announcementEnabled: updated.systemNotice?.announcementEnabled,
       });
     } catch {
       // audit failure shouldn't block config update

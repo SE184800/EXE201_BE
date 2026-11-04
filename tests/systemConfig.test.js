@@ -71,6 +71,23 @@ test('systemConfig: get, update, addKeyword, removeKeyword, and reset', async (t
   assert.equal(modResult.status, 'AUTO_APPROVED');
   assert.equal(modResult.disabled, true);
 
+  // Test new business configurations
+  systemConfigService.updateConfig('TEST_ACTOR', {
+    orderAndDelivery: { orderAutoCancelHours: 6, complaintWindowHours: 48 },
+    consignment: { maxConsignmentItemsPerStore: 8, settlementCycleDays: 14 },
+    walletLimits: { minDepositAmount: 100000, maxDailyWithdrawalAmount: 100000000 },
+    systemNotice: { maintenanceMode: true, announcementEnabled: true, announcementTitle: 'Thông báo thử nghiệm' },
+  });
+  config = systemConfigService.getConfig();
+  assert.equal(config.orderAndDelivery.orderAutoCancelHours, 6);
+  assert.equal(config.orderAndDelivery.complaintWindowHours, 48);
+  assert.equal(config.consignment.maxConsignmentItemsPerStore, 8);
+  assert.equal(config.consignment.settlementCycleDays, 14);
+  assert.equal(config.walletLimits.minDepositAmount, 100000);
+  assert.equal(config.walletLimits.maxDailyWithdrawalAmount, 100000000);
+  assert.equal(config.systemNotice.maintenanceMode, true);
+  assert.equal(config.systemNotice.announcementTitle, 'Thông báo thử nghiệm');
+
   // Restore clean default
   systemConfigService.resetConfig('TEST_ACTOR');
   config = systemConfigService.getConfig();
