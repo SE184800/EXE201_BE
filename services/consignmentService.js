@@ -324,7 +324,19 @@ async function settleConsignmentItem({ storeId, itemId, qtyToSettle, method = 'W
   const settledQty = Number(data.settledQty || 0);
   const unsettledQty = Math.max(0, totalSold - settledQty);
 
-  const qty = qtyToSettle ? Math.min(Number(qtyToSettle), unsettledQty) : unsettledQty;
+  let qty;
+  if (qtyToSettle !== undefined && qtyToSettle !== null) {
+    const num = Number(qtyToSettle);
+    if (!Number.isFinite(num) || num <= 0) {
+      throw Object.assign(new Error('Số lượng kết toán phải lớn hơn 0.'), { status: 400 });
+    }
+    if (num > unsettledQty) {
+      throw Object.assign(new Error(`Số lượng kết toán (${num}) vượt quá số lượng chưa thanh toán (${unsettledQty}).`), { status: 400 });
+    }
+    qty = num;
+  } else {
+    qty = unsettledQty;
+  }
   if (qty <= 0) {
     throw Object.assign(new Error('Hiện không có số lượng hàng đã bán nào cần kết toán.'), { status: 400 });
   }
