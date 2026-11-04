@@ -4,7 +4,7 @@ const multer = require('multer');
 const path = require('node:path');
 const fs = require('node:fs');
 const { requireRole } = require('../middlewares/authMiddleware');
-const { walletService } = require('../services/walletService');
+const { walletService, refundPaidOrder } = require('../services/walletService');
 const { sendComplaintNoticeEmail } = require('../services/complaintMailService');
 
 const COMPLAINT_REASONS = new Set([
@@ -333,6 +333,23 @@ function createComplaintRoutes(prisma, requireAuth) {
           await walletService.refundEscrow(order.buyerId, order.id, depositAmt, `Hoàn cọc đơn #${order.id} do chủ vựa nhận lại hàng`);
         }
 
+        // Refund order payment if buyer paid via wallet
+        try {
+          const payment = await prisma.orderPayment.findUnique({
+            where: { orderId: order.id },
+            include: { refund: true },
+          });
+          if (payment && !payment.refund) {
+            await refundPaidOrder(prisma, {
+              orderId: order.id,
+              actorId: req.auth.user.id,
+              reason: resolveMsg,
+            });
+          }
+        } catch (payRefundErr) {
+          console.warn('Lỗi hoàn tiền ví cho đơn hàng:', payRefundErr.message);
+        }
+
         return res.json({ success: true, complaint: updatedComplaint, message: resolveMsg });
       }
 
@@ -448,6 +465,43 @@ function createComplaintRoutes(prisma, requireAuth) {
       res.json({ complaint: saved, supplementaryOrder });
     } catch (e) {
       if (e.code === 'P2000') return res.status(400).json({ message: 'Phản hồi vượt quá giới hạn cho phép.' });
+      next(e);
+    }
+  });
+
+  r.post('/:id/escalate', requireRole('STORE_OWNER'), async (req, res, next) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id < 1) return res.status(400).json({ message: 'Mã khiếu nại không hợp lệ.' });
+      const complaint = await prisma.orderComplaint.findUnique({
+        where: { id },
+        include: { order: true },
+      });
+      if (!complaint || complaint.buyerId !== req.auth.user.id) {
+        return res.status(404).json({ message: 'Không tìm thấy khiếu nại này.' });
+      }
+      if (!['REJECTED', 'OPEN', 'IN_REVIEW'].includes(complaint.status)) {
+        return res.status(400).json({ message: 'Khiếu nại này hiện không ở trạng thái có thể kháng cáo.' });
+      }
+      const rawReason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+      const escalateNote = rawReason.length >= 3
+        ? rawReason.slice(0, 500)
+        : 'Cửa hàng không đồng ý với phương án xử lý của chủ vựa, yêu cầu Quản trị viên can thiệp giải quyết.';
+
+      const updated = await prisma.orderComplaint.update({
+        where: { id },
+        data: {
+          status: 'ESCALATED',
+          description: (complaint.description || '') + '\n[Kháng cáo Admin]: ' + escalateNote,
+        },
+      });
+
+      res.json({
+        success: true,
+        complaint: updated,
+        message: 'Đã gửi yêu cầu can thiệp tới Quản trị viên. Quản trị viên sẽ kiểm tra biên bản và đối soát quyền lợi cho tiệm.',
+      });
+    } catch (e) {
       next(e);
     }
   });

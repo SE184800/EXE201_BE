@@ -1,4 +1,4 @@
-const STATUSES = ['PENDING', 'APPROVED', 'PREPARING', 'SHIPPING', 'ISSUE_HANDLING', 'DELIVERED', 'COMPLETED', 'REJECTED'];
+const STATUSES = ['PENDING', 'APPROVED', 'PREPARING', 'SHIPPING', 'ISSUE_HANDLING', 'DELIVERED', 'COMPLETED', 'REJECTED', 'CANCELLED'];
 function orderQuery(query = {}) {
   const { page = '1', status = '' } = query;
   if (typeof page !== 'string' || !/^\d+$/.test(page) || Number(page) < 1 || Number(page) > 100000 || typeof status !== 'string' || (status && !STATUSES.includes(status)))

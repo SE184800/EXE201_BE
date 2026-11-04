@@ -27,6 +27,8 @@ function createAdminRoutes(prisma, requireAuth, config) {
   router.post('/holidays', run(async (req, res) => res.status(201).json({ holiday: await service.createHoliday(req.auth.user.id, req.body || {}) })));
   router.put('/holidays/:id', run(async (req, res) => res.json({ holiday: await service.updateHoliday(req.auth.user.id, idParam(req.params.id), req.body || {}) })));
   router.delete('/holidays/:id', run(async (req, res) => res.json(await service.deleteHoliday(req.auth.user.id, idParam(req.params.id), req.body || {}))));
+  router.get('/complaints', run(async (req, res) => res.json(await service.listComplaints(req.query))));
+  router.post('/complaints/:id/resolve', run(async (req, res) => res.json(await service.resolveComplaint(req.auth.user.id, idParam(req.params.id), req.body || {}))));
   router.get('/audit-logs', run(async (req, res) => res.json(await service.logs(req.query))));
   router.get('/system-config', run(async (req, res) => res.json(await service.getSystemConfig())));
   router.put('/system-config', run(async (req, res) => res.json(await service.updateSystemConfig(req.auth.user.id, req.body || {}))));

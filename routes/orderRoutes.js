@@ -274,6 +274,45 @@ function createOrderRoutes(prisma, requireAuth) {
     } catch (error) { next(error); }
   });
 
+  router.post('/:id/cancel', requireRole('STORE_OWNER'), async (req, res, next) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1 || id > 2147483647) return res.status(400).json({ message: 'Mã đơn hàng không hợp lệ.' });
+    try {
+      const buyerId = req.auth.user.id;
+      const current = await prisma.wholesaleOrder.findFirst({ where: { id, buyerId }, include });
+      if (!current) throw problem(404, 'Không tìm thấy đơn hàng.');
+      if (current.status !== 'PENDING') {
+        throw problem(400, 'Chỉ có thể hủy đơn khi đơn hàng đang ở trạng thái chờ duyệt (PENDING).');
+      }
+      const rawReason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+      const reason = rawReason.length >= 3 ? rawReason.slice(0, 255) : 'Cửa hàng tự hủy khi đơn chưa được duyệt.';
+
+      const depositNum = Number(current.depositAmount || 0);
+      if (current.depositStatus === 'PAID' && depositNum > 0) {
+        await walletService.refundEscrow(buyerId, id, depositNum, `Hoàn cọc do tiệm hủy đơn #${id}: ${reason}`);
+      }
+
+      const updated = await prisma.wholesaleOrder.update({
+        where: { id },
+        data: {
+          status: 'CANCELLED',
+          depositStatus: current.depositStatus === 'PAID' ? 'REFUNDED' : 'CANCELLED',
+          rejectReason: reason,
+        },
+        include,
+      });
+
+      await audit(prisma, buyerId, 'ORDER_CANCELLED_BY_STORE', 'ORDER', id, { reason });
+      res.json({
+        success: true,
+        order: serialize(updated),
+        message: depositNum > 0 && current.depositStatus === 'PAID'
+          ? `Đã hủy đơn hàng #${id} và hoàn lại ${depositNum.toLocaleString('vi-VN')} ₫ tiền cọc về Ví khả dụng của bạn.`
+          : `Đã hủy đơn hàng #${id}.`,
+      });
+    } catch (error) { next(error); }
+  });
+
   router.post('/:id/approve', requireRole('STORE_OWNER'), async (req, res, next) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id < 1 || id > 2147483647) return res.status(400).json({ message: 'Mã đơn hàng không hợp lệ.' });
@@ -344,6 +383,25 @@ function createOrderRoutes(prisma, requireAuth) {
       if (!['ISSUE_HANDLING', 'DELIVERED'].includes(current.status)) throw problem(409, 'Chỉ báo trả tiền sau khi đã nhận hàng.');
       if (method === 'QR' && (!current.supplier.bankName || !current.supplier.bankAccountHolder || !/^\d{6,30}$/.test(current.supplier.bankAccountNumber || ''))) throw problem(409, 'Chủ vựa chưa có tài khoản nhận tiền hợp lệ.');
       const due = paymentDue(current, driverInfo);
+      if (due <= 0) {
+        const paymentInfo = deliveryService.savePaymentInfo(id, {
+          method: method || 'COD',
+          amount: 0,
+          status: 'CONFIRMED',
+          storePaidAt: new Date().toISOString(),
+        });
+        const updated = await prisma.wholesaleOrder.update({
+          where: { id },
+          data: { status: 'DELIVERED', deliveredAt: current.deliveredAt || new Date() },
+          include,
+        });
+        return res.json({
+          success: true,
+          paymentInfo,
+          order: serialize(updated),
+          message: 'Đơn hàng 0đ (Giao bù) đã hoàn tất xác nhận thanh toán.',
+        });
+      }
       if (amount !== undefined && (typeof amount !== 'number' || !Number.isFinite(amount) || Math.abs(amount - due) > 0.01)) throw problem(400, 'Số tiền đã thay đổi. Hãy tải lại đơn.');
       const paymentInfo = deliveryService.savePaymentInfo(id, {
         method,
@@ -371,10 +429,17 @@ function createOrderRoutes(prisma, requireAuth) {
         const current = await tx.wholesaleOrder.findFirst({ where: { id, buyerId }, include });
         if (!current) throw problem(404, 'Không tìm thấy đơn hàng.');
         if (current.status === 'COMPLETED') return current;
-        if (current.status !== 'DELIVERED') throw problem(409, 'Nhận hàng và trả đủ tiền trước khi hoàn tất.');
+        const driver = deliveryService.getDriverInfo(id); const due = paymentDue(current, driver);
+        if (current.status !== 'DELIVERED') {
+          if (current.status === 'ISSUE_HANDLING' && due <= 0) {
+            // Cho phép hoàn tất trực tiếp đơn giao bù 0đ
+          } else {
+            throw problem(409, 'Nhận hàng và trả đủ tiền trước khi hoàn tất.');
+          }
+        }
         if (current.complaint && ['OPEN', 'IN_REVIEW'].includes(current.complaint.status)) throw problem(409, 'Cần xử lý xong sự cố trước khi hoàn tất đơn.');
-        const driver = deliveryService.getDriverInfo(id);
-        if (driver?.paymentInfo?.status !== 'CONFIRMED' && !fullyPaidByWallet(current, driver)) throw problem(409, 'Chủ vựa chưa xác nhận tiền thanh toán.');
+        // driver already fetched above
+        if (due > 0 && driver?.paymentInfo?.status !== 'CONFIRMED' && !fullyPaidByWallet(current, driver)) throw problem(409, 'Chủ vựa chưa xác nhận tiền thanh toán.');
         if (current.orderPayment?.refund) throw problem(409, 'Đơn đã hoàn tiền, không thể hoàn tất.');
         const saved = await tx.wholesaleOrder.update({ where: { id }, data: { status: 'COMPLETED', deliveredAt: current.deliveredAt || new Date(), commissionAmount: current.commissionRate === null ? null : current.subtotal.mul(current.commissionRate).div(100).toDecimalPlaces(2) }, include });
         await settleOrderToSupplier(tx, saved);

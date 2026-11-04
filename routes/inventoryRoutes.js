@@ -14,6 +14,7 @@ const { createStockService } = require('../services/stockService');
 const { createStoreRevenueService } = require('../services/storeRevenueService');
 const inventorySupplierService = require('../services/inventorySupplierService');
 const consignmentService = require('../services/consignmentService');
+const { walletService } = require('../services/walletService');
 
 const inventoryWorkbookUpload = multer({
   storage: multer.memoryStorage(),
@@ -196,6 +197,36 @@ function createInventoryRoutes(prisma, requireAuth) {
           };
         }),
       });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/consignment/settlements', async (req, res, next) => {
+    try {
+      const settlements = await consignmentService.getConsignmentSettlements({
+        storeId: req.auth.user.id,
+        prisma,
+      });
+      res.json({ settlements });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/consignment/settlements/:itemId/pay', async (req, res, next) => {
+    const itemId = Number(req.params.itemId);
+    const { qty, method = 'WALLET' } = req.body || {};
+    try {
+      const result = await consignmentService.settleConsignmentItem({
+        storeId: req.auth.user.id,
+        itemId,
+        qtyToSettle: qty,
+        method,
+        prisma,
+        walletService,
+      });
+      res.json(result);
     } catch (error) {
       next(error);
     }

@@ -250,6 +250,165 @@ function updateRequestStatus(requestId, status, reason = '') {
   return item;
 }
 
+async function getConsignmentSettlements({ storeId, supplierId, prisma }) {
+  const items = loadItems();
+  const results = [];
+
+  for (const [key, data] of Object.entries(items)) {
+    if (!data || !data.isConsignment) continue;
+    const itemId = Number(key);
+    if (!itemId) continue;
+
+    if (supplierId && data.supplierId && Number(data.supplierId) !== Number(supplierId)) {
+      continue;
+    }
+
+    const inventoryItem = await prisma.inventoryItem.findUnique({
+      where: { id: itemId },
+      include: {
+        movements: {
+          where: { type: 'SALE' },
+        },
+      },
+    });
+
+    if (!inventoryItem) continue;
+    if (storeId && inventoryItem.ownerId !== Number(storeId)) continue;
+
+    const totalSold = inventoryItem.movements.reduce((sum, m) => sum + Math.abs(m.quantityChange), 0);
+    const settledQty = Number(data.settledQty || 0);
+    const unsettledQty = Math.max(0, totalSold - settledQty);
+    const settlementPrice = Number(data.settlementPrice || 0);
+    const dueAmount = unsettledQty * settlementPrice;
+
+    results.push({
+      itemId,
+      productName: inventoryItem.name,
+      unit: inventoryItem.unit,
+      currentStock: inventoryItem.quantity,
+      sellingPrice: inventoryItem.sellingPrice,
+      settlementPrice,
+      totalSold,
+      settledQty,
+      unsettledQty,
+      dueAmount,
+      supplierId: data.supplierId || null,
+      supplierName: data.supplierName || 'Nhà cung cấp',
+      termsNote: data.termsNote || null,
+      lastSettledAt: data.lastSettledAt || null,
+    });
+  }
+
+  return results;
+}
+
+async function settleConsignmentItem({ storeId, itemId, qtyToSettle, method = 'WALLET', prisma, walletService }) {
+  const items = loadItems();
+  const key = String(itemId);
+  const data = items[key];
+  if (!data || !data.isConsignment) {
+    throw Object.assign(new Error('Mặt hàng này không phải là hàng ký gửi tiếp thị.'), { status: 400 });
+  }
+
+  const inventoryItem = await prisma.inventoryItem.findFirst({
+    where: { id: Number(itemId), ownerId: Number(storeId) },
+    include: {
+      movements: { where: { type: 'SALE' } },
+    },
+  });
+  if (!inventoryItem) {
+    throw Object.assign(new Error('Không tìm thấy mặt hàng trong kho của tiệm.'), { status: 404 });
+  }
+
+  const totalSold = inventoryItem.movements.reduce((sum, m) => sum + Math.abs(m.quantityChange), 0);
+  const settledQty = Number(data.settledQty || 0);
+  const unsettledQty = Math.max(0, totalSold - settledQty);
+
+  const qty = qtyToSettle ? Math.min(Number(qtyToSettle), unsettledQty) : unsettledQty;
+  if (qty <= 0) {
+    throw Object.assign(new Error('Hiện không có số lượng hàng đã bán nào cần kết toán.'), { status: 400 });
+  }
+
+  const settlementPrice = Number(data.settlementPrice || 0);
+  const amount = Math.round(qty * settlementPrice);
+
+  if (method === 'WALLET' && amount > 0) {
+    const storeWallet = await walletService.getWallet(storeId);
+    if (storeWallet.availableBalance < amount) {
+      throw Object.assign(new Error(`Số dư ví khả dụng (${storeWallet.availableBalance.toLocaleString('vi-VN')} ₫) không đủ để thanh toán kết toán ${amount.toLocaleString('vi-VN')} ₫. Vui lòng nạp thêm tiền vào ví.`), { status: 400 });
+    }
+
+    let supplierUserId = null;
+    if (data.supplierId) {
+      const supplierProfile = await prisma.supplierProfile.findUnique({
+        where: { id: Number(data.supplierId) },
+      });
+      if (supplierProfile) supplierUserId = supplierProfile.userId;
+    }
+
+    await prisma.$transaction(async tx => {
+      const debitRef = `CONSIGN-PAY-${itemId}-${Date.now()}`;
+      await tx.$executeRaw`
+        UPDATE dbo.wallets
+        SET balance = balance - ${amount}, updatedAt = CURRENT_TIMESTAMP
+        WHERE userId = ${storeId}
+      `;
+      const storeWalletAfter = await tx.wallet.findUnique({ where: { userId: storeId } });
+      await tx.walletTransaction.create({
+        data: {
+          walletId: storeWalletAfter.id,
+          userId: storeId,
+          type: 'ORDER_PAYMENT',
+          direction: 'DEBIT',
+          amount,
+          balanceAfter: storeWalletAfter.balance,
+          reference: debitRef,
+          status: 'COMPLETED',
+          note: `Kết toán tiền sỉ hàng ký gửi: ${inventoryItem.name} (${qty} ${inventoryItem.unit})`,
+        },
+      });
+
+      if (supplierUserId) {
+        const creditRef = `CONSIGN-REC-${itemId}-${Date.now()}`;
+        await tx.$executeRaw`
+          UPDATE dbo.wallets
+          SET balance = balance + ${amount}, updatedAt = CURRENT_TIMESTAMP
+          WHERE userId = ${supplierUserId}
+        `;
+        const supplierWalletAfter = await tx.wallet.findUnique({ where: { userId: supplierUserId } });
+        if (supplierWalletAfter) {
+          await tx.walletTransaction.create({
+            data: {
+              walletId: supplierWalletAfter.id,
+              userId: supplierUserId,
+              type: 'ORDER_RECEIVE',
+              direction: 'CREDIT',
+              amount,
+              balanceAfter: supplierWalletAfter.balance,
+              reference: creditRef,
+              status: 'COMPLETED',
+              note: `Tiệm ${inventoryItem.ownerId} kết toán hàng ký gửi: ${inventoryItem.name} (${qty} ${inventoryItem.unit})`,
+            },
+          });
+        }
+      }
+    });
+  }
+
+  data.settledQty = settledQty + qty;
+  data.lastSettledAt = new Date().toISOString();
+  persistItems();
+
+  return {
+    success: true,
+    settledQty: qty,
+    amount,
+    remainingUnsettled: unsettledQty - qty,
+    productName: inventoryItem.name,
+    message: `Đã kết toán thành công ${qty} ${inventoryItem.unit} "${inventoryItem.name}" với số tiền ${amount.toLocaleString('vi-VN')} ₫.`,
+  };
+}
+
 module.exports = {
   getItemConsignment,
   setItemConsignment,
@@ -261,4 +420,6 @@ module.exports = {
   getRequestById,
   dispatchConsignmentRequest,
   updateRequestStatus,
+  getConsignmentSettlements,
+  settleConsignmentItem,
 };

@@ -4,6 +4,7 @@ const { Prisma } = require('@prisma/client');
 const { moderateContent } = require('./contentModerationService');
 const systemConfigService = require('./systemConfigService');
 const { audit, problem, activeAccountWhere, verificationComplete } = require('./platformPolicy');
+const { walletService, refundPaidOrder } = require('./walletService');
 const { addCalendarMonth, MONTHLY_PRICE } = require('./subscriptionService');
 const PAGE_SIZE = 20;
 const number = value => Number(value || 0);
@@ -669,8 +670,129 @@ function createAdminService(prisma, config) {
       };
     });
 
-    cleanupUserLocalData(id);
-    return result;
+    cleanupUserLocalData(id); return result;
+
+  }
+
+  async function listComplaints(query = {}) {
+    const status = typeof query.status === 'string' && query.status.trim() ? query.status.trim() : undefined;
+    const where = status ? { status } : {};
+    const complaints = await prisma.orderComplaint.findMany({
+      where,
+      include: {
+        order: {
+          include: {
+            items: true,
+            orderPayment: { include: { refund: true } },
+          },
+        },
+        buyer: { select: { id: true, name: true, phone: true, email: true } },
+        supplier: {
+          select: {
+            id: true,
+            businessName: true,
+            userId: true,
+            user: { select: { name: true, phone: true, email: true } },
+          },
+        },
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+    return { complaints };
+  }
+
+  async function resolveComplaint(actorId, complaintId, body = {}) {
+    const { decision, note = '' } = body;
+    if (!['FAVOR_BUYER', 'FAVOR_SUPPLIER'].includes(decision)) {
+      throw problem(400, 'Quyết định phân xử phải là FAVOR_BUYER hoặc FAVOR_SUPPLIER.');
+    }
+    const adminNote = typeof note === 'string' && note.trim().length >= 3
+      ? note.trim()
+      : (decision === 'FAVOR_BUYER'
+          ? 'Quản trị viên phân xử: Chấp thuận khiếu nại của Cửa hàng. Hoàn tiền 100% về ví.'
+          : 'Quản trị viên phân xử: Bác bỏ khiếu nại. Cửa hàng vi phạm quy chế giao nhận.');
+
+    const complaint = await prisma.orderComplaint.findUnique({
+      where: { id: complaintId },
+      include: {
+        order: {
+          include: {
+            items: true,
+            orderPayment: { include: { refund: true } },
+          },
+        },
+        supplier: true,
+      },
+    });
+    if (!complaint) throw problem(404, 'Không tìm thấy khiếu nại.');
+    const order = complaint.order;
+    const depositAmt = Number(order.depositAmount || 0);
+
+    if (decision === 'FAVOR_BUYER') {
+      if (depositAmt > 0 && order.depositStatus === 'PAID') {
+        try {
+          await walletService.refundEscrow(order.buyerId, order.id, depositAmt, `Admin phân xử hoàn cọc đơn #${order.id}: ${adminNote}`);
+        } catch (e) {
+          console.warn('Lỗi hoàn cọc escrow:', e.message);
+        }
+      }
+      const payment = order.orderPayment;
+      if (payment && !payment.refund) {
+        try {
+          await refundPaidOrder(prisma, {
+            orderId: order.id,
+            actorId,
+            reason: adminNote,
+          });
+        } catch (err) {
+          console.warn('Lỗi hoàn tiền ví khi admin phân xử:', err.message);
+        }
+      }
+      const updatedComplaint = await prisma.orderComplaint.update({
+        where: { id: complaintId },
+        data: {
+          status: 'ADMIN_RESOLVED_BUYER',
+          response: (complaint.response ? complaint.response + '\n' : '') + '[Quyết định Admin]: ' + adminNote,
+        },
+      });
+      await prisma.wholesaleOrder.update({
+        where: { id: order.id },
+        data: {
+          status: 'REJECTED',
+          depositStatus: depositAmt > 0 ? 'REFUNDED' : order.depositStatus,
+          rejectReason: 'Admin xử cửa hàng thắng khiếu nại: ' + adminNote,
+        },
+      });
+      await audit(prisma, actorId, 'ADMIN_DISPUTE_RESOLVED', 'COMPLAINT', complaintId, { decision, adminNote, orderId: order.id });
+      return { success: true, complaint: updatedComplaint, message: 'Đã phân xử chấp thuận cho Cửa hàng và hoàn tiền thành công.' };
+    } else {
+      const supplierUserId = complaint.supplier?.userId;
+      if (depositAmt > 0 && order.depositStatus === 'PAID' && supplierUserId) {
+        try {
+          await walletService.confiscateEscrow(order.buyerId, supplierUserId, order.id, depositAmt, `Admin phân xử cho chủ vựa hưởng cọc đơn #${order.id}: ${adminNote}`);
+        } catch (e) {
+          console.warn('Lỗi tịch thu cọc escrow:', e.message);
+        }
+      }
+      const updatedComplaint = await prisma.orderComplaint.update({
+        where: { id: complaintId },
+        data: {
+          status: 'ADMIN_RESOLVED_SUPPLIER',
+          response: (complaint.response ? complaint.response + '\n' : '') + '[Quyết định Admin]: ' + adminNote,
+        },
+      });
+      await prisma.wholesaleOrder.update({
+        where: { id: order.id },
+        data: {
+          status: 'REJECTED',
+          depositStatus: depositAmt > 0 ? 'RELEASED' : order.depositStatus,
+          rejectReason: 'Admin xử chủ vựa thắng tranh chấp: ' + adminNote,
+        },
+      });
+      await audit(prisma, actorId, 'ADMIN_DISPUTE_RESOLVED', 'COMPLAINT', complaintId, { decision, adminNote, orderId: order.id });
+      return { success: true, complaint: updatedComplaint, message: 'Đã phân xử chấp thuận cho Chủ vựa và giải ngân cọc thành công.' };
+    }
+
   }
 
   return {
@@ -679,6 +801,7 @@ function createAdminService(prisma, config) {
     updateHoliday, deleteHoliday, logs, listModerationQueue, moderateAction,
     getSystemConfig, updateSystemConfig, resetSystemConfig,
     addForbiddenWord, removeForbiddenWord, addRestrictedWord, removeRestrictedWord,
+    listComplaints, resolveComplaint,
   };
 }
 module.exports = { createAdminService, idParam, period, csvCell, holidayInput, serializeHoliday };

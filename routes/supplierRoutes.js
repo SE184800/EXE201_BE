@@ -75,6 +75,19 @@ function createSupplierRoutes(prisma, requireAuth) {
   router.post('/orders/:orderId/incident', controller.reportIncident);
   router.post('/orders/:orderId/confirm-payment', controller.confirmPayment);
 
+  router.get('/consignments/settlements', async (req, res, next) => {
+    try {
+      const profile = await prisma.supplierProfile.findUnique({ where: { userId: req.auth.user.id } });
+      const settlements = await consignmentService.getConsignmentSettlements({
+        supplierId: profile?.id,
+        prisma,
+      });
+      res.json({ settlements });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get('/consignments/requests', async (req, res, next) => {
     try {
       const profile = await prisma.supplierProfile.findUnique({ where: { userId: req.auth.user.id } });

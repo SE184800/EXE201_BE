@@ -5,11 +5,11 @@ const { settleOrderToSupplier, refundPaidOrder, walletService } = require('./wal
 const { importBlockReason } = require('./inventorySyncService');
 const { paymentDue } = require('./orderPaymentPolicy');
 const ORDER_STATUSES = Object.freeze([
-  'PENDING', 'APPROVED', 'REJECTED', 'PREPARING', 'SHIPPING', 'ISSUE_HANDLING', 'DELIVERED', 'COMPLETED',
+  'PENDING', 'APPROVED', 'REJECTED', 'CANCELLED', 'PREPARING', 'SHIPPING', 'ISSUE_HANDLING', 'DELIVERED', 'COMPLETED',
 ]);
 
 const STATUS_LABELS = Object.freeze({
-  PENDING: 'Chờ duyệt', APPROVED: 'Đã duyệt', REJECTED: 'Đã từ chối',
+  PENDING: 'Chờ duyệt', APPROVED: 'Đã duyệt', REJECTED: 'Đã từ chối', CANCELLED: 'Đã hủy',
   PREPARING: 'Đang soạn đơn', SHIPPING: 'Đang vận chuyển',
   ISSUE_HANDLING: 'Đang kiểm hàng', DELIVERED: 'Đã giao', COMPLETED: 'Hoàn tất',
 });
@@ -23,6 +23,7 @@ const TRANSITIONS = Object.freeze({
   DELIVERED: ['COMPLETED'],
   COMPLETED: [],
   REJECTED: [],
+  CANCELLED: [],
 });
 
 function numberValue(value) {
