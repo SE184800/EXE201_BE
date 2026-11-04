@@ -373,7 +373,7 @@ function createOrderRoutes(prisma, requireAuth) {
       if (!current) throw problem(404, 'Không tìm thấy đơn hàng.');
 
       if (fullyPaidByWallet(current)) throw problem(409, 'Đơn đã trả đủ bằng ví, không cần trả thêm.');
-      if (current.complaint && ['OPEN', 'IN_REVIEW'].includes(current.complaint.status)) throw problem(409, 'Cần xử lý xong sự cố trước khi trả tiền.');
+      if (current.complaint && ['OPEN', 'IN_REVIEW', 'ESCALATED'].includes(current.complaint.status)) throw problem(409, 'Đơn hàng đang có khiếu nại hoặc tranh chấp chờ xử lý.');
       const driverInfo = deliveryService.getDriverInfo(id);
       const previous = driverInfo?.paymentInfo;
       if (['PENDING_SUPPLIER_CONFIRM', 'CONFIRMED'].includes(previous?.status)) {
@@ -437,7 +437,7 @@ function createOrderRoutes(prisma, requireAuth) {
             throw problem(409, 'Nhận hàng và trả đủ tiền trước khi hoàn tất.');
           }
         }
-        if (current.complaint && ['OPEN', 'IN_REVIEW'].includes(current.complaint.status)) throw problem(409, 'Cần xử lý xong sự cố trước khi hoàn tất đơn.');
+        if (current.complaint && ['OPEN', 'IN_REVIEW', 'ESCALATED'].includes(current.complaint.status)) throw problem(409, 'Đơn hàng đang có khiếu nại hoặc tranh chấp chờ xử lý.');
         // driver already fetched above
         if (due > 0 && driver?.paymentInfo?.status !== 'CONFIRMED' && !fullyPaidByWallet(current, driver)) throw problem(409, 'Chủ vựa chưa xác nhận tiền thanh toán.');
         if (current.orderPayment?.refund) throw problem(409, 'Đơn đã hoàn tiền, không thể hoàn tất.');

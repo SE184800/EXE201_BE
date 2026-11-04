@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const { requireRole } = require('../middlewares/authMiddleware');
 const { walletService, refundPaidOrder } = require('../services/walletService');
 const { sendComplaintNoticeEmail } = require('../services/complaintMailService');
+const systemConfigService = require('../services/systemConfigService');
 
 const COMPLAINT_REASONS = new Set([
   'DAMAGED',
@@ -116,6 +117,18 @@ function createComplaintRoutes(prisma, requireAuth) {
         return res.status(404).json({ message: 'Chỉ được báo cáo đơn hàng đang vận chuyển, tiếp nhận xử lý hoặc đã giao.' });
       }
 
+      if (order.status === 'DELIVERED' && order.deliveredAt) {
+        const sysConfig = systemConfigService.getConfig();
+        const maxComplaintHours = sysConfig.orderAndDelivery?.complaintWindowHours ?? 24;
+        const diffMs = Date.now() - new Date(order.deliveredAt).getTime();
+        const diffHours = diffMs / (1000 * 60 * 60);
+        if (diffHours > maxComplaintHours) {
+          return res.status(400).json({
+            message: `Đơn hàng đã quá thời hạn cho phép khiếu nại (${maxComplaintHours} giờ kể từ khi nhận hàng).`,
+          });
+        }
+      }
+
       const existing = await prisma.orderComplaint.findUnique({ where: { orderId } });
       if (existing) {
         return res.status(409).json({ message: 'Đơn hàng này đã có báo cáo khiếu nại trước đó.' });
@@ -201,6 +214,16 @@ function createComplaintRoutes(prisma, requireAuth) {
         include: { order: { include: { items: true, buyer: true } } },
       });
       if (!complaint) return res.status(404).json({ message: 'Không tìm thấy khiếu nại của đơn hàng.' });
+
+      if (complaint.status === 'RESOLVED') {
+        return res.status(400).json({ message: 'Khiếu nại này đã được xử lý hoàn tất trước đó.' });
+      }
+      if (complaint.status === 'ESCALATED') {
+        return res.status(400).json({ message: 'Cửa hàng đã kháng cáo khiếu nại lên Quản trị viên, chủ vựa không thể can thiệp trong lúc chờ phân xử.' });
+      }
+      if (['ADMIN_RESOLVED_BUYER', 'ADMIN_RESOLVED_SUPPLIER'].includes(complaint.status)) {
+        return res.status(400).json({ message: 'Khiếu nại này đã được Quản trị viên giải quyết dứt điểm.' });
+      }
 
       const { resolutionType, deductAmount, note, items } = req.body || {};
       const order = complaint.order;
@@ -412,6 +435,13 @@ function createComplaintRoutes(prisma, requireAuth) {
       });
       if (!c) return res.status(404).json({ message: 'Không tìm thấy khiếu nại.' });
 
+      if (['RESOLVED', 'ADMIN_RESOLVED_BUYER', 'ADMIN_RESOLVED_SUPPLIER'].includes(c.status)) {
+        return res.status(400).json({ message: 'Khiếu nại này đã được xử lý hoàn tất.' });
+      }
+      if (c.status === 'ESCALATED') {
+        return res.status(400).json({ message: 'Khiếu nại đang chờ Quản trị viên phân xử, không thể thay đổi trạng thái.' });
+      }
+
       const status = ['IN_REVIEW', 'RESOLVED', 'REJECTED'].includes(req.body?.status) ? req.body.status : null;
       if (!status) return res.status(400).json({ message: 'Trạng thái không hợp lệ.' });
       const response = typeof req.body.response === 'string' ? req.body.response.trim() : '';
@@ -479,6 +509,12 @@ function createComplaintRoutes(prisma, requireAuth) {
       });
       if (!complaint || complaint.buyerId !== req.auth.user.id) {
         return res.status(404).json({ message: 'Không tìm thấy khiếu nại này.' });
+      }
+      if (complaint.status === 'ESCALATED') {
+        return res.status(400).json({ message: 'Khiếu nại này đã được gửi lên Quản trị viên trước đó và đang trong quá trình thụ lý.' });
+      }
+      if (['ADMIN_RESOLVED_BUYER', 'ADMIN_RESOLVED_SUPPLIER', 'RESOLVED'].includes(complaint.status)) {
+        return res.status(400).json({ message: 'Khiếu nại này đã được giải quyết dứt điểm, không thể kháng cáo.' });
       }
       if (!['REJECTED', 'OPEN', 'IN_REVIEW'].includes(complaint.status)) {
         return res.status(400).json({ message: 'Khiếu nại này hiện không ở trạng thái có thể kháng cáo.' });

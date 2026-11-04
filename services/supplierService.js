@@ -447,12 +447,18 @@ function createSupplierService(prisma) {
     }
     const profile = await requireProfile(userId);
     const order = await prisma.wholesaleOrder.findFirst({
-      where: { id: orderId, supplierId: profile.id }, include: { buyer: true, items: true },
+      where: { id: orderId, supplierId: profile.id }, include: { buyer: true, items: true, complaint: true },
     });
     if (!order) return null;
     if (!TRANSITIONS[order.status].includes(status)) {
       const error = new Error(`Không thể chuyển đơn từ ${STATUS_LABELS[order.status]} sang ${STATUS_LABELS[status]}.`);
       error.code = 'INVALID_ORDER_TRANSITION';
+      throw error;
+    }
+    if (status === 'COMPLETED' && order.complaint && ['OPEN', 'IN_REVIEW', 'ESCALATED'].includes(order.complaint.status)) {
+      const error = new Error('Đơn hàng đang có sự cố khiếu nại chưa được xử lý xong. Hãy giải quyết khiếu nại trước.');
+      error.code = 'COMPLAINT_UNRESOLVED';
+      error.status = 409;
       throw error;
     }
     if (driverInfo) {

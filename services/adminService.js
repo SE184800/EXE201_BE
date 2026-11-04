@@ -731,6 +731,9 @@ function createAdminService(prisma, config) {
       },
     });
     if (!complaint) throw problem(404, 'Không tìm thấy khiếu nại.');
+    if (['ADMIN_RESOLVED_BUYER', 'ADMIN_RESOLVED_SUPPLIER'].includes(complaint.status)) {
+      throw problem(400, 'Khiếu nại này đã được Quản trị viên phân xử hoàn tất trước đó.');
+    }
     const order = complaint.order;
     const depositAmt = Number(order.depositAmount || 0);
 
