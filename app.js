@@ -30,6 +30,7 @@ const { createContractRoutes } = require('./routes/contractRoutes');
 const { createTaxRoutes } = require('./routes/taxRoutes');
 const { createWalletRoutes, createAdminWalletRoutes } = require('./routes/walletRoutes');
 const { createSubscriptionGate } = require('./middlewares/subscriptionMiddleware');
+const { createNotificationRoutes } = require('./routes/notificationRoutes');
 
 function createApp(prisma, config) {
   const app = express();
@@ -147,6 +148,7 @@ function createApp(prisma, config) {
       '/restock',
       '/advisor',
       '/wallet',
+      '/notifications',
     ];
     const isProtected = protectedRoots.some(root => req.path === root || req.path.startsWith(`${root}/`));
     if (!isProtected) return next();

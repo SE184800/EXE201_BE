@@ -1,3 +1,4 @@
+const notificationService = require('../services/notificationService');
 const express = require('express');
 const { createHash } = require('node:crypto');
 const { Prisma } = require('@prisma/client');
@@ -177,6 +178,31 @@ function createOrderRoutes(prisma, requireAuth) {
         await audit(tx, buyerId, 'ORDER_CREATED', 'ORDER', created.id, { supplierId: supplier.id, subtotal: subtotal.toString(), commissionRate: settings.commissionRate.toString(), depositRate: String(depositRate), depositAmount: depositAmount.toString() });
         return created;
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      
+      try {
+        const supProf = await prisma.supplierProfile.findUnique({ where: { id: supplierId }, select: { userId: true, businessName: true } });
+        if (supProf?.userId) {
+          notificationService.createNotification({
+            userId: supProf.userId,
+            title: `Đơn hàng mới #${order.id}`,
+            message: `Tiệm ${recipientName || 'Tạp hóa'} vừa đặt đơn hàng mới trị giá ${Number(order.total).toLocaleString('vi-VN')} ₫. Vui lòng kiểm tra và xử lý.`,
+            type: 'ORDER_CREATED',
+            orderId: order.id,
+            link: '/supplier/orders',
+          });
+        }
+        notificationService.createNotification({
+          userId: buyerId,
+          title: `Đặt đơn hàng #${order.id} thành công`,
+          message: `Đơn hàng trị giá ${Number(order.total).toLocaleString('vi-VN')} ₫ gửi tới ${supProf?.businessName || 'Nhà cung cấp'} đang chờ duyệt.`,
+          type: 'ORDER_CREATED',
+          orderId: order.id,
+          link: '/workspace/store',
+        });
+      } catch (e) {
+        console.error('Lỗi gửi thông báo tạo đơn:', e.message);
+      }
+
       res.status(201).json({ order: serialize(order) });
     } catch (error) {
       if (error.code === 'P2002' || error.code === 'P2034') {

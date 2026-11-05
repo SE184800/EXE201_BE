@@ -1,3 +1,4 @@
+const notificationService = require('./notificationService');
 const { audit, problem, httpsDocument, verificationComplete } = require('./platformPolicy');
 const { moderateContent } = require('./contentModerationService');
 const deliveryService = require('./deliveryService');
@@ -500,6 +501,60 @@ function createSupplierService(prisma) {
         },
       });
       if (!changed.count) throw Object.assign(new Error('Đơn đã được xử lý. Vui lòng tải lại.'), { code: 'INVALID_ORDER_TRANSITION' });
+      try {
+        if (status === 'APPROVED') {
+          notificationService.createNotification({
+            userId: order.buyerId,
+            title: `Đơn hàng #${order.id} đã được duyệt`,
+            message: `Chủ vựa ${profile.businessName || ''} đã duyệt đơn hàng #${order.id}. Hàng đang được chuẩn bị.`,
+            type: 'ORDER_APPROVED',
+            orderId: order.id,
+            link: '/workspace/store',
+          });
+        } else if (status === 'REJECTED') {
+          notificationService.createNotification({
+            userId: order.buyerId,
+            title: `Đơn hàng #${order.id} bị từ chối`,
+            message: `Chủ vựa đã từ chối đơn hàng #${order.id}. Lý do: ${normalizedRejectReason || 'Không có lý do'}.`,
+            type: 'ORDER_REJECTED',
+            orderId: order.id,
+            link: '/workspace/store',
+          });
+        } else if (status === 'PREPARING') {
+          notificationService.createNotification({
+            userId: order.buyerId,
+            title: `Đơn hàng #${order.id} đang soạn hàng`,
+            message: `Chủ vựa đang kiểm tra và đóng gói đơn hàng #${order.id}.`,
+            type: 'ORDER_PREPARING',
+            orderId: order.id,
+            link: '/workspace/store',
+          });
+        } else if (status === 'SHIPPING') {
+          const driver = deliveryService.getDriverInfo(order.id);
+          const driverText = driver?.driverName ? ` (Tài xế: ${driver.driverName} - ${driver.driverPhone})` : '';
+          const etaText = driver?.estimatedDeliveryTime ? ` Dự kiến giao: ${driver.estimatedDeliveryTime}.` : '';
+          notificationService.createNotification({
+            userId: order.buyerId,
+            title: `Đơn hàng #${order.id} đang được giao`,
+            message: `Đơn hàng #${order.id} đang trên đường giao đến bạn${driverText}.${etaText}`,
+            type: 'ORDER_SHIPPING',
+            orderId: order.id,
+            link: '/workspace/store',
+          });
+        } else if (status === 'COMPLETED') {
+          notificationService.createNotification({
+            userId: order.buyerId,
+            title: `Đơn hàng #${order.id} đã hoàn tất`,
+            message: `Đơn hàng #${order.id} đã hoàn tất thành công.`,
+            type: 'ORDER_COMPLETED',
+            orderId: order.id,
+            link: '/workspace/store',
+          });
+        }
+      } catch (err) {
+        console.error('Lỗi tạo thông báo trạng thái đơn:', err.message);
+      }
+
       if (status === 'APPROVED' || (status === 'PREPARING' && order.status === 'PENDING')) {
         for (const item of [...order.items].sort((a, b) => a.productId - b.productId)) {
           const result = await transaction.supplierProduct.updateMany({
@@ -739,6 +794,17 @@ function createSupplierService(prisma) {
     }
 
     deliveryService.saveIncidentReport(order.id, incidentData);
+    try {
+      notificationService.createNotification({
+        userId: order.buyerId,
+        title: `Sự cố vận chuyển đơn #${order.id}`,
+        message: `Chủ vựa ghi nhận sự cố bể vỡ trên đường giao cho đơn #${order.id}. Phương án: ${action === 'REPLACE_0VND' || !action ? 'Giao bù 0đ' : 'Trừ tiền COD'}.`,
+        type: 'INCIDENT_REPORTED',
+        orderId: order.id,
+        link: '/workspace/store',
+      });
+    } catch {}
+
 
     return {
       success: true,
@@ -763,6 +829,18 @@ function createSupplierService(prisma) {
     if (previous?.status === 'CONFIRMED') return { success: true, paymentInfo: previous, message: 'Đã xác nhận nhận tiền.' };
     if (!['ISSUE_HANDLING', 'DELIVERED'].includes(order.status) || previous?.status !== 'PENDING_SUPPLIER_CONFIRM') throw problem(409, 'Cửa hàng chưa báo trả tiền cho đơn đã nhận.');
     if (!Number.isFinite(Number(previous.amount)) || Math.abs(Number(previous.amount) - paymentDue(order, driverInfo)) > 0.01) throw problem(409, 'Số tiền cần đối chiếu lại trước khi xác nhận.');
+    
+    try {
+      notificationService.createNotification({
+        userId: order.buyerId,
+        title: `Xác nhận nhận tiền đơn #${order.id}`,
+        message: `Chủ vựa đã xác nhận nhận tiền thanh toán cho đơn hàng #${order.id}.`,
+        type: 'PAYMENT_CONFIRMED',
+        orderId: order.id,
+        link: '/workspace/store',
+      });
+    } catch {}
+
     const paymentInfo = deliveryService.savePaymentInfo(order.id, {
       status: 'CONFIRMED',
       supplierConfirmedAt: new Date().toISOString(),

@@ -1,3 +1,4 @@
+const notificationService = require('../services/notificationService');
 const { sqlEnabled, sqlUploadStorage } = require('../services/uploadStorage');
 const express = require('express');
 const multer = require('multer');
@@ -175,6 +176,20 @@ function createComplaintRoutes(prisma, requireAuth) {
         const images = normalizedImageUrl
           ? (normalizedImageUrl.includes('|||') ? normalizedImageUrl.split('|||') : [normalizedImageUrl])
           : [];
+
+        
+      try {
+        if (supplier?.userId) {
+          notificationService.createNotification({
+            userId: supplier.userId,
+            title: `Khiếu nại sự cố đơn #${orderId}`,
+            message: `Cửa hàng ${storeName || 'Tạp hóa'} vừa gửi khiếu nại sự cố (${REASON_LABELS[normalizedReason] || normalizedReason}) cho đơn #${orderId}. Vui lòng xử lý.`,
+            type: 'COMPLAINT_CREATED',
+            orderId: Number(orderId),
+            link: '/supplier/orders',
+          });
+        }
+      } catch {}
 
         sendComplaintNoticeEmail({
           to: supplierEmail,

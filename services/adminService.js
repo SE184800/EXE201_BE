@@ -1,3 +1,4 @@
+const notificationService = require('./notificationService');
 const fs = require('node:fs');
 const path = require('node:path');
 const { Prisma } = require('@prisma/client');
@@ -773,6 +774,31 @@ function createAdminService(prisma, config) {
         },
       });
       await audit(prisma, actorId, 'ADMIN_DISPUTE_RESOLVED', 'COMPLAINT', complaintId, { decision, adminNote, orderId: order.id });
+      try {
+        notificationService.createNotification({
+          userId: order.buyerId,
+          title: `Kết quả phân xử khiếu nại đơn #${order.id}`,
+          message: decision === 'FAVOR_BUYER'
+            ? `Admin đã phân xử: Chấp thuận khiếu nại của bạn và hoàn tiền về Ví.`
+            : `Admin đã phân xử: Bác khiếu nại của bạn. Ghi chú: ${adminNote}.`,
+          type: 'ADMIN_RESOLVED',
+          orderId: order.id,
+          link: '/workspace/store',
+        });
+        if (complaint.supplier?.userId) {
+          notificationService.createNotification({
+            userId: complaint.supplier.userId,
+            title: `Kết quả phân xử khiếu nại đơn #${order.id}`,
+            message: decision === 'FAVOR_BUYER'
+              ? `Admin đã phân xử chấp thuận cho cửa hàng đơn #${order.id}.`
+              : `Admin đã phân xử bác khiếu nại của cửa hàng cho đơn #${order.id}.`,
+            type: 'ADMIN_RESOLVED',
+            orderId: order.id,
+            link: '/supplier/orders',
+          });
+        }
+      } catch {}
+
       return { success: true, complaint: updatedComplaint, message: 'Đã phân xử chấp thuận cho Cửa hàng và hoàn tiền thành công.' };
     } else {
       const supplierUserId = complaint.supplier?.userId;
