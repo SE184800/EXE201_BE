@@ -491,7 +491,7 @@ function createOrderRoutes(prisma, requireAuth) {
       const result = await prisma.$transaction(async tx => {
         const resource = 'SupplyMindOrderInventory:' + id;
         const locked = await tx.$queryRaw`DECLARE @result INT; EXEC @result = sys.sp_getapplock @Resource = ${resource}, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 10000; SELECT @result AS code;`;
-        if (locked[0].code < 0) throw problem(409, 'Đơn đang được nhập kho. Vui lòng thử lại.');
+        if (Array.isArray(locked) && locked.length > 0 && typeof locked[0]?.code === 'number' && locked[0].code < 0) throw problem(409, 'Đơn đang được nhập kho. Vui lòng thử lại.');
         const order = await tx.wholesaleOrder.findFirst({ where: { id, buyerId }, include });
         if (!order) throw problem(404, 'Không tìm thấy đơn hàng.');
         const reason = importBlockReason(order, deliveryService.getDriverInfo(id));

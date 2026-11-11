@@ -1,4 +1,6 @@
 const notificationService = require('./notificationService');
+const storeService = require('./storeService');
+const verificationMailService = require('./verificationMailService');
 const fs = require('node:fs');
 const path = require('node:path');
 const { Prisma } = require('@prisma/client');
@@ -173,8 +175,30 @@ function createAdminService(prisma, config) {
   async function listUsers(query) {
     const { page, skip, take } = pagination(query), q = textFilter(query.q), role = textFilter(query.role), status = textFilter(query.status);
     if (!['', 'STORE_OWNER', 'SUPPLIER'].includes(role) || !['', 'ACTIVE', 'SUSPENDED', 'BANNED'].includes(status)) throw problem(400, 'Vai trò hoặc trạng thái không hợp lệ.');
+
+    const approvedStoreUserIds = storeService
+      .getAllStores()
+      .filter(s => (s.verificationStatus || (s.isConfigured ? 'APPROVED' : 'DRAFT')) === 'APPROVED')
+      .map(s => Number(s.userId))
+      .filter(Boolean);
+
+    let partnerApprovalCondition;
+    if (role === 'SUPPLIER') {
+      partnerApprovalCondition = { supplierProfile: { verificationStatus: 'APPROVED' } };
+    } else if (role === 'STORE_OWNER') {
+      partnerApprovalCondition = { id: { in: approvedStoreUserIds } };
+    } else {
+      partnerApprovalCondition = {
+        OR: [
+          { supplierProfile: { verificationStatus: 'APPROVED' } },
+          { id: { in: approvedStoreUserIds } },
+        ],
+      };
+    }
+
     const where = {
       role: { code: role || { in: ['STORE_OWNER', 'SUPPLIER'] } },
+      ...partnerApprovalCondition,
       ...(status === 'BANNED' ? { isActive: false } : status === 'SUSPENDED' ? { isActive: true, suspendedUntil: { gt: new Date() } } : status === 'ACTIVE' ? activeAccountWhere() : {}),
       ...(q ? { AND: [{ OR: ['username', 'name', 'email', 'phone'].map(field => ({ [field]: { contains: q } })) }] } : {})
     };
@@ -231,24 +255,233 @@ function createAdminService(prisma, config) {
   async function verifications(query) {
     const { page, skip, take } = pagination(query), status = textFilter(query.status), q = textFilter(query.q);
     if (!['', 'DRAFT', 'PENDING', 'APPROVED', 'REJECTED'].includes(status)) throw problem(400, 'Trạng thái xác minh không hợp lệ.');
-    const where = { user: { role: { code: 'SUPPLIER' } }, ...(status ? { verificationStatus: status } : {}), ...(q ? { businessName: { contains: q } } : {}) };
-    const [profiles, total] = await Promise.all([prisma.supplierProfile.findMany({ where, include: { user: { select: userSelect } }, skip, take, orderBy: [{ submittedAt: 'desc' }, { id: 'desc' }] }), prisma.supplierProfile.count({ where })]);
-    return { profiles: profiles.map(p => ({ ...p, deliveryFee: number(p.deliveryFee), deliveryRadiusKm: number(p.deliveryRadiusKm), user: publicAccount(p.user) })), total, page, hasMore: skip + take < total };
+
+    // 1. Fetch suppliers
+    let supplierItems = [];
+    try {
+      const supplierWhere = {
+        user: { role: { code: 'SUPPLIER' } },
+        ...(status ? { verificationStatus: status } : {}),
+      };
+      const suppliers = await prisma.supplierProfile.findMany({
+        where: supplierWhere,
+        include: { user: { select: userSelect } },
+        orderBy: [{ submittedAt: 'desc' }, { id: 'desc' }]
+      });
+      supplierItems = suppliers.map(p => ({
+        id: p.id,
+        userId: p.userId,
+        role: 'SUPPLIER',
+        roleLabel: 'Chủ vựa',
+        businessName: p.businessName,
+        phone: p.user?.phone || '',
+        taxCode: p.taxCode || '',
+        warehouseAddress: p.warehouseAddress || '',
+        region: p.region || null,
+        legalRepresentative: p.legalRepresentative || null,
+        bankName: p.bankName || null,
+        bankAccountNumber: p.bankAccountNumber || null,
+        bankAccountHolder: p.bankAccountHolder || null,
+        bankQrImageUrl: null,
+        verificationDocumentUrl: p.verificationDocumentUrl || null,
+        verificationStatus: p.verificationStatus || 'DRAFT',
+        verificationVersion: p.verificationVersion || 0,
+        verificationNote: p.verificationNote || null,
+        submittedAt: p.submittedAt ? new Date(p.submittedAt).toISOString() : null,
+        reviewedAt: p.reviewedAt ? new Date(p.reviewedAt).toISOString() : null,
+        deliveryFee: number(p.deliveryFee),
+        deliveryRadiusKm: number(p.deliveryRadiusKm),
+        user: publicAccount(p.user),
+      }));
+    } catch (err) {
+      console.error('[ADMIN VERIFICATIONS] Failed to load suppliers:', err.message);
+    }
+
+    // 2. Fetch stores
+    let storeItems = [];
+    try {
+      const allStores = storeService.getAllStores();
+      const storeUserIds = allStores.map(s => s.userId).filter(Boolean);
+      let storeUsers = [];
+      if (storeUserIds.length > 0) {
+        try {
+          storeUsers = await prisma.user.findMany({
+            where: { id: { in: storeUserIds } },
+            select: userSelect,
+          });
+        } catch (err) {
+          // DB offline
+        }
+      }
+      const storeUserMap = new Map(storeUsers.map(u => [u.id, u]));
+
+      storeItems = allStores.map(s => {
+        const u = storeUserMap.get(s.userId);
+        const st = s.verificationStatus || (s.isConfigured ? 'APPROVED' : 'DRAFT');
+        const userObj = u ? publicAccount(u) : {
+          id: s.userId,
+          name: s.storeName,
+          username: 'store_' + s.userId,
+          email: 'store_' + s.userId + '@supplymind.local',
+          phone: s.storePhone,
+          status: 'ACTIVE',
+          role: 'STORE_OWNER',
+          subscription: { status: 'TRIAL', hasAccess: true, accessEndsAt: null, updatedAt: null }
+        };
+        return {
+          id: s.userId,
+          userId: s.userId,
+          role: 'STORE_OWNER',
+          roleLabel: 'Chủ tạp hóa',
+          businessName: s.storeName || 'Tiệm Tạp Hóa',
+          phone: s.storePhone || u?.phone || '',
+          taxCode: s.taxCode || '',
+          warehouseAddress: s.storeAddress || '',
+          region: null,
+          legalRepresentative: s.bankAccountHolder || u?.name || null,
+          bankName: s.bankName || null,
+          bankAccountNumber: s.bankAccountNumber || null,
+          bankAccountHolder: s.bankAccountHolder || null,
+          bankQrImageUrl: s.bankQrImageUrl || null,
+          locationType: s.locationType || null,
+          alleyDetail: s.alleyDetail || null,
+          isAddressVerified: Boolean(s.isAddressVerified),
+          latitude: s.latitude || null,
+          longitude: s.longitude || null,
+          verificationDocumentUrl: null,
+          verificationStatus: st,
+          verificationVersion: s.verificationVersion || 0,
+          verificationNote: s.verificationNote || null,
+          submittedAt: s.submittedAt || s.createdAt || null,
+          reviewedAt: s.reviewedAt || null,
+          deliveryFee: 0,
+          deliveryRadiusKm: 0,
+          user: userObj,
+        };
+      });
+
+      if (status) {
+        storeItems = storeItems.filter(s => s.verificationStatus === status);
+      }
+    } catch (err) {
+      console.error('[ADMIN VERIFICATIONS] Failed to load stores:', err.message);
+    }
+
+    let combined = [...supplierItems, ...storeItems];
+
+    if (q) {
+      const qLower = q.toLowerCase();
+      combined = combined.filter(item =>
+        (item.businessName && item.businessName.toLowerCase().includes(qLower)) ||
+        (item.phone && item.phone.includes(q)) ||
+        (item.taxCode && item.taxCode.toLowerCase().includes(qLower)) ||
+        (item.warehouseAddress && item.warehouseAddress.toLowerCase().includes(qLower)) ||
+        (item.user && item.user.username && item.user.username.toLowerCase().includes(qLower)) ||
+        (item.user && item.user.email && item.user.email.toLowerCase().includes(qLower))
+      );
+    }
+
+    combined.sort((a, b) => {
+      const timeA = a.submittedAt ? new Date(a.submittedAt).getTime() : 0;
+      const timeB = b.submittedAt ? new Date(b.submittedAt).getTime() : 0;
+      if (timeB !== timeA) return timeB - timeA;
+      return b.id - a.id;
+    });
+
+    const total = combined.length;
+    const paginated = combined.slice(skip, skip + take);
+
+    return { profiles: paginated, total, page, hasMore: skip + take < total };
   }
   async function review(actorId, id, body) {
     const note = textFilter(body.note, 500);
     if (!['APPROVED', 'REJECTED'].includes(body.status) || !Number.isInteger(body.version) || note.length < 3) throw problem(400, 'Chọn kết quả và nhập nhận xét từ 3–500 ký tự.');
+
+    let isStore = body.role === 'STORE_OWNER';
+    if (!isStore && body.role !== 'SUPPLIER') {
+      const allStores = storeService.getAllStores();
+      if (allStores.some(s => s.userId === id)) {
+        isStore = true;
+      }
+    }
+
+    if (isStore) {
+      const store = storeService.updateStoreVerification(id, {
+        status: body.status,
+        note,
+        actorId,
+        expectedVersion: body.version,
+      });
+
+      let userEmail = null;
+      let userName = store.storeName;
+      try {
+        const u = await prisma.user.findUnique({ where: { id } });
+        if (u) {
+          userEmail = u.email;
+          if (u.name) userName = u.name;
+        }
+      } catch (err) {
+        // DB fallback
+      }
+      if (!userEmail) {
+        userEmail = 'store_' + id + '@supplymind.local';
+      }
+
+      if (body.status === 'APPROVED') {
+        await verificationMailService.sendVerificationApprovedEmail({
+          to: userEmail,
+          recipientName: userName,
+          roleLabel: 'Chủ tạp hóa',
+        });
+      } else {
+        await verificationMailService.sendVerificationRejectedEmail({
+          to: userEmail,
+          recipientName: userName,
+          roleLabel: 'Chủ tạp hóa',
+          reason: note,
+        });
+      }
+
+      return {
+        message: body.status === 'APPROVED'
+          ? 'Đã duyệt hồ sơ tiệm tạp hóa thành công.'
+          : 'Đã từ chối hồ sơ tiệm tạp hóa và yêu cầu bổ sung.',
+        profile: store,
+      };
+    }
+
     return prisma.$transaction(async tx => {
       const profile = await tx.supplierProfile.findUnique({ where: { id }, include: { user: { include: { role: true } } } });
       if (!profile) throw problem(404, 'Không tìm thấy hồ sơ.');
-      if (profile.user.role.code !== 'SUPPLIER' || !['PENDING', 'APPROVED'].includes(profile.verificationStatus) || (body.status === 'APPROVED' && profile.verificationStatus !== 'PENDING')) throw problem(409, 'Hồ sơ chưa gửi duyệt hoặc đã được xử lý.');
+      if (profile.user.role.code !== 'SUPPLIER' || !['PENDING', 'APPROVED', 'REJECTED'].includes(profile.verificationStatus) || (body.status === 'APPROVED' && profile.verificationStatus !== 'PENDING')) throw problem(409, 'Hồ sơ chưa gửi duyệt hoặc đã được xử lý.');
       if (body.status === 'APPROVED' && (!verificationComplete(profile) || state(profile.user) !== 'ACTIVE')) throw problem(409, 'Hồ sơ thiếu thông tin hoặc tài khoản đang bị khóa.');
       const changed = await tx.supplierProfile.updateMany({ where: { id, verificationVersion: body.version, verificationStatus: profile.verificationStatus }, data: { verificationStatus: body.status, verificationNote: note, reviewedAt: new Date(), reviewedBy: actorId, verificationVersion: { increment: 1 } } });
       if (!changed.count) throw problem(409, 'Hồ sơ đã thay đổi. Tải lại trước khi duyệt.');
       await audit(tx, actorId, 'SUPPLIER_VERIFICATION_REVIEWED', 'SUPPLIER', id, { before: profile.verificationStatus, after: body.status, note });
+
+      const userEmail = profile.user.email;
+      if (userEmail) {
+        if (body.status === 'APPROVED') {
+          await verificationMailService.sendVerificationApprovedEmail({
+            to: userEmail,
+            recipientName: profile.businessName || profile.user.name,
+            roleLabel: 'Chủ vựa',
+          });
+        } else {
+          await verificationMailService.sendVerificationRejectedEmail({
+            to: userEmail,
+            recipientName: profile.businessName || profile.user.name,
+            roleLabel: 'Chủ vựa',
+            reason: note,
+          });
+        }
+      }
+
       return { message: body.status === 'APPROVED' ? 'Đã duyệt hồ sơ, gian hàng có thể mở bán.' : 'Đã từ chối hoặc thu hồi quyền mở bán.' };
     }, { isolationLevel: 'Serializable' });
   }
+
   async function settings() { const row = await prisma.platformSetting.findUniqueOrThrow({ where: { id: 1 } }); return { ...row, commissionRate: number(row.commissionRate) }; }
   async function changeRate(actorId, body) {
     const rate = body.commissionRate;

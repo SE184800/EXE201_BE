@@ -19,6 +19,12 @@ const DEFAULT_STORE_PROFILES = {
     longitude: 106.660172,
     isAddressVerified: true,
     isConfigured: true,
+    verificationStatus: 'APPROVED',
+    verificationNote: 'Hồ sơ hợp lệ, đã xác minh.',
+    verificationVersion: 1,
+    submittedAt: '2026-01-01T00:00:00.000Z',
+    reviewedAt: '2026-01-01T00:00:00.000Z',
+    reviewedBy: 1,
     bankName: 'Vietcombank',
     bankAccountNumber: '0071001234567',
     bankAccountHolder: 'TIEM TAP HOA AN KHANG',
@@ -135,6 +141,12 @@ function getStoreProfile(userId, defaultPhone = '') {
       longitude: null,
       isAddressVerified: false,
       isConfigured: false,
+      verificationStatus: 'DRAFT',
+      verificationNote: null,
+      verificationVersion: 0,
+      submittedAt: null,
+      reviewedAt: null,
+      reviewedBy: null,
       bankName: null,
       bankAccountNumber: null,
       bankAccountHolder: null,
@@ -265,12 +277,32 @@ function saveStoreProfile(userId, body) {
   const data = loadData();
   const key = String(userId);
   const now = new Date().toISOString();
+  const current = data.stores[key] || {};
+
+  const isResubmit = current.verificationStatus === 'REJECTED' || body?.resubmit === true;
+  let verificationStatus = current.verificationStatus || 'DRAFT';
+  let submittedAt = current.submittedAt || null;
+  let verificationNote = current.verificationNote || null;
+  let verificationVersion = current.verificationVersion || 0;
+
+  if (isResubmit) {
+    verificationStatus = 'PENDING';
+    submittedAt = now;
+    verificationNote = null;
+    verificationVersion = (current.verificationVersion || 0) + 1;
+  }
 
   data.stores[key] = {
     userId: Number(userId),
     ...validation.data,
     isConfigured: true,
-    createdAt: data.stores[key]?.createdAt || now,
+    verificationStatus,
+    verificationNote,
+    verificationVersion,
+    submittedAt,
+    reviewedAt: isResubmit ? null : current.reviewedAt || null,
+    reviewedBy: isResubmit ? null : current.reviewedBy || null,
+    createdAt: current.createdAt || now,
     updatedAt: now,
   };
 
@@ -278,9 +310,73 @@ function saveStoreProfile(userId, body) {
   return data.stores[key];
 }
 
+function getAllStores() {
+  const data = loadData();
+  return Object.values(data.stores || {});
+}
+
+function updateStoreVerification(userId, { status, note, actorId, expectedVersion }) {
+  const data = loadData();
+  const key = String(userId);
+  const store = data.stores[key];
+  if (!store) {
+    const error = new Error('Không tìm thấy thông tin cửa hàng.');
+    error.status = 404;
+    throw error;
+  }
+
+  if (expectedVersion !== undefined && store.verificationVersion !== expectedVersion) {
+    const error = new Error('Hồ sơ đã thay đổi. Tải lại trước khi duyệt.');
+    error.status = 409;
+    throw error;
+  }
+
+  store.verificationStatus = status;
+  store.verificationNote = note;
+  store.reviewedAt = new Date().toISOString();
+  store.reviewedBy = actorId;
+  store.verificationVersion = (store.verificationVersion || 0) + 1;
+  store.updatedAt = new Date().toISOString();
+
+  saveData(data);
+  return store;
+}
+
+function setStoreContractSigned(userId) {
+  const data = loadData();
+  const key = String(userId);
+  const store = data.stores[key];
+  if (store) {
+    if (!store.verificationStatus || store.verificationStatus === 'DRAFT') {
+      store.verificationStatus = 'PENDING';
+      store.submittedAt = new Date().toISOString();
+      store.verificationVersion = (store.verificationVersion || 0) + 1;
+      store.updatedAt = new Date().toISOString();
+      saveData(data);
+    }
+    return store;
+  }
+  return null;
+}
+
+function deleteStoreProfile(userId) {
+  const data = loadData();
+  const key = String(userId);
+  if (data.stores[key]) {
+    delete data.stores[key];
+    saveData(data);
+    return true;
+  }
+  return false;
+}
+
 module.exports = {
   getStoreProfile,
   saveStoreProfile,
+  getAllStores,
+  updateStoreVerification,
+  setStoreContractSigned,
+  deleteStoreProfile,
   validateStoreInput,
   normalizePhone,
   normalizeAddress,

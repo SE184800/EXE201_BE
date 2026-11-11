@@ -1401,7 +1401,7 @@ for (const method of ['lockEscrow', 'releaseEscrow', 'refundEscrow', 'confiscate
     const run = async tx => {
       const resource = `SupplyMindEscrow:${orderId}`;
       const result = await tx.$queryRaw`DECLARE @result INT; EXEC @result = sys.sp_getapplock @Resource = ${resource}, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 10000; SELECT @result AS code;`;
-      if (result[0].code < 0) throw problem(409, 'Khoản cọc đang được xử lý. Vui lòng thử lại.');
+      if (Array.isArray(result) && result.length > 0 && typeof result[0]?.code === 'number' && result[0].code < 0) throw problem(409, 'Khoản cọc đang được xử lý. Vui lòng thử lại.');
       const locked = await tx.walletTransaction.findFirst({ where: { orderId, type: TRANSACTION_TYPES.ESCROW_LOCK } });
       if (isLock) {
         if (locked) {

@@ -34,7 +34,7 @@ async function main() {
       users[username] = await tx.user.upsert({ where: { username }, update: {}, create: { username, name: `${tag} ${label}`, email: `${username}@example.invalid`, passwordHash: hash, roleId: role.id } });
     }
     const buyer = users.demo_taphoa_19k, supplier = users.demo_chuvua_19k, admin = users.demo_admin_19k, expired = users.demo_hethan_19k, review = users.demo_choduyet_19k;
-    const profileData = user => ({ userId: user.id, businessName: `${tag} ${user.username}`, warehouseAddress: '120 Lý Thường Kiệt, Phường 7, Quận Tân Bình, TP.HCM', deliveryRadiusKm: 30, deliveryFee: 25000, region: 'TP. Hồ Chí Minh', taxCode: `DEMO${String(user.id).padStart(6, '0')}`, legalRepresentative: user.name, verificationDocumentUrl: 'https://example.com/demo-not-a-real-document.pdf', verificationVersion: 1, submittedAt: at(-10), bankName: 'DEMO - KHÔNG CHUYỂN TIỀN', bankAccountNumber: 'DEMO000000', bankAccountHolder: 'TAI KHOAN MO PHONG' });
+    const profileData = user => ({ userId: user.id, businessName: `${tag} ${user.username}`, warehouseAddress: '120 Lý Thường Kiệt, Phường 7, Quận Tân Bình, TP.HCM', deliveryRadiusKm: 30, deliveryFee: 25000, region: 'TP. Hồ Chí Minh', taxCode: `DEMO${String(user.id).padStart(6, '0')}`, legalRepresentative: user.name, verificationDocumentUrl: 'https://example.com/demo-not-a-real-document.pdf', verificationVersion: 1, submittedAt: at(-10), bankName: 'Vietcombank', bankAccountNumber: '0123456789', bankAccountHolder: 'CHỦ VỰA DEMO' });
     const profile = await tx.supplierProfile.upsert({ where: { userId: supplier.id }, update: {}, create: { ...profileData(supplier), verificationStatus: 'APPROVED', reviewedBy: admin.id, reviewedAt: at(-9) } });
     await tx.supplierProfile.upsert({ where: { userId: review.id }, update: {}, create: { ...profileData(review), verificationStatus: 'PENDING' } });
     for (const user of [buyer, supplier, expired, review]) {
@@ -140,7 +140,7 @@ async function main() {
     const withdrawalNote = `${tag} Yêu cầu rút tiền mô phỏng chờ duyệt`;
     if (!await tx.withdrawalRequest.findFirst({ where: { userId: supplier.id, note: withdrawalNote } })) {
       const amount = 50000, wallet = await tx.wallet.findUniqueOrThrow({ where: { userId: supplier.id } });
-      const withdrawal = await tx.withdrawalRequest.create({ data: { userId: supplier.id, amount, isSandbox: true, bankName: 'SANDBOX', bankAccountNumber: 'DEMO0000', bankAccountHolder: 'DEMO ONLY', note: withdrawalNote } });
+      const withdrawal = await tx.withdrawalRequest.create({ data: { userId: supplier.id, amount, isSandbox: true, bankName: 'Vietcombank', bankAccountNumber: '0123456789', bankAccountHolder: 'CHỦ VỰA DEMO', note: withdrawalNote } });
       await tx.wallet.update({ where: { id: wallet.id }, data: { balance: { decrement: amount }, heldBalance: { increment: amount } } });
       await tx.walletTransaction.create({ data: { walletId: wallet.id, userId: supplier.id, type: 'WITHDRAWAL_HOLD', direction: 'DEBIT', amount, balanceAfter: Number(wallet.balance) - amount, reference: `DEMO19K-WITHDRAW-${withdrawal.id}`, method: 'SANDBOX', note: withdrawalNote } });
     }

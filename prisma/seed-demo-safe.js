@@ -24,7 +24,7 @@ async function main() {
       deliveryFee: 25000, region: 'TP. Hồ Chí Minh', verificationStatus: 'APPROVED', verificationVersion: 1,
       taxCode: 'DEMO-NOT-REAL', legalRepresentative: supplier.name, verificationDocumentUrl: 'https://example.com/demo.pdf',
       submittedAt: at(-20), reviewedAt: at(-19), reviewedBy: admin.id,
-      bankName: 'NGÂN HÀNG MẪU - KHÔNG CHUYỂN TIỀN', bankAccountNumber: 'DEMO000000', bankAccountHolder: 'TAI KHOAN MO PHONG',
+      bankName: 'Vietcombank', bankAccountNumber: '0123456789', bankAccountHolder: 'CHU VUA DEMO',
     } });
     const catalog = [
       ['Coca-Cola 330ml', 'Đồ uống', 185000, 220000, 8, 3, 90],

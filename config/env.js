@@ -45,10 +45,10 @@ function readConfig(env = process.env) {
   // Bank account that receives the VietQR deposits. Every value is optional so
   // a deployment without the feature simply hides the QR button.
   const qrBank = {
-    code: (env.QR_BANK_CODE || '').trim(),
-    name: (env.QR_BANK_NAME || '').trim(),
-    accountNumber: (env.QR_BANK_ACCOUNT || '').trim(),
-    accountHolder: (env.QR_BANK_HOLDER || '').trim(),
+    code: (env.QR_BANK_CODE || '970403').trim(),
+    name: (env.QR_BANK_NAME || 'Sacombank').trim(),
+    accountNumber: (env.QR_BANK_ACCOUNT || '050138052378').trim(),
+    accountHolder: (env.QR_BANK_HOLDER || 'LE TRAN MINH DUC').trim(),
   };
   const qrEnabled = Boolean(qrBank.code && qrBank.accountNumber && qrBank.accountHolder);
   return {

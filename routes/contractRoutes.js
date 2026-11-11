@@ -6,7 +6,7 @@ const {
   getCanonicalContractText,
   formatRawKey,
 } = require('../services/contractService');
-const { getStoreProfile } = require('../services/storeService');
+const { getStoreProfile, setStoreContractSigned } = require('../services/storeService');
 
 function createContractRoutes(prisma, requireAuth) {
   const router = express.Router();
@@ -109,6 +109,28 @@ function createContractRoutes(prisma, requireAuth) {
         Boolean(agreedTerms),
         { ip: req.ip || req.headers['x-forwarded-for'] || '127.0.0.1' }
       );
+
+      // Transition verification status to PENDING upon contract signing
+      const roleCode = req.auth.user.role?.code || req.auth.user.role || 'STORE_OWNER';
+      if (roleCode === 'STORE_OWNER') {
+        setStoreContractSigned(req.auth.user.id);
+      } else if (roleCode === 'SUPPLIER') {
+        try {
+          await prisma.supplierProfile.updateMany({
+            where: {
+              userId: req.auth.user.id,
+              verificationStatus: { in: ['DRAFT', ''] },
+            },
+            data: {
+              verificationStatus: 'PENDING',
+              submittedAt: new Date(),
+              verificationVersion: { increment: 1 },
+            },
+          });
+        } catch (err) {
+          console.error('[CONTRACT SIGN] Supplier verification update error:', err.message);
+        }
+      }
 
       return res.json({
         success: true,

@@ -160,7 +160,7 @@ function validateProfileInput(body = {}) {
   const hasBankInformation = Object.values(bankFields).some(Boolean);
   if (hasBankInformation) {
     if (bankFields.bankName.length < 2 || bankFields.bankName.length > 100) errors.bankName = 'Tên ngân hàng cần từ 2 đến 100 ký tự.';
-    if (!/^[A-Za-z0-9]{4,34}$/.test(bankFields.bankAccountNumber)) errors.bankAccountNumber = 'Số tài khoản cần 4–34 chữ hoặc số, không có khoảng trắng.';
+    if (!/^\d{6,30}$/.test(bankFields.bankAccountNumber)) errors.bankAccountNumber = 'Số tài khoản cần gồm từ 6 đến 30 chữ số, không có khoảng trắng hay chữ cái.';
     if (bankFields.bankAccountHolder.length < 2 || bankFields.bankAccountHolder.length > 100) errors.bankAccountHolder = 'Tên chủ tài khoản cần từ 2 đến 100 ký tự.';
   }
   if (businessName.length < 2 || businessName.length > 150) errors.businessName = 'Tên gian hàng cần từ 2 đến 150 ký tự.';
