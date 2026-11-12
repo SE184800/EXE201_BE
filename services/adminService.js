@@ -9,6 +9,13 @@ const systemConfigService = require('./systemConfigService');
 const { audit, problem, activeAccountWhere, verificationComplete } = require('./platformPolicy');
 const { walletService, refundPaidOrder } = require('./walletService');
 const { addCalendarMonth, MONTHLY_PRICE } = require('./subscriptionService');
+const deliveryService = require('./deliveryService');
+const {
+  CLOSED_COMPLAINT_STATUSES,
+  getComplaintWorkflow,
+  evaluateAndApplyExpiredTimeouts,
+  deleteWorkflowsByComplaintIds,
+} = require('./complaintWorkflowService');
 const PAGE_SIZE = 20;
 const number = value => Number(value || 0);
 const vnDate = date => new Date(date.getTime() + 7 * 3600000).toISOString().slice(0, 10);
@@ -40,9 +47,24 @@ function period(query) {
   if (end - start > 366 * 86400000) throw problem(400, 'Mỗi báo cáo tối đa 366 ngày.');
   return { from, to, start, end, range: { gte: start, lt: end } };
 }
-function state(user) { return !user.isActive ? 'BANNED' : user.suspendedUntil && user.suspendedUntil > new Date() ? 'SUSPENDED' : 'ACTIVE'; }
+function state(user) { return user.deletedAt ? 'DELETED' : !user.isActive ? 'BANNED' : user.suspendedUntil && user.suspendedUntil > new Date() ? 'SUSPENDED' : 'ACTIVE'; }
+function partnerStatus(user, storeByUserId) {
+  const baseState = state(user);
+  if (baseState !== 'ACTIVE') return baseState;
+  const roleCode = user.role?.code || user.role;
+  if (roleCode === 'SUPPLIER') {
+    return user.supplierProfile?.verificationStatus === 'APPROVED' ? 'ACTIVE' : 'INACTIVE';
+  }
+  if (roleCode === 'STORE_OWNER') {
+    const store = storeByUserId?.get(Number(user.id));
+    const st = store?.verificationStatus || (store?.isConfigured ? 'APPROVED' : 'DRAFT');
+    return st === 'APPROVED' ? 'ACTIVE' : 'INACTIVE';
+  }
+  return baseState;
+}
 const subscriptionSelect = { id: true, status: true, trialStartedAt: true, trialEndsAt: true, currentPeriodStart: true, currentPeriodEnd: true, updatedAt: true };
-const userSelect = { id: true, username: true, name: true, email: true, phone: true, isActive: true, suspendedUntil: true, lockReason: true, createdAt: true, updatedAt: true, role: { select: { code: true } }, subscription: { select: subscriptionSelect } };
+const userSelect = { id: true, username: true, name: true, email: true, phone: true, isActive: true, suspendedUntil: true, lockReason: true, deletedAt: true, createdAt: true, updatedAt: true, role: { select: { code: true } }, subscription: { select: subscriptionSelect } };
+const OPEN_ORDER_EXCLUDE_STATUSES = ['DELIVERED', 'COMPLETED', 'REJECTED', 'CANCELLED'];
 function publicSubscription(subscription, now = new Date()) {
   if (!subscription) return { status: 'NOT_STARTED', hasAccess: true, accessEndsAt: null, updatedAt: null };
   const accessEndsAt = subscription.status === 'TRIAL' ? subscription.trialEndsAt : subscription.currentPeriodEnd;
@@ -174,46 +196,88 @@ function holidayInput(body, requireVersion = false) {
 function createAdminService(prisma, config) {
   async function listUsers(query) {
     const { page, skip, take } = pagination(query), q = textFilter(query.q), role = textFilter(query.role), status = textFilter(query.status);
-    if (!['', 'STORE_OWNER', 'SUPPLIER'].includes(role) || !['', 'ACTIVE', 'SUSPENDED', 'BANNED'].includes(status)) throw problem(400, 'Vai trò hoặc trạng thái không hợp lệ.');
+    if (!['', 'STORE_OWNER', 'SUPPLIER'].includes(role) || !['', 'ACTIVE', 'INACTIVE', 'SUSPENDED', 'BANNED', 'DELETED'].includes(status)) throw problem(400, 'Vai trò hoặc trạng thái không hợp lệ.');
 
-    const approvedStoreUserIds = storeService
-      .getAllStores()
+    const allStores = storeService.getAllStores();
+    const storeByUserId = new Map(allStores.map(s => [Number(s.userId), s]));
+    const approvedStoreUserIds = allStores
       .filter(s => (s.verificationStatus || (s.isConfigured ? 'APPROVED' : 'DRAFT')) === 'APPROVED')
       .map(s => Number(s.userId))
       .filter(Boolean);
 
-    let partnerApprovalCondition;
-    if (role === 'SUPPLIER') {
-      partnerApprovalCondition = { supplierProfile: { verificationStatus: 'APPROVED' } };
-    } else if (role === 'STORE_OWNER') {
-      partnerApprovalCondition = { id: { in: approvedStoreUserIds } };
+    const andConditions = [];
+    if (status === 'DELETED') {
+      andConditions.push({ deletedAt: { not: null } });
     } else {
-      partnerApprovalCondition = {
-        OR: [
-          { supplierProfile: { verificationStatus: 'APPROVED' } },
-          { id: { in: approvedStoreUserIds } },
-        ],
-      };
+      andConditions.push({ deletedAt: null });
+      if (status === 'BANNED') {
+        andConditions.push({ isActive: false });
+      } else if (status === 'SUSPENDED') {
+        andConditions.push({ isActive: true, suspendedUntil: { gt: new Date() } });
+      } else if (status === 'ACTIVE') {
+        andConditions.push(activeAccountWhere(), {
+          OR: [
+            { role: { code: 'SUPPLIER' }, supplierProfile: { is: { verificationStatus: 'APPROVED' } } },
+            { role: { code: 'STORE_OWNER' }, id: { in: approvedStoreUserIds.length ? approvedStoreUserIds : [-1] } },
+          ],
+        });
+      } else if (status === 'INACTIVE') {
+        andConditions.push(activeAccountWhere(), {
+          OR: [
+            {
+              role: { code: 'SUPPLIER' },
+              OR: [{ supplierProfile: { is: null } }, { supplierProfile: { is: { verificationStatus: { not: 'APPROVED' } } } }],
+            },
+            {
+              role: { code: 'STORE_OWNER' },
+              ...(approvedStoreUserIds.length ? { id: { notIn: approvedStoreUserIds } } : {}),
+            },
+          ],
+        });
+      }
+    }
+
+    if (q) {
+      andConditions.push({ OR: ['username', 'name', 'email', 'phone'].map(field => ({ [field]: { contains: q } })) });
     }
 
     const where = {
       role: { code: role || { in: ['STORE_OWNER', 'SUPPLIER'] } },
-      ...partnerApprovalCondition,
-      ...(status === 'BANNED' ? { isActive: false } : status === 'SUSPENDED' ? { isActive: true, suspendedUntil: { gt: new Date() } } : status === 'ACTIVE' ? activeAccountWhere() : {}),
-      ...(q ? { AND: [{ OR: ['username', 'name', 'email', 'phone'].map(field => ({ [field]: { contains: q } })) }] } : {})
+      ...(andConditions.length ? { AND: andConditions } : {}),
     };
-    const [users, total] = await Promise.all([prisma.user.findMany({ where, select: userSelect, skip, take, orderBy: { id: 'desc' } }), prisma.user.count({ where })]);
-    return { users: users.map(publicAccount), total, page, hasMore: skip + take < total };
+    const [users, total] = await Promise.all([
+      prisma.user.findMany({
+        where,
+        select: { ...userSelect, supplierProfile: { select: { verificationStatus: true } } },
+        skip,
+        take,
+        orderBy: { id: 'desc' },
+      }),
+      prisma.user.count({ where }),
+    ]);
+    return {
+      users: users.map(u => {
+        const { supplierProfile: _sp, ...accountBase } = u;
+        return { ...publicAccount(accountBase), status: partnerStatus(u, storeByUserId) };
+      }),
+      total,
+      page,
+      hasMore: skip + take < total,
+    };
   }
+const DEFAULT_ADMIN_REASON = 'Giải quyết vấn đề phát sinh';
+
   async function changeAccount(actorId, id, body) {
-    const reason = textFilter(body.reason, 500);
-    if (!['ACTIVE', 'SUSPENDED', 'BANNED'].includes(body.status) || reason.length < 3 || typeof body.expectedUpdatedAt !== 'string' || !Number.isFinite(Date.parse(body.expectedUpdatedAt))) throw problem(400, 'Chọn trạng thái, nhập lý do từ 3–500 ký tự và tải lại tài khoản trước khi sửa.');
+    const rawReason = textFilter(body.reason, 500);
+    const reason = rawReason || DEFAULT_ADMIN_REASON;
+    if (!['ACTIVE', 'SUSPENDED', 'BANNED'].includes(body.status) || typeof body.expectedUpdatedAt !== 'string' || !Number.isFinite(Date.parse(body.expectedUpdatedAt))) throw problem(400, 'Chọn trạng thái và tải lại tài khoản trước khi sửa.');
     const until = body.status === 'SUSPENDED' && typeof body.suspendedUntil === 'string' ? new Date(body.suspendedUntil) : null;
     if (body.status === 'SUSPENDED' && (!until || !Number.isFinite(until.getTime()) || until <= new Date() || until - new Date() > 366 * 86400000)) throw problem(400, 'Thời hạn khóa phải trong tương lai và tối đa 366 ngày.');
     return prisma.$transaction(async tx => {
       const user = await tx.user.findUnique({ where: { id }, include: { role: true } });
       if (!user) throw problem(404, 'Không tìm thấy tài khoản.');
       if (id === actorId || !['STORE_OWNER', 'SUPPLIER'].includes(user.role.code)) throw problem(403, 'Chỉ quản lý khóa tài khoản chủ tạp hóa và chủ vựa.');
+      if (user.deletedAt) throw problem(409, 'Tài khoản này đã bị xóa, không thể thay đổi trạng thái.');
       const data = { isActive: body.status !== 'BANNED', suspendedUntil: until, lockReason: reason };
       const changed = await tx.user.updateMany({ where: { id, updatedAt: new Date(body.expectedUpdatedAt) }, data });
       if (!changed.count) throw problem(409, 'Tài khoản đã thay đổi. Tải lại danh sách.');
@@ -226,12 +290,12 @@ function createAdminService(prisma, config) {
     }, { isolationLevel: 'Serializable' });
   }
   async function unlockSubscription(actorId, id, body) {
-    const reason = textFilter(body.reason, 500);
-    if (reason.length < 3) throw problem(400, 'Nhập lý do mở khóa từ 3–500 ký tự.');
+    const reason = textFilter(body.reason, 500) || DEFAULT_ADMIN_REASON;
     return prisma.$transaction(async tx => {
       const user = await tx.user.findUnique({ where: { id }, include: { role: true, subscription: true } });
       if (!user) throw problem(404, 'Không tìm thấy tài khoản.');
       if (id === actorId || !['STORE_OWNER', 'SUPPLIER'].includes(user.role.code)) throw problem(403, 'Chỉ cấp quyền sử dụng cho chủ tạp hóa và chủ vựa.');
+      if (user.deletedAt) throw problem(409, 'Tài khoản này đã bị xóa, không thể gia hạn gói sử dụng.');
       if (!user.subscription) throw problem(409, 'Tài khoản chưa bắt đầu tháng dùng thử nên chưa cần mở khóa.');
       const before = publicSubscription(user.subscription);
       if (before.hasAccess) throw problem(409, 'Gói sử dụng của tài khoản vẫn còn hiệu lực.');
@@ -260,7 +324,7 @@ function createAdminService(prisma, config) {
     let supplierItems = [];
     try {
       const supplierWhere = {
-        user: { role: { code: 'SUPPLIER' } },
+        user: { deletedAt: null, role: { code: 'SUPPLIER' } },
         ...(status ? { verificationStatus: status } : {}),
       };
       const suppliers = await prisma.supplierProfile.findMany({
@@ -268,31 +332,35 @@ function createAdminService(prisma, config) {
         include: { user: { select: userSelect } },
         orderBy: [{ submittedAt: 'desc' }, { id: 'desc' }]
       });
-      supplierItems = suppliers.map(p => ({
-        id: p.id,
-        userId: p.userId,
-        role: 'SUPPLIER',
-        roleLabel: 'Chủ vựa',
-        businessName: p.businessName,
-        phone: p.user?.phone || '',
-        taxCode: p.taxCode || '',
-        warehouseAddress: p.warehouseAddress || '',
-        region: p.region || null,
-        legalRepresentative: p.legalRepresentative || null,
-        bankName: p.bankName || null,
-        bankAccountNumber: p.bankAccountNumber || null,
-        bankAccountHolder: p.bankAccountHolder || null,
-        bankQrImageUrl: null,
-        verificationDocumentUrl: p.verificationDocumentUrl || null,
-        verificationStatus: p.verificationStatus || 'DRAFT',
-        verificationVersion: p.verificationVersion || 0,
-        verificationNote: p.verificationNote || null,
-        submittedAt: p.submittedAt ? new Date(p.submittedAt).toISOString() : null,
-        reviewedAt: p.reviewedAt ? new Date(p.reviewedAt).toISOString() : null,
-        deliveryFee: number(p.deliveryFee),
-        deliveryRadiusKm: number(p.deliveryRadiusKm),
-        user: publicAccount(p.user),
-      }));
+      supplierItems = suppliers.map(p => {
+        const baseUser = publicAccount(p.user);
+        const effectiveStatus = baseUser.status === 'ACTIVE' && p.verificationStatus !== 'APPROVED' ? 'INACTIVE' : baseUser.status;
+        return {
+          id: p.id,
+          userId: p.userId,
+          role: 'SUPPLIER',
+          roleLabel: 'Chủ vựa',
+          businessName: p.businessName,
+          phone: p.user?.phone || '',
+          taxCode: p.taxCode || '',
+          warehouseAddress: p.warehouseAddress || '',
+          region: p.region || null,
+          legalRepresentative: p.legalRepresentative || null,
+          bankName: p.bankName || null,
+          bankAccountNumber: p.bankAccountNumber || null,
+          bankAccountHolder: p.bankAccountHolder || null,
+          bankQrImageUrl: null,
+          verificationDocumentUrl: p.verificationDocumentUrl || null,
+          verificationStatus: p.verificationStatus || 'DRAFT',
+          verificationVersion: p.verificationVersion || 0,
+          verificationNote: p.verificationNote || null,
+          submittedAt: p.submittedAt ? new Date(p.submittedAt).toISOString() : null,
+          reviewedAt: p.reviewedAt ? new Date(p.reviewedAt).toISOString() : null,
+          deliveryFee: number(p.deliveryFee),
+          deliveryRadiusKm: number(p.deliveryRadiusKm),
+          user: { ...baseUser, status: effectiveStatus },
+        };
+      });
     } catch (err) {
       console.error('[ADMIN VERIFICATIONS] Failed to load suppliers:', err.message);
     }
@@ -300,7 +368,7 @@ function createAdminService(prisma, config) {
     // 2. Fetch stores
     let storeItems = [];
     try {
-      const allStores = storeService.getAllStores();
+      const allStores = storeService.getAllStores().filter(s => s.isConfigured);
       const storeUserIds = allStores.map(s => s.userId).filter(Boolean);
       let storeUsers = [];
       if (storeUserIds.length > 0) {
@@ -317,8 +385,9 @@ function createAdminService(prisma, config) {
 
       storeItems = allStores.map(s => {
         const u = storeUserMap.get(s.userId);
+        if (u && u.deletedAt) return null;
         const st = s.verificationStatus || (s.isConfigured ? 'APPROVED' : 'DRAFT');
-        const userObj = u ? publicAccount(u) : {
+        const baseUser = u ? publicAccount(u) : {
           id: s.userId,
           name: s.storeName,
           username: 'store_' + s.userId,
@@ -327,6 +396,10 @@ function createAdminService(prisma, config) {
           status: 'ACTIVE',
           role: 'STORE_OWNER',
           subscription: { status: 'TRIAL', hasAccess: true, accessEndsAt: null, updatedAt: null }
+        };
+        const userObj = {
+          ...baseUser,
+          status: baseUser.status === 'ACTIVE' && st !== 'APPROVED' ? 'INACTIVE' : baseUser.status,
         };
         return {
           id: s.userId,
@@ -358,7 +431,7 @@ function createAdminService(prisma, config) {
           deliveryRadiusKm: 0,
           user: userObj,
         };
-      });
+      }).filter(Boolean);
 
       if (status) {
         storeItems = storeItems.filter(s => s.verificationStatus === status);
@@ -394,8 +467,14 @@ function createAdminService(prisma, config) {
     return { profiles: paginated, total, page, hasMore: skip + take < total };
   }
   async function review(actorId, id, body) {
-    const note = textFilter(body.note, 500);
-    if (!['APPROVED', 'REJECTED'].includes(body.status) || !Number.isInteger(body.version) || note.length < 3) throw problem(400, 'Chọn kết quả và nhập nhận xét từ 3–500 ký tự.');
+    const rawNote = textFilter(body.note, 500);
+    const note = body.status === 'APPROVED' ? null : rawNote;
+    if (!['APPROVED', 'REJECTED'].includes(body.status) || !Number.isInteger(body.version)) {
+      throw problem(400, 'Chọn kết quả và tải lại hồ sơ trước khi duyệt.');
+    }
+    if (body.status === 'REJECTED' && rawNote.length < 3) {
+      throw problem(400, 'Vui lòng nhập lý do từ chối từ 3–500 ký tự.');
+    }
 
     let isStore = body.role === 'STORE_OWNER';
     if (!isStore && body.role !== 'SUPPLIER') {
@@ -439,47 +518,51 @@ function createAdminService(prisma, config) {
           to: userEmail,
           recipientName: userName,
           roleLabel: 'Chủ tạp hóa',
-          reason: note,
+          reason: rawNote,
         });
       }
 
       return {
         message: body.status === 'APPROVED'
-          ? 'Đã duyệt hồ sơ tiệm tạp hóa thành công.'
-          : 'Đã từ chối hồ sơ tiệm tạp hóa và yêu cầu bổ sung.',
+          ? 'Đã xác minh hồ sơ tiệm tạp hóa thành công.'
+          : 'Đã chuyển hồ sơ tiệm tạp hóa sang trạng thái Cần điều chỉnh.',
         profile: store,
       };
     }
 
-    return prisma.$transaction(async tx => {
+    const txResult = await prisma.$transaction(async tx => {
       const profile = await tx.supplierProfile.findUnique({ where: { id }, include: { user: { include: { role: true } } } });
       if (!profile) throw problem(404, 'Không tìm thấy hồ sơ.');
-      if (profile.user.role.code !== 'SUPPLIER' || !['PENDING', 'APPROVED', 'REJECTED'].includes(profile.verificationStatus) || (body.status === 'APPROVED' && profile.verificationStatus !== 'PENDING')) throw problem(409, 'Hồ sơ chưa gửi duyệt hoặc đã được xử lý.');
-      if (body.status === 'APPROVED' && (!verificationComplete(profile) || state(profile.user) !== 'ACTIVE')) throw problem(409, 'Hồ sơ thiếu thông tin hoặc tài khoản đang bị khóa.');
+      if (profile.user.role.code !== 'SUPPLIER' || !['PENDING', 'REJECTED'].includes(profile.verificationStatus)) throw problem(409, 'Chỉ có thể xét duyệt hồ sơ ở trạng thái Đang chờ duyệt hoặc Cần điều chỉnh.');
+      if (body.status === 'APPROVED' && state(profile.user) !== 'ACTIVE') throw problem(409, 'Tài khoản đang bị khóa.');
       const changed = await tx.supplierProfile.updateMany({ where: { id, verificationVersion: body.version, verificationStatus: profile.verificationStatus }, data: { verificationStatus: body.status, verificationNote: note, reviewedAt: new Date(), reviewedBy: actorId, verificationVersion: { increment: 1 } } });
       if (!changed.count) throw problem(409, 'Hồ sơ đã thay đổi. Tải lại trước khi duyệt.');
-      await audit(tx, actorId, 'SUPPLIER_VERIFICATION_REVIEWED', 'SUPPLIER', id, { before: profile.verificationStatus, after: body.status, note });
+      await audit(tx, actorId, 'SUPPLIER_VERIFICATION_REVIEWED', 'SUPPLIER', id, { before: profile.verificationStatus, after: body.status, note: rawNote || null });
 
-      const userEmail = profile.user.email;
-      if (userEmail) {
-        if (body.status === 'APPROVED') {
-          await verificationMailService.sendVerificationApprovedEmail({
-            to: userEmail,
-            recipientName: profile.businessName || profile.user.name,
-            roleLabel: 'Chủ vựa',
-          });
-        } else {
-          await verificationMailService.sendVerificationRejectedEmail({
-            to: userEmail,
-            recipientName: profile.businessName || profile.user.name,
-            roleLabel: 'Chủ vựa',
-            reason: note,
-          });
-        }
-      }
-
-      return { message: body.status === 'APPROVED' ? 'Đã duyệt hồ sơ, gian hàng có thể mở bán.' : 'Đã từ chối hoặc thu hồi quyền mở bán.' };
+      return {
+        userEmail: profile.user.email,
+        recipientName: profile.businessName || profile.user.name,
+      };
     }, { isolationLevel: 'Serializable' });
+
+    if (txResult.userEmail) {
+      if (body.status === 'APPROVED') {
+        await verificationMailService.sendVerificationApprovedEmail({
+          to: txResult.userEmail,
+          recipientName: txResult.recipientName,
+          roleLabel: 'Chủ vựa',
+        });
+      } else {
+        await verificationMailService.sendVerificationRejectedEmail({
+          to: txResult.userEmail,
+          recipientName: txResult.recipientName,
+          roleLabel: 'Chủ vựa',
+          reason: rawNote,
+        });
+      }
+    }
+
+    return { message: body.status === 'APPROVED' ? 'Đã xác minh hồ sơ, gian hàng có thể mở bán.' : 'Đã chuyển hồ sơ sang trạng thái Cần điều chỉnh.' };
   }
 
   async function settings() { const row = await prisma.platformSetting.findUniqueOrThrow({ where: { id: 1 } }); return { ...row, commissionRate: number(row.commissionRate) }; }
@@ -764,6 +847,146 @@ function createAdminService(prisma, config) {
     return updated;
   }
 
+  function assertTargetDeletable(actorId, id, user) {
+    if (!user) throw problem(404, 'Không tìm thấy tài khoản người dùng.');
+    if (id === actorId) throw problem(400, 'Không thể tự xóa tài khoản quản trị đang đăng nhập.');
+    if (user.role.code === 'ADMIN') throw problem(403, 'Không được phép xóa tài khoản Quản trị viên.');
+  }
+
+  async function evaluateUserDeletion(tx, user) {
+    const id = user.id;
+    const suppId = user.supplierProfile?.id || null;
+    const orderPartiesWhere = suppId ? { OR: [{ buyerId: id }, { supplierId: suppId }] } : { buyerId: id };
+    const complaintPartiesWhere = suppId ? { OR: [{ buyerId: id }, { supplierId: suppId }] } : { buyerId: id };
+
+    const [
+      openOrders,
+      openOrdersCount,
+      openComplaintsCount,
+      wallet,
+      pendingDepositsCount,
+      pendingWithdrawalsCount,
+      totalOrdersCount,
+      totalComplaintsCount,
+      walletTxCount,
+      depositCount,
+      withdrawalCount,
+      paymentCount,
+      subPaymentCount,
+    ] = await Promise.all([
+      tx.wholesaleOrder.findMany({
+        where: { AND: [orderPartiesWhere, { status: { notIn: OPEN_ORDER_EXCLUDE_STATUSES } }] },
+        select: { id: true, status: true },
+        take: 5,
+        orderBy: { id: 'desc' },
+      }),
+      tx.wholesaleOrder.count({
+        where: { AND: [orderPartiesWhere, { status: { notIn: OPEN_ORDER_EXCLUDE_STATUSES } }] },
+      }),
+      tx.orderComplaint.count({
+        where: { AND: [complaintPartiesWhere, { status: { notIn: CLOSED_COMPLAINT_STATUSES } }] },
+      }),
+      tx.wallet.findUnique({
+        where: { userId: id },
+        select: { id: true, balance: true, heldBalance: true },
+      }),
+      tx.depositRequest.count({ where: { userId: id, status: 'PENDING' } }),
+      tx.withdrawalRequest.count({ where: { userId: id, status: { in: ['PENDING', 'APPROVED'] } } }),
+      tx.wholesaleOrder.count({ where: orderPartiesWhere }),
+      tx.orderComplaint.count({ where: complaintPartiesWhere }),
+      tx.walletTransaction.count({ where: { userId: id } }),
+      tx.depositRequest.count({ where: { userId: id } }),
+      tx.withdrawalRequest.count({ where: { userId: id } }),
+      tx.orderPayment.count({ where: { OR: [{ buyerId: id }, { supplierUserId: id }] } }),
+      tx.subscriptionPayment.count({ where: { subscription: { userId: id } } }),
+    ]);
+
+    const walletBalance = wallet ? number(wallet.balance) : 0;
+    const walletHeldBalance = wallet ? number(wallet.heldBalance) : 0;
+    const pendingRequestsCount = pendingDepositsCount + pendingWithdrawalsCount;
+    const walletClear = walletBalance === 0 && walletHeldBalance === 0 && pendingRequestsCount === 0;
+    const ordersClear = openOrdersCount === 0;
+    const complaintsClear = openComplaintsCount === 0;
+    const alreadyDeleted = Boolean(user.deletedAt);
+
+    const hasTransactionHistory = (
+      totalOrdersCount > 0 ||
+      totalComplaintsCount > 0 ||
+      walletTxCount > 0 ||
+      depositCount > 0 ||
+      withdrawalCount > 0 ||
+      paymentCount > 0 ||
+      subPaymentCount > 0
+    );
+    const mode = hasTransactionHistory ? 'SOFT' : 'HARD';
+    const canDelete = !alreadyDeleted && ordersClear && complaintsClear && walletClear;
+
+    const reasons = [];
+    if (alreadyDeleted) {
+      reasons.push('Tài khoản này đã được xóa trước đó.');
+    }
+    if (!ordersClear) {
+      reasons.push(`Còn ${openOrdersCount} đơn hàng chưa hoàn tất hoặc chưa hủy/từ chối.`);
+    }
+    if (!complaintsClear) {
+      reasons.push(`Còn ${openComplaintsCount} khiếu nại/tranh chấp đang chờ giải quyết.`);
+    }
+    if (walletBalance !== 0 || walletHeldBalance !== 0) {
+      reasons.push(
+        `Số dư ví còn ${walletBalance.toLocaleString('vi-VN')} đ` +
+        (walletHeldBalance !== 0 ? ` (đang tạm giữ ${walletHeldBalance.toLocaleString('vi-VN')} đ)` : '') +
+        '. Phải xử lý hết số dư trước khi xóa.'
+      );
+    }
+    if (pendingRequestsCount > 0) {
+      reasons.push(`Còn ${pendingRequestsCount} yêu cầu nạp/rút tiền đang chờ xử lý.`);
+    }
+
+    return {
+      userId: id,
+      username: user.username,
+      name: user.name,
+      role: user.role.code,
+      canDelete,
+      mode,
+      alreadyDeleted,
+      reasons,
+      checks: {
+        ordersClear,
+        openOrdersCount,
+        openOrderIds: openOrders.map((o) => o.id),
+        complaintsClear,
+        openComplaintsCount,
+        walletClear,
+        walletBalance,
+        walletHeldBalance,
+        pendingDepositsCount,
+        pendingWithdrawalsCount,
+      },
+      history: {
+        hasTransactionHistory,
+        totalOrdersCount,
+        totalComplaintsCount,
+        walletTxCount,
+        depositCount,
+        withdrawalCount,
+        paymentCount,
+        subPaymentCount,
+      },
+    };
+  }
+
+  async function getUserDeletionCheck(actorId, id) {
+    if (!Number.isInteger(id) || id <= 0) throw problem(400, 'Mã tài khoản không hợp lệ.');
+    if (id === actorId) throw problem(400, 'Không thể tự xóa tài khoản quản trị đang đăng nhập.');
+    const user = await prisma.user.findUnique({
+      where: { id },
+      include: { role: true, supplierProfile: { select: { id: true } } },
+    });
+    assertTargetDeletable(actorId, id, user);
+    return evaluateUserDeletion(prisma, user);
+  }
+
   async function deleteUser(actorId, id) {
     if (!Number.isInteger(id) || id <= 0) throw problem(400, 'Mã tài khoản không hợp lệ.');
     if (id === actorId) throw problem(400, 'Không thể tự xóa tài khoản quản trị đang đăng nhập.');
@@ -773,8 +996,50 @@ function createAdminService(prisma, config) {
         where: { id },
         include: { role: true, supplierProfile: true },
       });
-      if (!user) throw problem(404, 'Không tìm thấy tài khoản người dùng.');
-      if (user.role.code === 'ADMIN') throw problem(403, 'Không được phép xóa tài khoản Quản trị viên.');
+      assertTargetDeletable(actorId, id, user);
+      if (user.deletedAt) throw problem(409, 'Tài khoản này đã được xóa trước đó.');
+
+      const evaluation = await evaluateUserDeletion(tx, user);
+      if (!evaluation.canDelete) {
+        throw problem(409, evaluation.reasons.join(' '));
+      }
+
+      if (evaluation.mode === 'SOFT') {
+        await tx.authSession.deleteMany({ where: { userId: id } });
+        await tx.passwordReset.deleteMany({ where: { userId: id } });
+        if (user.supplierProfile) {
+          await tx.supplierProduct.updateMany({
+            where: { supplierId: user.supplierProfile.id, isActive: true },
+            data: { isActive: false },
+          });
+        }
+        const deletedAt = new Date();
+        await tx.user.update({
+          where: { id },
+          data: {
+            deletedAt,
+            isActive: false,
+            suspendedUntil: null,
+            lockReason: 'Tài khoản đã được xóa (lưu trữ lịch sử giao dịch).',
+          },
+        });
+        await audit(tx, actorId, 'USER_SOFT_DELETED_BY_ADMIN', 'USER', id, {
+          deletedUsername: user.username,
+          name: user.name,
+          role: user.role.code,
+          mode: 'SOFT',
+          history: evaluation.history,
+        });
+        return {
+          success: true,
+          mode: 'SOFT',
+          message: `Đã xóa mềm tài khoản "${user.name}" (@${user.username}) và lưu trữ toàn bộ lịch sử đơn hàng, sổ cái ví.`,
+          deletedUser: { id: user.id, username: user.username, name: user.name, deletedAt: deletedAt.toISOString() },
+        };
+      }
+
+      const deletedComplaintIds = [];
+      const deletedOrderIds = [];
 
       const supplierProfile = user.supplierProfile;
       if (supplierProfile) {
@@ -786,7 +1051,21 @@ function createAdminService(prisma, config) {
           select: { id: true },
         });
         const suppOrderIds = suppOrders.map((o) => o.id);
+        const suppComplaints = await tx.orderComplaint.findMany({
+          where: {
+            OR: [
+              { supplierId: suppId },
+              ...(suppOrderIds.length > 0 ? [{ orderId: { in: suppOrderIds } }] : []),
+            ],
+          },
+          select: { id: true, orderId: true },
+        });
+        suppComplaints.forEach((c) => {
+          deletedComplaintIds.push(c.id);
+          deletedOrderIds.push(c.orderId);
+        });
         if (suppOrderIds.length > 0) {
+          suppOrderIds.forEach((oid) => deletedOrderIds.push(oid));
           await tx.orderComplaint.deleteMany({ where: { orderId: { in: suppOrderIds } } });
           await tx.wholesaleOrderItem.deleteMany({ where: { orderId: { in: suppOrderIds } } });
           await tx.wholesaleOrder.deleteMany({ where: { id: { in: suppOrderIds } } });
@@ -832,7 +1111,21 @@ function createAdminService(prisma, config) {
         select: { id: true },
       });
       const buyerOrderIds = buyerOrders.map((o) => o.id);
+      const buyerComplaints = await tx.orderComplaint.findMany({
+        where: {
+          OR: [
+            { buyerId: id },
+            ...(buyerOrderIds.length > 0 ? [{ orderId: { in: buyerOrderIds } }] : []),
+          ],
+        },
+        select: { id: true, orderId: true },
+      });
+      buyerComplaints.forEach((c) => {
+        deletedComplaintIds.push(c.id);
+        deletedOrderIds.push(c.orderId);
+      });
       if (buyerOrderIds.length > 0) {
+        buyerOrderIds.forEach((oid) => deletedOrderIds.push(oid));
         await tx.orderComplaint.deleteMany({ where: { orderId: { in: buyerOrderIds } } });
         await tx.wholesaleOrderItem.deleteMany({ where: { orderId: { in: buyerOrderIds } } });
         await tx.wholesaleOrder.deleteMany({ where: { id: { in: buyerOrderIds } } });
@@ -872,6 +1165,9 @@ function createAdminService(prisma, config) {
         await tx.inventoryItem.deleteMany({ where: { id: { in: itemIds } } });
       }
 
+      // Empty wallet (if opened without transactions)
+      await tx.wallet.deleteMany({ where: { userId: id } });
+
       // Recommendations & AI events
       await tx.recommendationRun.deleteMany({ where: { ownerId: id } });
       await tx.aiUsageEvent.deleteMany({ where: { userId: id } });
@@ -901,22 +1197,39 @@ function createAdminService(prisma, config) {
         deletedUsername: user.username,
         name: user.name,
         role: user.role.code,
+        mode: 'HARD',
       });
 
       return {
         success: true,
-        message: `Đã xóa tài khoản "${user.name}" (@${user.username}) thành công khỏi nền tảng.`,
+        mode: 'HARD',
+        message: `Đã xóa vĩnh viễn tài khoản "${user.name}" (@${user.username}) thành công khỏi nền tảng.`,
         deletedUser: { id: user.id, username: user.username, name: user.name },
+        _cleanup: { complaintIds: deletedComplaintIds, orderIds: deletedOrderIds },
       };
     });
 
-    cleanupUserLocalData(id); return result;
+    if (result.mode === 'HARD') {
+      cleanupUserLocalData(id);
+      if (result._cleanup) {
+        try {
+          deleteWorkflowsByComplaintIds(result._cleanup.complaintIds, result._cleanup.orderIds);
+        } catch {}
+        delete result._cleanup;
+      }
+    }
+    return result;
 
   }
 
   async function listComplaints(query = {}) {
+    await evaluateAndApplyExpiredTimeouts(prisma, {});
     const status = typeof query.status === 'string' && query.status.trim() ? query.status.trim() : undefined;
-    const where = status ? { status } : {};
+    const where = status === 'IN_PROGRESS'
+      ? { status: { in: ['OPEN', 'IN_REVIEW', 'REJECTED', 'ESCALATED'] } }
+      : status === 'AUTO_CLOSED'
+        ? { status: { in: ['CLOSED_TIMEOUT', 'CLOSED_UNRESOLVED'] } }
+        : (status ? { status } : {});
     const complaints = await prisma.orderComplaint.findMany({
       where,
       include: {
@@ -938,133 +1251,21 @@ function createAdminService(prisma, config) {
       },
       orderBy: { updatedAt: 'desc' },
     });
-    return { complaints };
+    return {
+      complaints: complaints.map((c) => ({
+        ...c,
+        workflow: getComplaintWorkflow(c),
+        driverPaymentInfo: deliveryService.getDriverInfo(c.orderId)?.paymentInfo || null,
+      })),
+    };
   }
 
-  async function resolveComplaint(actorId, complaintId, body = {}) {
-    const { decision, note = '' } = body;
-    if (!['FAVOR_BUYER', 'FAVOR_SUPPLIER'].includes(decision)) {
-      throw problem(400, 'Quyết định phân xử phải là FAVOR_BUYER hoặc FAVOR_SUPPLIER.');
-    }
-    const adminNote = typeof note === 'string' && note.trim().length >= 3
-      ? note.trim()
-      : (decision === 'FAVOR_BUYER'
-          ? 'Quản trị viên phân xử: Chấp thuận khiếu nại của Cửa hàng. Hoàn tiền 100% về ví.'
-          : 'Quản trị viên phân xử: Bác bỏ khiếu nại. Cửa hàng vi phạm quy chế giao nhận.');
-
-    const complaint = await prisma.orderComplaint.findUnique({
-      where: { id: complaintId },
-      include: {
-        order: {
-          include: {
-            items: true,
-            orderPayment: { include: { refund: true } },
-          },
-        },
-        supplier: true,
-      },
-    });
-    if (!complaint) throw problem(404, 'Không tìm thấy khiếu nại.');
-    if (['ADMIN_RESOLVED_BUYER', 'ADMIN_RESOLVED_SUPPLIER'].includes(complaint.status)) {
-      throw problem(400, 'Khiếu nại này đã được Quản trị viên phân xử hoàn tất trước đó.');
-    }
-    const order = complaint.order;
-    const depositAmt = Number(order.depositAmount || 0);
-
-    if (decision === 'FAVOR_BUYER') {
-      if (depositAmt > 0 && order.depositStatus === 'PAID') {
-        try {
-          await walletService.refundEscrow(order.buyerId, order.id, depositAmt, `Admin phân xử hoàn cọc đơn #${order.id}: ${adminNote}`);
-        } catch (e) {
-          console.warn('Lỗi hoàn cọc escrow:', e.message);
-        }
-      }
-      const payment = order.orderPayment;
-      if (payment && !payment.refund) {
-        try {
-          await refundPaidOrder(prisma, {
-            orderId: order.id,
-            actorId,
-            reason: adminNote,
-          });
-        } catch (err) {
-          console.warn('Lỗi hoàn tiền ví khi admin phân xử:', err.message);
-        }
-      }
-      const updatedComplaint = await prisma.orderComplaint.update({
-        where: { id: complaintId },
-        data: {
-          status: 'ADMIN_RESOLVED_BUYER',
-          response: (complaint.response ? complaint.response + '\n' : '') + '[Quyết định Admin]: ' + adminNote,
-        },
-      });
-      await prisma.wholesaleOrder.update({
-        where: { id: order.id },
-        data: {
-          status: 'REJECTED',
-          depositStatus: depositAmt > 0 ? 'REFUNDED' : order.depositStatus,
-          rejectReason: 'Admin xử cửa hàng thắng khiếu nại: ' + adminNote,
-        },
-      });
-      await audit(prisma, actorId, 'ADMIN_DISPUTE_RESOLVED', 'COMPLAINT', complaintId, { decision, adminNote, orderId: order.id });
-      try {
-        notificationService.createNotification({
-          userId: order.buyerId,
-          title: `Kết quả phân xử khiếu nại đơn #${order.id}`,
-          message: decision === 'FAVOR_BUYER'
-            ? `Admin đã phân xử: Chấp thuận khiếu nại của bạn và hoàn tiền về Ví.`
-            : `Admin đã phân xử: Bác khiếu nại của bạn. Ghi chú: ${adminNote}.`,
-          type: 'ADMIN_RESOLVED',
-          orderId: order.id,
-          link: '/workspace/store',
-        });
-        if (complaint.supplier?.userId) {
-          notificationService.createNotification({
-            userId: complaint.supplier.userId,
-            title: `Kết quả phân xử khiếu nại đơn #${order.id}`,
-            message: decision === 'FAVOR_BUYER'
-              ? `Admin đã phân xử chấp thuận cho cửa hàng đơn #${order.id}.`
-              : `Admin đã phân xử bác khiếu nại của cửa hàng cho đơn #${order.id}.`,
-            type: 'ADMIN_RESOLVED',
-            orderId: order.id,
-            link: '/supplier/orders',
-          });
-        }
-      } catch {}
-
-      return { success: true, complaint: updatedComplaint, message: 'Đã phân xử chấp thuận cho Cửa hàng và hoàn tiền thành công.' };
-    } else {
-      const supplierUserId = complaint.supplier?.userId;
-      if (depositAmt > 0 && order.depositStatus === 'PAID' && supplierUserId) {
-        try {
-          await walletService.confiscateEscrow(order.buyerId, supplierUserId, order.id, depositAmt, `Admin phân xử cho chủ vựa hưởng cọc đơn #${order.id}: ${adminNote}`);
-        } catch (e) {
-          console.warn('Lỗi tịch thu cọc escrow:', e.message);
-        }
-      }
-      const updatedComplaint = await prisma.orderComplaint.update({
-        where: { id: complaintId },
-        data: {
-          status: 'ADMIN_RESOLVED_SUPPLIER',
-          response: (complaint.response ? complaint.response + '\n' : '') + '[Quyết định Admin]: ' + adminNote,
-        },
-      });
-      await prisma.wholesaleOrder.update({
-        where: { id: order.id },
-        data: {
-          status: 'REJECTED',
-          depositStatus: depositAmt > 0 ? 'RELEASED' : order.depositStatus,
-          rejectReason: 'Admin xử chủ vựa thắng tranh chấp: ' + adminNote,
-        },
-      });
-      await audit(prisma, actorId, 'ADMIN_DISPUTE_RESOLVED', 'COMPLAINT', complaintId, { decision, adminNote, orderId: order.id });
-      return { success: true, complaint: updatedComplaint, message: 'Đã phân xử chấp thuận cho Chủ vựa và giải ngân cọc thành công.' };
-    }
-
+  async function resolveComplaint() {
+    throw problem(410, 'Theo Điều 6 Hợp đồng điện tử, Admin chỉ ghi nhận lịch sử và kết quả thống nhất giữa Tiệm tạp hóa và Chủ vựa, không trực tiếp phân xử thắng/thua.');
   }
 
   return {
-    listUsers, changeAccount, deleteUser, unlockSubscription, verifications, review, settings, changeRate,
+    listUsers, changeAccount, getUserDeletionCheck, deleteUser, unlockSubscription, verifications, review, settings, changeRate,
     settlements, markPaid, analytics, aiMetrics, holidays, createHoliday,
     updateHoliday, deleteHoliday, logs, listModerationQueue, moderateAction,
     getSystemConfig, updateSystemConfig, resetSystemConfig,

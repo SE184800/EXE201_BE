@@ -1,13 +1,28 @@
-const notificationService = require('../services/notificationService');
-const { sqlEnabled, sqlUploadStorage } = require('../services/uploadStorage');
 const express = require('express');
 const multer = require('multer');
 const path = require('node:path');
 const fs = require('node:fs');
+const { Prisma } = require('@prisma/client');
+const notificationService = require('../services/notificationService');
+const { sqlEnabled, sqlUploadStorage } = require('../services/uploadStorage');
 const { requireRole } = require('../middlewares/authMiddleware');
-const { walletService, refundPaidOrder } = require('../services/walletService');
 const { sendComplaintNoticeEmail } = require('../services/complaintMailService');
 const systemConfigService = require('../services/systemConfigService');
+const deliveryService = require('../services/deliveryService');
+const { paymentDue, fullyPaidByWallet } = require('../services/orderPaymentPolicy');
+const { audit } = require('../services/platformPolicy');
+const {
+  CLOSED_COMPLAINT_STATUSES,
+  SUPPLIER_ACTION_LABELS,
+  getComplaintWorkflow,
+  initComplaintWorkflow,
+  recordSupplierProposal,
+  recordBuyerCounter,
+  recordFinalResolution,
+  executeReturnRefundSettlement,
+  executeReplaceOrderSettlement,
+  evaluateAndApplyExpiredTimeouts,
+} = require('../services/complaintWorkflowService');
 
 const COMPLAINT_REASONS = new Set([
   'DAMAGED',
@@ -29,35 +44,59 @@ const REASON_LABELS = {
   OTHER: 'Khác',
 };
 
+const VALID_SUPPLIER_ACTIONS = new Set([
+  'AGREE_REPLACE_0VND',
+  'DEDUCT_COD',
+  'RETURN_REFUND',
+  'DISCUSS',
+  'REJECT',
+]);
+
 const uploadsDir = path.join(__dirname, '../public/uploads');
 if (!sqlEnabled() && !fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-const storage = sqlEnabled() ? sqlUploadStorage('complaint') : multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadsDir);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    const safeExt = ['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(ext) ? ext : '.png';
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    cb(null, `complaint-${uniqueSuffix}${safeExt}`);
-  },
-});
+const storage = sqlEnabled()
+  ? sqlUploadStorage('complaint')
+  : multer.diskStorage({
+      destination: (req, file, cb) => cb(null, uploadsDir),
+      filename: (req, file, cb) => {
+        const ext = path.extname(file.originalname).toLowerCase();
+        const safeExt = ['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(ext) ? ext : '.png';
+        const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+        cb(null, `complaint-${uniqueSuffix}${safeExt}`);
+      },
+    });
 
 const upload = multer({
   storage,
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-    if (allowedMimes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error('Chỉ chấp nhận file ảnh (JPG, PNG, WEBP, GIF).'));
-    }
+    if (allowedMimes.includes(file.mimetype)) cb(null, true);
+    else cb(new Error('Chỉ chấp nhận file ảnh (JPG, PNG, WEBP, GIF).'));
   },
 });
+
+function parseIdParam(rawId) {
+  const id = Number(rawId);
+  return Number.isInteger(id) && id >= 1 && id <= 2147483647 ? id : null;
+}
+
+function formatComplaint(c) {
+  return { ...c, workflow: getComplaintWorkflow(c) };
+}
+
+function appendSafeText(base, addition, maxLength = 1000) {
+  const cleanBase = String(base || '').trim();
+  const cleanAdd = String(addition || '').trim();
+  if (!cleanBase) return cleanAdd.slice(0, maxLength);
+  const combined = `${cleanBase}\n${cleanAdd}`;
+  if (combined.length <= maxLength) return combined;
+  const keepBase = Math.max(0, maxLength - cleanAdd.length - 5);
+  return `${cleanBase.slice(0, keepBase)}...\n${cleanAdd}`.slice(0, maxLength);
+}
 
 function createComplaintRoutes(prisma, requireAuth) {
   const r = express.Router();
@@ -70,23 +109,23 @@ function createComplaintRoutes(prisma, requireAuth) {
           return res.status(400).json({ success: false, message: 'Kích thước ảnh không được vượt quá 5MB.' });
         }
         return res.status(400).json({ success: false, message: err.message });
-      } else if (err) {
-        return res.status(400).json({ success: false, message: err.message });
       }
+      if (err) return res.status(400).json({ success: false, message: err.message });
       if (!req.file) {
         return res.status(400).json({ success: false, message: 'Vui lòng chọn file ảnh để tải lên.' });
       }
-      const imageUrl = `/uploads/${req.file.filename}`;
-      return res.json({ success: true, imageUrl });
+      return res.json({ success: true, imageUrl: `/uploads/${req.file.filename}` });
     });
   });
 
   r.get('/', async (req, res, next) => {
     try {
-      const where = req.auth.user.role.code === 'STORE_OWNER'
+      const where = req.auth.user.role === 'STORE_OWNER'
         ? { buyerId: req.auth.user.id }
         : { supplier: { userId: req.auth.user.id } };
-      res.json({ complaints: await prisma.orderComplaint.findMany({ where, orderBy: { createdAt: 'desc' } }) });
+      await evaluateAndApplyExpiredTimeouts(prisma, where);
+      const list = await prisma.orderComplaint.findMany({ where, orderBy: { createdAt: 'desc' } });
+      res.json({ complaints: list.map(formatComplaint) });
     } catch (e) {
       next(e);
     }
@@ -101,8 +140,6 @@ function createComplaintRoutes(prisma, requireAuth) {
       if (!Number.isInteger(orderId) || !COMPLAINT_REASONS.has(normalizedReason)) {
         return res.status(400).json({ message: 'Lý do báo sự cố chưa hợp lệ.' });
       }
-
-      // Default description if omitted or short (tạp hóa friendly)
       if (normalizedDescription.length < 3) {
         normalizedDescription = REASON_LABELS[normalizedReason] || 'Báo sự cố đơn hàng khi nhận';
       }
@@ -121,8 +158,7 @@ function createComplaintRoutes(prisma, requireAuth) {
       if (order.status === 'DELIVERED' && order.deliveredAt) {
         const sysConfig = systemConfigService.getConfig();
         const maxComplaintHours = sysConfig.orderAndDelivery?.complaintWindowHours ?? 24;
-        const diffMs = Date.now() - new Date(order.deliveredAt).getTime();
-        const diffHours = diffMs / (1000 * 60 * 60);
+        const diffHours = (Date.now() - new Date(order.deliveredAt).getTime()) / (1000 * 60 * 60);
         if (diffHours > maxComplaintHours) {
           return res.status(400).json({
             message: `Đơn hàng đã quá thời hạn cho phép khiếu nại (${maxComplaintHours} giờ kể từ khi nhận hàng).`,
@@ -135,9 +171,10 @@ function createComplaintRoutes(prisma, requireAuth) {
         return res.status(409).json({ message: 'Đơn hàng này đã có báo cáo khiếu nại trước đó.' });
       }
 
-      const normalizedImageUrl = typeof imageUrl === 'string' && imageUrl.trim().length > 0 && imageUrl.trim().length <= 1000
-        ? imageUrl.trim()
-        : null;
+      const normalizedImageUrl =
+        typeof imageUrl === 'string' && imageUrl.trim().length > 0 && imageUrl.trim().length <= 1000
+          ? imageUrl.trim()
+          : null;
 
       const c = await prisma.orderComplaint.create({
         data: {
@@ -145,12 +182,11 @@ function createComplaintRoutes(prisma, requireAuth) {
           buyerId: req.auth.user.id,
           supplierId: order.supplierId,
           reason: normalizedReason,
-          description: normalizedDescription,
+          description: normalizedDescription.slice(0, 1000),
           imageUrl: normalizedImageUrl,
         },
       });
 
-      // If order is currently SHIPPING, update status to ISSUE_HANDLING
       if (order.status === 'SHIPPING') {
         await prisma.wholesaleOrder.update({
           where: { id: orderId },
@@ -158,14 +194,15 @@ function createComplaintRoutes(prisma, requireAuth) {
         });
       }
 
-      // Send email notification to supplier
+      const storeName = req.auth.user.name || req.auth.user.username || 'Tiệm Tạp Hóa';
+      const workflow = initComplaintWorkflow(c, storeName);
+
       try {
         const supplier = await prisma.supplierProfile.findUnique({
           where: { id: order.supplierId },
           include: { user: true },
         });
         const supplierEmail = supplier?.user?.email || 'supplier@supplymind.vn';
-        const storeName = req.auth.user.name || req.auth.user.username || 'Tiệm Tạp Hóa';
         const match = normalizedDescription.match(
           /^\[Sự cố:\s*([^|\]]+)(?:\s*\|\s*Bồi hoàn ước tính:\s*([^|\]]+))?(?:\s*\|\s*Đề xuất:\s*([^|\]]+))?\]\s*\n?([\s\S]*)$/
         );
@@ -174,22 +211,19 @@ function createComplaintRoutes(prisma, requireAuth) {
         const resolutionProposal = match ? match[3]?.trim() : '';
         const details = match ? match[4]?.trim() : normalizedDescription;
         const images = normalizedImageUrl
-          ? (normalizedImageUrl.includes('|||') ? normalizedImageUrl.split('|||') : [normalizedImageUrl])
+          ? normalizedImageUrl.includes('|||') ? normalizedImageUrl.split('|||') : [normalizedImageUrl]
           : [];
 
-        
-      try {
         if (supplier?.userId) {
           notificationService.createNotification({
             userId: supplier.userId,
-            title: `Khiếu nại sự cố đơn #${orderId}`,
-            message: `Cửa hàng ${storeName || 'Tạp hóa'} vừa gửi khiếu nại sự cố (${REASON_LABELS[normalizedReason] || normalizedReason}) cho đơn #${orderId}. Vui lòng xử lý.`,
+            title: `Khiếu nại mới đơn #${orderId}`,
+            message: `Cửa hàng ${storeName} vừa gửi khiếu nại (${REASON_LABELS[normalizedReason] || normalizedReason}). Vui lòng kiểm tra và phản hồi phương án xử lý.`,
             type: 'COMPLAINT_CREATED',
             orderId: Number(orderId),
             link: '/supplier/orders',
-          });
+          }).catch(() => {});
         }
-      } catch {}
 
         sendComplaintNoticeEmail({
           to: supplierEmail,
@@ -207,240 +241,339 @@ function createComplaintRoutes(prisma, requireAuth) {
         console.error('Lỗi tra cứu thông tin gửi email:', err.message);
       }
 
-      res.status(201).json({ complaint: c });
+      return res.status(201).json({ complaint: { ...c, workflow } });
     } catch (e) {
       if (e.code === 'P2002') return res.status(409).json({ message: 'Đơn hàng này đã có báo cáo khiếu nại.' });
       if (e.code === 'P2000') return res.status(400).json({ message: 'Nội dung báo cáo vượt quá giới hạn cho phép.' });
-      next(e);
+      return next(e);
     }
   });
 
-  // Action resolver for Supplier
-  r.post('/:id/resolve', requireRole('SUPPLIER'), async (req, res, next) => {
-    try {
-      const id = Number(req.params.id);
-      if (!Number.isInteger(id) || id < 1) return res.status(400).json({ message: 'Mã khiếu nại không hợp lệ.' });
+  async function applySupplierProposal(req, res, { complaintId, action, deductAmount, note }) {
+    await evaluateAndApplyExpiredTimeouts(prisma, { id: complaintId });
 
-      const profile = await prisma.supplierProfile.findUnique({ where: { userId: req.auth.user.id } });
-      if (!profile) return res.status(404).json({ message: 'Không tìm thấy hồ sơ chủ vựa.' });
+    const profile = await prisma.supplierProfile.findUnique({ where: { userId: req.auth.user.id } });
+    if (!profile) return res.status(404).json({ message: 'Không tìm thấy hồ sơ nhà cung cấp.' });
 
-      const complaint = await prisma.orderComplaint.findFirst({
-        where: { id, supplierId: profile.id },
-        include: { order: { include: { items: true, buyer: true } } },
-      });
-      if (!complaint) return res.status(404).json({ message: 'Không tìm thấy khiếu nại của đơn hàng.' });
+    const c = await prisma.orderComplaint.findFirst({
+      where: { id: complaintId, supplierId: profile.id },
+      include: { order: { include: { items: true, orderPayment: { include: { refund: true } } } } },
+    });
+    if (!c) return res.status(404).json({ message: 'Không tìm thấy khiếu nại.' });
 
-      if (complaint.status === 'RESOLVED') {
-        return res.status(400).json({ message: 'Khiếu nại này đã được xử lý hoàn tất trước đó.' });
+    if (CLOSED_COMPLAINT_STATUSES.includes(c.status)) {
+      return res.status(400).json({ message: 'Khiếu nại này đã kết thúc, không thể cập nhật thêm.' });
+    }
+    if (c.status === 'ESCALATED') {
+      return res.status(400).json({ message: 'Khiếu nại này đang ở trạng thái tranh chấp cũ, không thể cập nhật thêm.' });
+    }
+
+    const wf = getComplaintWorkflow(c);
+    if (wf?.pendingParty && wf.pendingParty !== 'SUPPLIER') {
+      return res.status(409).json({ message: 'Bạn đã gửi phương án ở lượt này. Vui lòng chờ Cửa hàng tạp hóa xác nhận hoặc phản hồi.' });
+    }
+
+    if (!VALID_SUPPLIER_ACTIONS.has(action)) {
+      return res.status(400).json({ message: 'Phương án đề xuất không hợp lệ.' });
+    }
+    const cleanNote = typeof note === 'string' ? note.trim() : '';
+    if (cleanNote.length < 3 || cleanNote.length > 1000) {
+      return res.status(400).json({ message: 'Vui lòng nhập phản hồi chi tiết từ 3 đến 1.000 ký tự.' });
+    }
+
+    let numericDeduct = null;
+    if (action === 'DEDUCT_COD') {
+      const driverInfo = deliveryService.getDriverInfo(c.orderId);
+      if (fullyPaidByWallet(c.order, driverInfo) || driverInfo?.paymentInfo?.status === 'CONFIRMED') {
+        return res.status(400).json({ message: 'Đơn hàng đã thanh toán đủ nên không thể giảm trừ COD. Hãy chọn phương án Hoàn tiền/cọc hoặc Giao bù 0đ.' });
       }
-      if (complaint.status === 'ESCALATED') {
-        return res.status(400).json({ message: 'Cửa hàng đã kháng cáo khiếu nại lên Quản trị viên, chủ vựa không thể can thiệp trong lúc chờ phân xử.' });
-      }
-      if (['ADMIN_RESOLVED_BUYER', 'ADMIN_RESOLVED_SUPPLIER'].includes(complaint.status)) {
-        return res.status(400).json({ message: 'Khiếu nại này đã được Quản trị viên giải quyết dứt điểm.' });
-      }
-
-      const { resolutionType, deductAmount, note, items } = req.body || {};
-      const order = complaint.order;
-      const depositAmt = Number(order.depositAmount) || 0;
-      const orderTotal = Number(order.total) || 0;
-      const remainingCOD = Math.max(0, orderTotal - depositAmt);
-
-      if (resolutionType === 'AGREE_REPLACE_0VND' || resolutionType === 'REPLACE' || resolutionType === 'AGREE_REPLACE') {
-        const itemsToReplace = Array.isArray(items) && items.length > 0
-          ? items
-          : order.items.map((it) => ({
-              productId: it.productId,
-              productName: it.productName,
-              packaging: it.packaging,
-              quantity: it.quantity,
-            }));
-
-        const newOrder = await prisma.wholesaleOrder.create({
-          data: {
-            buyerId: order.buyerId,
-            supplierId: order.supplierId,
-            status: 'PREPARING',
-            subtotal: 0,
-            deliveryFee: 0,
-            total: 0,
-            depositRate: 0,
-            depositAmount: 0,
-            depositStatus: 'NONE',
-            recipientName: order.recipientName,
-            recipientPhone: order.recipientPhone,
-            deliveryAddress: order.deliveryAddress,
-            note: `Đơn giao bổ sung 0đ bù hàng sự cố cho đơn #${order.id}`,
-            items: {
-              create: itemsToReplace.map((it) => ({
-                productId: it.productId,
-                productName: it.productName,
-                packaging: it.packaging || 'Phần',
-                quantity: it.quantity || 1,
-                unitPrice: 0,
-                lineTotal: 0,
-              })),
-            },
-          },
-          include: { items: true },
+      const remainingDue = paymentDue(c.order, driverInfo);
+      numericDeduct = Math.round(Number(deductAmount) || 0);
+      if (!Number.isFinite(numericDeduct) || numericDeduct <= 0 || numericDeduct > remainingDue) {
+        return res.status(400).json({
+          message: `Số tiền giảm trừ COD phải lớn hơn 0 và tối đa ${remainingDue.toLocaleString('vi-VN')} ₫.`,
         });
+      }
+    }
 
-        const resolveMsg = note && note.trim().length >= 3
-          ? note.trim()
-          : `Chủ vựa đã đồng ý giao bù hàng mới và tự động khởi tạo đơn giao bù 0đ #${newOrder.id} cho cửa hàng.`;
+    const actionLabel = SUPPLIER_ACTION_LABELS[action] || action;
+    const deductSuffix = action === 'DEDUCT_COD' && numericDeduct ? ` (-${numericDeduct.toLocaleString('vi-VN')} ₫)` : '';
+    const formattedResponse = `[${actionLabel}${deductSuffix}]: ${cleanNote}`.slice(0, 1000);
 
-        const updatedComplaint = await prisma.orderComplaint.update({
+    const saved = await prisma.orderComplaint.update({
+      where: { id: c.id },
+      data: {
+        status: 'IN_REVIEW',
+        response: formattedResponse,
+      },
+    });
+
+    const updatedWorkflow = recordSupplierProposal(saved, {
+      supplierName: profile.businessName || req.auth.user.name || 'Chủ vựa',
+      action,
+      deductAmount: numericDeduct,
+      note: cleanNote,
+    });
+
+    try {
+      await notificationService.createNotification({
+        userId: c.buyerId,
+        title: `Chủ vựa phản hồi khiếu nại đơn #${c.orderId}`,
+        message: `${profile.businessName} đề xuất: ${actionLabel}${deductSuffix}. Vui lòng kiểm tra và xác nhận phương án.`,
+        type: 'COMPLAINT_RESPONDED',
+        orderId: c.orderId,
+        link: '/orders',
+      });
+    } catch {}
+
+    return res.json({
+      success: true,
+      complaint: { ...saved, workflow: updatedWorkflow },
+      message: 'Đã gửi phương án xử lý tới Cửa hàng tạp hóa để xác nhận đồng thuận.',
+    });
+  }
+
+  r.post('/:id/respond', requireRole('SUPPLIER'), async (req, res, next) => {
+    try {
+      const id = parseIdParam(req.params.id);
+      if (!id) return res.status(400).json({ message: 'Mã báo cáo không hợp lệ.' });
+      const { action = 'DISCUSS', deductAmount, note, response } = req.body || {};
+      return await applySupplierProposal(req, res, {
+        complaintId: id,
+        action: String(action || 'DISCUSS').trim(),
+        deductAmount,
+        note: note ?? response,
+      });
+    } catch (e) {
+      if (e.code === 'P2000') return res.status(400).json({ message: 'Phản hồi vượt quá giới hạn cho phép.' });
+      return next(e);
+    }
+  });
+
+  r.post('/:id/buyer-decision', requireRole('STORE_OWNER'), async (req, res, next) => {
+    try {
+      const id = parseIdParam(req.params.id);
+      if (!id) return res.status(400).json({ message: 'Mã khiếu nại không hợp lệ.' });
+
+      await evaluateAndApplyExpiredTimeouts(prisma, { id });
+
+      const decision = String(req.body?.decision || '').trim().toUpperCase();
+      const note = typeof req.body?.note === 'string' ? req.body.note.trim() : '';
+      if (!['ACCEPT', 'COUNTER', 'CLOSE_UNRESOLVED', 'WITHDRAW'].includes(decision)) {
+        return res.status(400).json({ message: 'Hành động xác nhận không hợp lệ.' });
+      }
+
+      const complaint = await prisma.orderComplaint.findUnique({
+        where: { id },
+        include: {
+          order: { include: { items: true, orderPayment: { include: { refund: true } } } },
+          supplier: { include: { user: true } },
+        },
+      });
+      if (!complaint || complaint.buyerId !== req.auth.user.id) {
+        return res.status(404).json({ message: 'Không tìm thấy khiếu nại này.' });
+      }
+      if (CLOSED_COMPLAINT_STATUSES.includes(complaint.status)) {
+        return res.status(400).json({ message: 'Khiếu nại này đã được giải quyết hoặc tự đóng trước đó.' });
+      }
+
+      const wf = getComplaintWorkflow(complaint);
+      const buyerName = req.auth.user.name || req.auth.user.username || 'Tiệm tạp hóa';
+
+      if (decision === 'WITHDRAW') {
+        const withdrawNote = note.length >= 3 ? note.slice(0, 500) : 'Cửa hàng tạp hóa chủ động rút khiếu nại / đã tự dàn xếp xong.';
+        const saved = await prisma.$transaction(async (tx) => {
+          const updated = await tx.orderComplaint.update({
+            where: { id },
+            data: { status: 'RESOLVED' },
+          });
+          await audit(tx, req.auth.user.id, 'COMPLAINT_WITHDRAWN', 'COMPLAINT', id, { orderId: complaint.orderId, withdrawNote });
+          return updated;
+        });
+        const updatedWf = recordFinalResolution(saved, {
+          actorRole: 'STORE_OWNER',
+          actorName: buyerName,
+          action: 'WITHDRAW',
+          label: 'Tiệm rút khiếu nại — Hoàn thành',
+          finalOutcome: 'STORE_WITHDRAWN',
+          finalSummary: 'Cửa hàng chủ động rút khiếu nại (Hai bên đã xong)',
+          closedReason: withdrawNote,
+        });
+        if (complaint.supplier?.userId) {
+          notificationService.createNotification({
+            userId: complaint.supplier.userId,
+            title: `Khiếu nại đơn #${complaint.orderId} đã hoàn thành`,
+            message: `${buyerName} đã rút khiếu nại / xác nhận kết thúc đơn #${complaint.orderId}.`,
+            type: 'COMPLAINT_RESOLVED',
+            orderId: complaint.orderId,
+            link: '/supplier/orders',
+          }).catch(() => {});
+        }
+        return res.json({ success: true, complaint: { ...saved, workflow: updatedWf }, message: 'Đã rút khiếu nại và mở khóa đơn hàng.' });
+      }
+
+      if (wf?.pendingParty !== 'STORE_OWNER' && complaint.status !== 'REJECTED') {
+        return res.status(409).json({ message: 'Đang chờ Chủ vựa phản hồi ở lượt hiện tại.' });
+      }
+
+      if (decision === 'COUNTER') {
+        if (note.length < 3 || note.length > 500) {
+          return res.status(400).json({ message: 'Vui lòng nhập nội dung đề xuất lại từ 3 đến 500 ký tự.' });
+        }
+
+        const updated = await prisma.orderComplaint.update({
           where: { id },
           data: {
-            status: 'RESOLVED',
-            response: resolveMsg,
+            status: 'IN_REVIEW',
+            description: appendSafeText(complaint.description, `[Phản hồi của Tiệm]: ${note}`, 1000),
           },
         });
+        const updatedWf = recordBuyerCounter(updated, { buyerName, note });
+
+        if (complaint.supplier?.userId) {
+          notificationService.createNotification({
+            userId: complaint.supplier.userId,
+            title: `Tiệm đề xuất lại khiếu nại đơn #${complaint.orderId}`,
+            message: `${buyerName} chưa đồng ý phương án hiện tại và gửi phản hồi trao đổi thêm. Vui lòng xem và đề xuất lại phương án.`,
+            type: 'COMPLAINT_COUNTERED',
+            orderId: complaint.orderId,
+            link: '/supplier/orders',
+          }).catch(() => {});
+        }
 
         return res.json({
           success: true,
-          complaint: updatedComplaint,
-          supplementaryOrder: newOrder,
-          message: resolveMsg,
+          complaint: { ...updated, workflow: updatedWf },
+          message: 'Đã gửi đề xuất lại tới Chủ vựa.',
         });
       }
 
-      if (resolutionType === 'DEDUCT_COD') {
-        const numDeduct = Math.max(0, Number(deductAmount) || 0);
-        if (numDeduct <= 0 || numDeduct > remainingCOD) {
-          return res.status(400).json({
-            message: `Số tiền giảm trừ COD phải lớn hơn 0 và tối đa ${remainingCOD.toLocaleString('vi-VN')} ₫.`,
-          });
-        }
-        const resolveMsg = note && note.trim().length >= 3
-          ? note.trim()
-          : `Đồng ý giảm trừ ${numDeduct.toLocaleString('vi-VN')} ₫ vào tiền COD. Shipper chỉ thu số tiền còn lại: ${(remainingCOD - numDeduct).toLocaleString('vi-VN')} ₫.`;
-
-        const updatedComplaint = await prisma.orderComplaint.update({
-          where: { id },
-          data: {
-            status: 'RESOLVED',
-            response: resolveMsg,
-          },
+      if (decision === 'CLOSE_UNRESOLVED') {
+        return res.status(410).json({
+          message: 'Luồng tự đóng khiếu nại hết lượt hiện đang tạm ngưng; hai bên vui lòng tiếp tục trao đổi để thống nhất phương án hoặc rút khiếu nại.',
         });
-
-        const newNote = order.note
-          ? `${order.note} | [ĐÃ GIẢM TRỪ COD]: -${numDeduct.toLocaleString('vi-VN')} ₫ (Thực thu: ${(remainingCOD - numDeduct).toLocaleString('vi-VN')} ₫)`
-          : `[ĐÃ GIẢM TRỪ COD]: -${numDeduct.toLocaleString('vi-VN')} ₫ (Thực thu: ${(remainingCOD - numDeduct).toLocaleString('vi-VN')} ₫)`;
-
-        await prisma.wholesaleOrder.update({
-          where: { id: order.id },
-          data: { note: newNote },
-        });
-
-        return res.json({ success: true, complaint: updatedComplaint, message: resolveMsg });
       }
 
-      if (resolutionType === 'RETURN_REFUND') {
-        const resolveMsg = note && note.trim().length >= 3
-          ? note.trim()
-          : 'Chủ vựa đồng ý nhận lại hàng và hoàn trả 100% tiền cọc về Ví của tiệm.';
+      // decision === 'ACCEPT': Execute supplier's proposed plan atomically
+      const proposedAction = wf?.proposedAction || 'DISCUSS';
+      const deductAmt = Number(wf?.proposedDeductAmount || 0);
 
-        const updatedComplaint = await prisma.orderComplaint.update({
+      const txResult = await prisma.$transaction(async (tx) => {
+        const fresh = await tx.orderComplaint.findUnique({
           where: { id },
-          data: {
-            status: 'RESOLVED',
-            response: resolveMsg,
+          include: {
+            order: { include: { items: true, orderPayment: { include: { refund: true } } } },
           },
         });
-
-        await prisma.wholesaleOrder.update({
-          where: { id: order.id },
-          data: {
-            status: 'REJECTED',
-            depositStatus: 'REFUNDED',
-            rejectReason: 'Hàng sự cố - Chủ vựa đồng ý nhận lại hàng và hoàn cọc',
-          },
-        });
-
-        // Restock inventory
-        for (const item of order.items) {
-          await prisma.supplierProduct.updateMany({
-            where: { id: item.productId, supplierId: profile.id },
-            data: { stockQty: { increment: item.quantity } },
-          });
+        if (!fresh || CLOSED_COMPLAINT_STATUSES.includes(fresh.status)) {
+          throw Object.assign(new Error('Khiếu nại này đã kết thúc trước đó.'), { status: 409 });
         }
 
-        // Refund escrow to buyer's wallet
-        if (depositAmt > 0 && order.depositStatus === 'PAID') {
-          await walletService.refundEscrow(order.buyerId, order.id, depositAmt, `Hoàn cọc đơn #${order.id} do chủ vựa nhận lại hàng`);
-        }
+        let supplementaryOrder = null;
+        let finalOutcome = 'STORE_ACCEPTED';
+        let finalSummary = 'Hai bên đã thống nhất phương án giải quyết';
+        let agreedDeductAmount = null;
+        const order = fresh.order;
 
-        // Refund order payment if buyer paid via wallet
-        try {
-          const payment = await prisma.orderPayment.findUnique({
-            where: { orderId: order.id },
-            include: { refund: true },
+        if (proposedAction === 'AGREE_REPLACE_0VND') {
+          supplementaryOrder = await executeReplaceOrderSettlement(tx, {
+            order,
+            note: `Đơn giao bổ sung 0đ bù hàng theo thỏa thuận khiếu nại #${id} (Đơn gốc #${order.id})`,
           });
-          if (payment && !payment.refund) {
-            await refundPaidOrder(prisma, {
-              orderId: order.id,
-              actorId: req.auth.user.id,
-              reason: resolveMsg,
-            });
+          finalOutcome = 'AGREED_REPLACE_0VND';
+          finalSummary = `Hai bên thống nhất giao bù hàng mới (Đơn bổ sung 0đ #${supplementaryOrder.id})`;
+        } else if (proposedAction === 'DEDUCT_COD' && deductAmt > 0) {
+          const driverInfo = deliveryService.getDriverInfo(order.id);
+          const remainingDue = paymentDue(order, driverInfo);
+          const appliedDeduct = Math.min(deductAmt, Math.max(0, remainingDue));
+          if (appliedDeduct <= 0) {
+            throw Object.assign(new Error('Đơn hàng không còn số dư COD để giảm trừ.'), { status: 409 });
           }
-        } catch (payRefundErr) {
-          console.warn('Lỗi hoàn tiền ví cho đơn hàng:', payRefundErr.message);
-        }
-
-        return res.json({ success: true, complaint: updatedComplaint, message: resolveMsg });
-      }
-
-      if (resolutionType === 'REJECT_REFUSAL_CLAIM_DEPOSIT') {
-        const resolveMsg = note && note.trim().length >= 3
-          ? note.trim()
-          : 'Bác bỏ khiếu nại: Khách từ chối nhận hàng vô cớ. Tiền cọc được bù đắp chi phí vận chuyển của chủ vựa.';
-
-        const updatedComplaint = await prisma.orderComplaint.update({
-          where: { id },
-          data: {
-            status: 'REJECTED',
-            response: resolveMsg,
-          },
-        });
-
-        await prisma.wholesaleOrder.update({
-          where: { id: order.id },
-          data: {
-            status: 'REJECTED',
-            depositStatus: 'PAID',
-            rejectReason: 'Khách từ chối nhận hàng vô cớ (Bùng đơn)',
-          },
-        });
-
-        // Restock inventory since shipper brought goods back
-        for (const item of order.items) {
-          await prisma.supplierProduct.updateMany({
-            where: { id: item.productId, supplierId: profile.id },
-            data: { stockQty: { increment: item.quantity } },
+          agreedDeductAmount = appliedDeduct;
+          const afterDeduct = Math.max(0, remainingDue - appliedDeduct);
+          const deductNote = `[ĐÃ THỐNG NHẤT GIẢM TRỪ COD KHIẾU NẠI #${id}]: -${appliedDeduct.toLocaleString('vi-VN')} ₫ (Còn phải trả: ${afterDeduct.toLocaleString('vi-VN')} ₫)`;
+          await tx.wholesaleOrder.update({
+            where: { id: order.id },
+            data: {
+              note: order.note ? `${order.note} | ${deductNote}`.slice(0, 500) : deductNote.slice(0, 500),
+            },
           });
+          finalOutcome = 'AGREED_DEDUCT_COD';
+          finalSummary = `Hai bên thống nhất giảm trừ ${appliedDeduct.toLocaleString('vi-VN')} ₫ vào tiền COD`;
+        } else if (proposedAction === 'RETURN_REFUND') {
+          const refundReason = `Hai bên thống nhất trả hàng & hoàn tiền/cọc theo khiếu nại #${id} đơn #${order.id}`;
+          await executeReturnRefundSettlement(tx, {
+            order,
+            supplierId: order.supplierId,
+            actorId: req.auth.user.id,
+            reason: refundReason,
+            rejectReason: refundReason,
+          });
+          finalOutcome = 'AGREED_RETURN_REFUND';
+          finalSummary = 'Hai bên thống nhất trả hàng & hoàn 100% tiền cọc / tiền ví';
+        } else if (proposedAction === 'REJECT') {
+          finalOutcome = 'STORE_ACCEPTED';
+          finalSummary = 'Cửa hàng chấp nhận giải trình từ chối của Chủ vựa & đóng khiếu nại';
         }
 
-        // Confiscate escrow to supplier's wallet
-        if (depositAmt > 0 && order.depositStatus === 'PAID') {
-          await walletService.confiscateEscrow(order.buyerId, req.auth.user.id, order.id, depositAmt, `Bồi thường tiền cọc đơn hàng #${order.id} do khách từ chối nhận vô cớ`);
-        }
+        const updatedComplaint = await tx.orderComplaint.update({
+          where: { id },
+          data: { status: 'RESOLVED' },
+        });
 
-        return res.json({ success: true, complaint: updatedComplaint, message: resolveMsg });
+        await audit(tx, req.auth.user.id, 'COMPLAINT_RESOLVED_CONSENSUS', 'COMPLAINT', id, {
+          orderId: order.id,
+          proposedAction,
+          finalOutcome,
+          agreedDeductAmount,
+          supplementaryOrderId: supplementaryOrder?.id || null,
+        });
+
+        return { updatedComplaint, supplementaryOrder, finalOutcome, finalSummary, agreedDeductAmount };
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+
+      const updatedWf = recordFinalResolution(txResult.updatedComplaint, {
+        actorRole: 'STORE_OWNER',
+        actorName: buyerName,
+        action: 'ACCEPT_PROPOSAL',
+        label: 'Tiệm đồng ý phương án — Hoàn thành',
+        finalOutcome: txResult.finalOutcome,
+        finalSummary: txResult.finalSummary,
+        closedReason: note || txResult.finalSummary,
+        agreedDeductAmount: txResult.agreedDeductAmount,
+        supplementaryOrderId: txResult.supplementaryOrder?.id || null,
+      });
+
+      if (complaint.supplier?.userId) {
+        notificationService.createNotification({
+          userId: complaint.supplier.userId,
+          title: `Khiếu nại đơn #${complaint.orderId} đã thống nhất Hoàn thành`,
+          message: txResult.finalSummary,
+          type: 'COMPLAINT_RESOLVED',
+          orderId: complaint.orderId,
+          link: '/supplier/orders',
+        }).catch(() => {});
       }
 
-      return res.status(400).json({ message: 'Phương án xử lý không hợp lệ.' });
+      return res.json({
+        success: true,
+        complaint: { ...txResult.updatedComplaint, workflow: updatedWf },
+        supplementaryOrder: txResult.supplementaryOrder,
+        message: txResult.finalSummary,
+      });
     } catch (e) {
-      next(e);
+      return next(e);
     }
   });
 
+  // Backward-compatible PATCH endpoint (used by existing supplier PATCH tests)
   r.patch('/:id', requireRole('SUPPLIER'), async (req, res, next) => {
     try {
-      const id = Number(req.params.id);
-      if (!Number.isInteger(id) || id < 1 || id > 2147483647) {
-        return res.status(400).json({ message: 'Mã báo cáo không hợp lệ.' });
-      }
+      const id = parseIdParam(req.params.id);
+      if (!id) return res.status(400).json({ message: 'Mã báo cáo không hợp lệ.' });
+
+      await evaluateAndApplyExpiredTimeouts(prisma, { id });
+
       const p = await prisma.supplierProfile.findUnique({ where: { userId: req.auth.user.id } });
       if (!p) return res.status(404).json({ message: 'Không tìm thấy hồ sơ nhà cung cấp.' });
 
@@ -450,111 +583,59 @@ function createComplaintRoutes(prisma, requireAuth) {
       });
       if (!c) return res.status(404).json({ message: 'Không tìm thấy khiếu nại.' });
 
-      if (['RESOLVED', 'ADMIN_RESOLVED_BUYER', 'ADMIN_RESOLVED_SUPPLIER'].includes(c.status)) {
+      if (CLOSED_COMPLAINT_STATUSES.includes(c.status)) {
         return res.status(400).json({ message: 'Khiếu nại này đã được xử lý hoàn tất.' });
       }
       if (c.status === 'ESCALATED') {
-        return res.status(400).json({ message: 'Khiếu nại đang chờ Quản trị viên phân xử, không thể thay đổi trạng thái.' });
+        return res.status(400).json({ message: 'Khiếu nại đang ở trạng thái tranh chấp cũ, không thể thay đổi.' });
       }
 
       const status = ['IN_REVIEW', 'RESOLVED', 'REJECTED'].includes(req.body?.status) ? req.body.status : null;
       if (!status) return res.status(400).json({ message: 'Trạng thái không hợp lệ.' });
       const response = typeof req.body.response === 'string' ? req.body.response.trim() : '';
-      if (response.length > 1000 || (['RESOLVED', 'REJECTED'].includes(status) && response.length < 3)) {
-        return res.status(400).json({ message: 'Nhập phản hồi từ 3 đến 1.000 ký tự khi kết thúc báo cáo.' });
+      if (response.length > 1000 || response.length < 3) {
+        return res.status(400).json({ message: 'Nhập phản hồi từ 3 đến 1.000 ký tự.' });
       }
 
-      let supplementaryOrder = null;
-      if (status === 'RESOLVED' && (response.includes('AGREE_REPLACE') || response.includes('giao bù') || response.includes('Giao bù')) && c.order) {
-        try {
-          supplementaryOrder = await prisma.wholesaleOrder.create({
-            data: {
-              buyerId: c.order.buyerId,
-              supplierId: c.order.supplierId,
-              status: 'PREPARING',
-              subtotal: 0,
-              deliveryFee: 0,
-              total: 0,
-              depositRate: 0,
-              depositAmount: 0,
-              depositStatus: 'NONE',
-              recipientName: c.order.recipientName,
-              recipientPhone: c.order.recipientPhone,
-              deliveryAddress: c.order.deliveryAddress,
-              note: `Đơn giao bổ sung 0đ bù hàng theo khiếu nại đơn #${c.order.id}`,
-              items: {
-                create: c.order.items.map((it) => ({
-                  productId: it.productId,
-                  productName: it.productName,
-                  packaging: it.packaging || 'Phần',
-                  quantity: it.quantity || 1,
-                  unitPrice: 0,
-                  lineTotal: 0,
-                })),
-              },
-            },
-            include: { items: true },
-          });
-        } catch (err) {
-          console.error('Không thể tự động tạo đơn bù 0đ:', err.message);
-        }
+      if (status === 'RESOLVED') {
+        return res.status(400).json({
+          message: 'Theo quy trình mới, Chủ vựa chỉ đề xuất phương án để Cửa hàng tạp hóa xác nhận đồng thuận trước khi Hoàn thành.',
+        });
       }
 
+      const action = status === 'REJECTED' ? 'REJECT' : 'DISCUSS';
       const saved = await prisma.orderComplaint.update({
         where: { id },
-        data: {
-          status,
-          response: response || null,
-        },
+        data: { status: 'IN_REVIEW', response },
       });
-      res.json({ complaint: saved, supplementaryOrder });
+
+      const wf = getComplaintWorkflow(c);
+      if (wf?.pendingParty === 'SUPPLIER') {
+        recordSupplierProposal(saved, {
+          supplierName: p.businessName || req.auth.user.name || 'Chủ vựa',
+          action,
+          note: response,
+        });
+      }
+
+      return res.json({ complaint: formatComplaint(saved) });
     } catch (e) {
       if (e.code === 'P2000') return res.status(400).json({ message: 'Phản hồi vượt quá giới hạn cho phép.' });
-      next(e);
+      return next(e);
     }
   });
 
-  r.post('/:id/escalate', requireRole('STORE_OWNER'), async (req, res, next) => {
-    try {
-      const id = Number(req.params.id);
-      if (!Number.isInteger(id) || id < 1) return res.status(400).json({ message: 'Mã khiếu nại không hợp lệ.' });
-      const complaint = await prisma.orderComplaint.findUnique({
-        where: { id },
-        include: { order: true },
-      });
-      if (!complaint || complaint.buyerId !== req.auth.user.id) {
-        return res.status(404).json({ message: 'Không tìm thấy khiếu nại này.' });
-      }
-      if (complaint.status === 'ESCALATED') {
-        return res.status(400).json({ message: 'Khiếu nại này đã được gửi lên Quản trị viên trước đó và đang trong quá trình thụ lý.' });
-      }
-      if (['ADMIN_RESOLVED_BUYER', 'ADMIN_RESOLVED_SUPPLIER', 'RESOLVED'].includes(complaint.status)) {
-        return res.status(400).json({ message: 'Khiếu nại này đã được giải quyết dứt điểm, không thể kháng cáo.' });
-      }
-      if (!['REJECTED', 'OPEN', 'IN_REVIEW'].includes(complaint.status)) {
-        return res.status(400).json({ message: 'Khiếu nại này hiện không ở trạng thái có thể kháng cáo.' });
-      }
-      const rawReason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
-      const escalateNote = rawReason.length >= 3
-        ? rawReason.slice(0, 500)
-        : 'Cửa hàng không đồng ý với phương án xử lý của chủ vựa, yêu cầu Quản trị viên can thiệp giải quyết.';
+  // Retired legacy endpoints (replaced by 2-round consensual negotiation + automatic contract closure)
+  r.post('/:id/resolve', requireRole('SUPPLIER'), (req, res) => {
+    return res.status(410).json({
+      message: 'Quy trình mới yêu cầu sự đồng thuận của hai bên. Vui lòng dùng tính năng Đề xuất phương án xử lý để cửa hàng xác nhận.',
+    });
+  });
 
-      const updated = await prisma.orderComplaint.update({
-        where: { id },
-        data: {
-          status: 'ESCALATED',
-          description: (complaint.description || '') + '\n[Kháng cáo Admin]: ' + escalateNote,
-        },
-      });
-
-      res.json({
-        success: true,
-        complaint: updated,
-        message: 'Đã gửi yêu cầu can thiệp tới Quản trị viên. Quản trị viên sẽ kiểm tra biên bản và đối soát quyền lợi cho tiệm.',
-      });
-    } catch (e) {
-      next(e);
-    }
+  r.post('/:id/escalate', requireRole('STORE_OWNER'), (req, res) => {
+    return res.status(410).json({
+      message: 'Sàn hiện áp dụng cơ chế hai bên tự trao đổi thống nhất phương án và hệ thống ghi nhận kết quả; Admin không trực tiếp phân xử thắng/thua.',
+    });
   });
 
   return r;

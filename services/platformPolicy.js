@@ -1,8 +1,8 @@
 function activeAccountWhere(now = new Date()) {
-  return { isActive: true, OR: [{ suspendedUntil: null }, { suspendedUntil: { lte: now } }] };
+  return { isActive: true, deletedAt: null, OR: [{ suspendedUntil: null }, { suspendedUntil: { lte: now } }] };
 }
 function accountAvailable(user, now = new Date()) {
-  return user && user.isActive && (!user.suspendedUntil || user.suspendedUntil <= now);
+  return Boolean(user && !user.deletedAt && user.isActive && (!user.suspendedUntil || user.suspendedUntil <= now));
 }
 function visibleSupplierWhere() {
   return { verificationStatus: 'APPROVED', user: { ...activeAccountWhere(), role: { code: 'SUPPLIER' } } };

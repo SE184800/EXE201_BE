@@ -9,17 +9,17 @@ async function sendVerificationApprovedEmail({ to, recipientName, roleLabel }) {
 
   const roleText = roleLabel || 'Đối tác';
   const nameText = recipientName || 'Quý khách';
-  const subject = `[SupplyMind AI] Thông báo: Hồ sơ xác minh tài khoản đã được phê duyệt`;
+  const subject = `[SupplyMind AI] Đơn của bạn đã được xử lý`;
 
   const text = [
     `Kính gửi ${nameText},`,
     '',
-    `SupplyMind AI xin thông báo: Đơn của bạn đã được xử lý, vui lòng kiểm tra.`,
+    `Đơn của bạn đã được admin phê duyệt. Chào mừng đến nền tảng SupplyMind AI.`,
     '',
-    `Hồ sơ đăng ký xác minh tài khoản với vai trò "${roleText}" của bạn đã được Quản trị viên thẩm định và phê duyệt thành công.`,
-    'Tài khoản của bạn hiện đã được kích hoạt đầy đủ quyền hạn vận hành trên nền tảng SupplyMind AI.',
+    `Hồ sơ đăng ký với vai trò "${roleText}" của bạn hiện đã chuyển sang trạng thái ĐÃ XÁC MINH.`,
+    'Tài khoản của bạn đã được kích hoạt hoạt động đầy đủ trên nền tảng SupplyMind AI.',
     '',
-    'Vui lòng đăng nhập vào hệ thống để tiếp tục các hoạt động kinh doanh.',
+    'Vui lòng đăng nhập vào hệ thống để bắt đầu sử dụng các dịch vụ.',
     '',
     'Trân trọng,',
     'Ban Quản trị SupplyMind AI'
@@ -27,16 +27,16 @@ async function sendVerificationApprovedEmail({ to, recipientName, roleLabel }) {
 
   const html = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px; background: #ffffff;">
-      <h2 style="color: #15803d; margin-top: 0;">Thông báo phê duyệt hồ sơ xác minh</h2>
+      <h2 style="color: #15803d; margin-top: 0;">Đơn của bạn đã được xử lý</h2>
       <p>Kính gửi <strong>${nameText}</strong>,</p>
       <div style="background-color: #f0fdf4; border-left: 4px solid #22c55e; padding: 12px 16px; margin: 16px 0; border-radius: 4px;">
-        <strong style="color: #166534; font-size: 15px;">Đơn của bạn đã được xử lý, vui lòng kiểm tra.</strong>
+        <strong style="color: #166534; font-size: 15px;">Đơn của bạn đã được admin phê duyệt. Chào mừng đến nền tảng SupplyMind AI.</strong>
         <p style="margin: 6px 0 0 0; color: #15803d;">
-          Hồ sơ xác minh vai trò <strong>${roleText}</strong> của bạn đã được phê duyệt thành công.
+          Hồ sơ vai trò <strong>${roleText}</strong> của bạn đã đạt trạng thái <strong>Đã xác minh</strong>.
         </p>
       </div>
       <p style="color: #334155; line-height: 1.6;">
-        Tài khoản của bạn đã được kích hoạt đầy đủ quyền vận hành trên nền tảng SupplyMind AI. Bạn có thể đăng nhập ngay để thực hiện các giao dịch và quản lý hoạt động.
+        Tài khoản của bạn đã được kích hoạt hoạt động đầy đủ trên nền tảng SupplyMind AI. Bạn có thể đăng nhập ngay để thực hiện các giao dịch và quản lý hoạt động.
       </p>
       <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #e2e8f0; color: #64748b; font-size: 12px;">
         Email này được gửi tự động từ hệ thống quản trị SupplyMind AI.
@@ -55,18 +55,16 @@ async function sendVerificationRejectedEmail({ to, recipientName, roleLabel, rea
   const roleText = roleLabel || 'Đối tác';
   const nameText = recipientName || 'Quý khách';
   const reasonText = reason || 'Thông tin chưa đầy đủ hoặc không hợp lệ';
-  const subject = `[SupplyMind AI] Thông báo: Đơn xác minh cần bổ sung thông tin`;
+  const subject = `[SupplyMind AI] Đơn của bạn đã được giải quyết`;
 
   const text = [
     `Kính gửi ${nameText},`,
     '',
-    `SupplyMind AI xin thông báo: Đơn của bạn đã bị từ chối cùng lý do: "${reasonText}".`,
+    `Đơn của bạn đã bị từ chối.`,
+    `Lý do: ${reasonText}`,
     '',
-    `Hồ sơ đăng ký xác minh tài khoản với vai trò "${roleText}" của bạn hiện đang ở trạng thái CẦN BỔ SUNG.`,
-    `Lý do chi tiết từ Quản trị viên:`,
-    `- ${reasonText}`,
-    '',
-    'Vui lòng đăng nhập vào hệ thống SupplyMind AI, kiểm tra lại thông tin và bấm "Xác nhận" để gửi lại hồ sơ.',
+    `Hồ sơ đăng ký với vai trò "${roleText}" của bạn hiện đang ở trạng thái CẦN ĐIỀU CHỈNH.`,
+    'Vui lòng đăng nhập vào hệ thống SupplyMind AI, vào mục Tổng quan hoặc Hồ sơ để cập nhật lại thông tin đăng ký.',
     '',
     'Trân trọng,',
     'Ban Quản trị SupplyMind AI'
@@ -74,17 +72,17 @@ async function sendVerificationRejectedEmail({ to, recipientName, roleLabel, rea
 
   const html = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px; background: #ffffff;">
-      <h2 style="color: #b91c1c; margin-top: 0;">Thông báo yêu cầu bổ sung thông tin hồ sơ</h2>
+      <h2 style="color: #b91c1c; margin-top: 0;">Đơn của bạn đã được giải quyết</h2>
       <p>Kính gửi <strong>${nameText}</strong>,</p>
       <div style="background-color: #fef2f2; border-left: 4px solid #ef4444; padding: 12px 16px; margin: 16px 0; border-radius: 4px;">
-        <strong style="color: #991b1b; font-size: 15px;">Đơn của bạn đã bị từ chối cùng lý do:</strong>
-        <p style="margin: 6px 0 0 0; color: #b91c1c; font-weight: bold;">
-          ${reasonText}
+        <strong style="color: #991b1b; font-size: 15px;">Đơn của bạn đã bị từ chối.</strong>
+        <p style="margin: 6px 0 0 0; color: #b91c1c;">
+          <strong>Lý do:</strong> ${reasonText}
         </p>
       </div>
       <p style="color: #334155; line-height: 1.6;">
-        Hồ sơ xác minh vai trò <strong>${roleText}</strong> của bạn đã chuyển sang trạng thái <strong>Cần bổ sung</strong>.
-        Vui lòng đăng nhập vào nền tảng SupplyMind AI, xem lại toàn bộ thông tin đã nhập và điều chỉnh lại theo đúng yêu cầu trước khi gửi duyệt lại.
+        Hồ sơ vai trò <strong>${roleText}</strong> của bạn đã chuyển sang trạng thái <strong>Cần điều chỉnh</strong>.
+        Vui lòng đăng nhập vào nền tảng SupplyMind AI và cập nhật lại thông tin đăng ký để Admin kiểm tra và duyệt lại.
       </p>
       <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #e2e8f0; color: #64748b; font-size: 12px;">
         Email này được gửi tự động từ hệ thống quản trị SupplyMind AI.
@@ -96,8 +94,14 @@ async function sendVerificationRejectedEmail({ to, recipientName, roleLabel, rea
 }
 
 async function deliverEmail({ to, subject, text, html, logType }) {
-  const gmailUser = process.env.GMAIL_USER || process.env.SMTP_USER;
-  const gmailPass = process.env.GMAIL_PASS || process.env.SMTP_PASS;
+  const cleanSecret = (val) => String(val || '').split('#')[0].replace(/\s+/g, '').trim();
+  const gmailUser = (process.env.GMAIL_USER || process.env.SMTP_USER || '').trim();
+  const gmailPass = cleanSecret(
+    process.env.GMAIL_APP_PASSWORD ||
+      process.env.GMAIL_PASS ||
+      process.env.SMTP_PASSWORD ||
+      process.env.SMTP_PASS
+  );
 
   if (gmailUser && gmailPass) {
     try {

@@ -146,6 +146,24 @@ function createWalletRoutes(prisma, requireAuth, config = {}) {
  * Every money movement is guarded by a status check so it can happen once.
  */
 function createAdminWalletRoutes(prisma, requireAuth) {
+  const { serializeDeposit, serializeWithdrawal, serializeOrderPayment } = require('../services/walletService');
+  const attachUsers = async (rows, serializer, withOrderParties = false) => {
+    const idList = withOrderParties
+      ? rows.flatMap(row => [row.buyerId, row.supplierUserId])
+      : rows.map(row => row.userId);
+    const ids = [...new Set(idList.filter(Boolean))];
+    const users = ids.length
+      ? await prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, username: true } })
+      : [];
+    const userMap = new Map(users.map(user => [user.id, user]));
+    return rows.map(row =>
+      serializer(
+        withOrderParties
+          ? { ...row, buyer: userMap.get(row.buyerId) || null, supplier: userMap.get(row.supplierUserId) || null }
+          : { ...row, user: userMap.get(row.userId) || null }
+      )
+    );
+  };
   const router = express.Router();
   const service = createWalletService(prisma);
 
@@ -172,7 +190,7 @@ function createAdminWalletRoutes(prisma, requireAuth) {
     const [rows, total] = await Promise.all([
       prisma.depositRequest.findMany({
         where,
-        include: { user: { select: { id: true, name: true, username: true } } },
+        // user batch-attached via attachUsers so legacy deleted users never fail
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip: (page - 1) * 20,
         take: 20,
@@ -180,7 +198,7 @@ function createAdminWalletRoutes(prisma, requireAuth) {
       prisma.depositRequest.count({ where }),
     ]);
     res.json({
-      requests: rows.map(row => require('../services/walletService').serializeDeposit(row)),
+      requests: await attachUsers(rows, serializeDeposit),
       total,
       page,
       hasMore: page * 20 < total,
@@ -192,10 +210,11 @@ function createAdminWalletRoutes(prisma, requireAuth) {
     if (!id) return res.status(400).json({ message: 'Mã yêu cầu không hợp lệ.' });
     const row = await prisma.depositRequest.findUnique({
       where: { id },
-      include: { user: { select: { id: true, name: true, username: true } } },
+      // user batch-attached via attachUsers so legacy deleted users never fail
     });
     if (!row) return res.status(404).json({ message: 'Không tìm thấy yêu cầu nạp tiền.' });
-    res.json({ request: require('../services/walletService').serializeDeposit(row) });
+    const [request] = await attachUsers([row], serializeDeposit);
+    res.json({ request });
   }));
 
   router.post('/deposits/:id/approve', run(async (req, res) => {
@@ -223,7 +242,7 @@ function createAdminWalletRoutes(prisma, requireAuth) {
     const [rows, total] = await Promise.all([
       prisma.withdrawalRequest.findMany({
         where,
-        include: { user: { select: { id: true, name: true, username: true } } },
+        // user batch-attached via attachUsers so legacy deleted users never fail
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip: (page - 1) * 20,
         take: 20,
@@ -231,7 +250,7 @@ function createAdminWalletRoutes(prisma, requireAuth) {
       prisma.withdrawalRequest.count({ where }),
     ]);
     res.json({
-      requests: rows.map(row => require('../services/walletService').serializeWithdrawal(row)),
+      requests: await attachUsers(rows, serializeWithdrawal),
       total,
       page,
       hasMore: page * 20 < total,
@@ -243,10 +262,11 @@ function createAdminWalletRoutes(prisma, requireAuth) {
     if (!id) return res.status(400).json({ message: 'Mã yêu cầu không hợp lệ.' });
     const row = await prisma.withdrawalRequest.findUnique({
       where: { id },
-      include: { user: { select: { id: true, name: true, username: true } } },
+      // user batch-attached via attachUsers so legacy deleted users never fail
     });
     if (!row) return res.status(404).json({ message: 'Không tìm thấy yêu cầu rút tiền.' });
-    res.json({ request: require('../services/walletService').serializeWithdrawal(row) });
+    const [request] = await attachUsers([row], serializeWithdrawal);
+    res.json({ request });
   }));
 
   router.post('/withdrawals/:id/approve', run(async (req, res) => {
@@ -281,8 +301,8 @@ function createAdminWalletRoutes(prisma, requireAuth) {
     const [rows, total] = await Promise.all([
       prisma.orderPayment.findMany({
         include: {
-          buyer: { select: { id: true, name: true } },
-          supplier: { select: { id: true, name: true } },
+          // Resolve buyer/supplier separately so orphaned legacy order_payments never throw P2025/null errors
+          // while keeping historical ledger rows inspectable.
           refund: { select: { id: true, status: true, amount: true, reason: true } },
         },
         orderBy: [{ paidAt: 'desc' }, { id: 'desc' }],
@@ -292,7 +312,7 @@ function createAdminWalletRoutes(prisma, requireAuth) {
       prisma.orderPayment.count(),
     ]);
     res.json({
-      payments: rows.map(row => require('../services/walletService').serializeOrderPayment(row)),
+      payments: await attachUsers(rows, serializeOrderPayment, true),
       total,
       page,
       hasMore: page * 20 < total,

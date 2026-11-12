@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const { audit } = require('../services/platformPolicy');
 const { normalizePhone, todayInVietnam, getBirthDateRange } = require('../services/registrationValidation');
 const { getStoreProfile, saveStoreProfile } = require('../services/storeService');
+const { verifyAddressOnline } = require('../services/addressVerificationService');
 
 const uploadsDir = path.join(__dirname, '../public/uploads');
 if (!sqlEnabled() && !fs.existsSync(uploadsDir)) {
@@ -93,6 +94,23 @@ function createProfileRoutes(prisma, requireAuth) {
   const router = express.Router();
   router.use(requireAuth);
 
+  // Real online address geocoding & validation (no hardcoded fallback)
+  router.get('/verify-address', async (req, res) => {
+    const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    if (!q || q.length > 300) {
+      return res.status(400).json({
+        verified: false,
+        status: 'not_found',
+        lat: null,
+        lon: null,
+        displayName: null,
+        message: 'Địa chỉ cần kiểm tra không hợp lệ.',
+      });
+    }
+    const result = await verifyAddressOnline(q);
+    return res.json(result);
+  });
+
   // Dedicated store profile endpoints
   router.get('/store', (req, res) => {
     const userPhone = req.auth.user?.phone || '';
@@ -170,10 +188,48 @@ function createProfileRoutes(prisma, requireAuth) {
 
       // If supplier info is included in profile update, also save it
       let updatedSupplierProfile = null;
-      if (req.body.businessName || req.body.warehouseAddress) {
+      const isSupplierBankUpdate =
+        (req.auth.user.role === 'SUPPLIER' || req.auth.user.role?.code === 'SUPPLIER') &&
+        (req.body.bankName !== undefined || req.body.bankAccountNumber !== undefined || req.body.bankAccountHolder !== undefined);
+      if (req.body.businessName || req.body.warehouseAddress || isSupplierBankUpdate) {
         const bName = (req.body.businessName || '').trim().replace(/\s+/g, ' ');
         const wAddr = (req.body.warehouseAddress || '').trim().replace(/\s+/g, ' ');
         const tCode = req.body.taxCode ? req.body.taxCode.trim().replace(/\s+/g, '') : null;
+        const bBankName = typeof req.body.bankName === 'string' ? req.body.bankName.trim().slice(0, 100) : null;
+        const bAccountNumber = typeof req.body.bankAccountNumber === 'string'
+          ? req.body.bankAccountNumber.trim().replace(/[\s.-]/g, '').slice(0, 34)
+          : null;
+        const bAccountHolder = typeof req.body.bankAccountHolder === 'string'
+          ? req.body.bankAccountHolder.trim().toUpperCase().slice(0, 100)
+          : null;
+
+        const supErrors = {};
+        if (bAccountNumber && !/^\d{6,30}$/.test(bAccountNumber)) {
+          supErrors.bankAccountNumber = 'Số tài khoản cần gồm từ 6 đến 30 chữ số, không có khoảng trắng hay chữ cái.';
+        }
+        if (bAccountNumber && req.body.bankName !== undefined && (!bBankName || bBankName.length < 2)) {
+          supErrors.bankName = 'Vui lòng chọn ngân hàng hợp lệ.';
+        }
+        if (bName) {
+          const dupName = await prisma.supplierProfile.findFirst({ where: { userId: { not: req.auth.user.id }, businessName: bName }, select: { id: true } });
+          if (dupName) supErrors.businessName = 'Tên cơ sở kinh doanh này đã được đăng ký bởi một chủ vựa khác.';
+        }
+        if (tCode) {
+          const dupTax = await prisma.supplierProfile.findFirst({ where: { userId: { not: req.auth.user.id }, taxCode: tCode }, select: { id: true } });
+          if (dupTax) supErrors.taxCode = 'Mã số thuế này đã được đăng ký bởi một chủ vựa khác.';
+        }
+        if (bAccountNumber && !supErrors.bankAccountNumber) {
+          const dupBank = await prisma.supplierProfile.findFirst({ where: { userId: { not: req.auth.user.id }, bankAccountNumber: bAccountNumber }, select: { id: true } });
+          if (dupBank) supErrors.bankAccountNumber = 'Số tài khoản ngân hàng này đã được đăng ký bởi một chủ vựa khác.';
+        }
+        if (Object.keys(supErrors).length > 0) {
+          const errVals = Object.values(supErrors).filter(Boolean);
+          const dupErr = new Error(errVals.length === 1 ? errVals[0] : 'Vui lòng kiểm tra lại thông tin gian hàng chưa hợp lệ.');
+          dupErr.status = 409;
+          dupErr.errors = supErrors;
+          throw dupErr;
+        }
+
         updatedSupplierProfile = await prisma.supplierProfile.upsert({
           where: { userId: req.auth.user.id },
           create: {
@@ -183,12 +239,18 @@ function createProfileRoutes(prisma, requireAuth) {
             taxCode: tCode,
             deliveryRadiusKm: typeof req.body.deliveryRadiusKm === 'number' ? req.body.deliveryRadiusKm : 10,
             deliveryFee: typeof req.body.deliveryFee === 'number' ? req.body.deliveryFee : 0,
+            bankName: bBankName,
+            bankAccountNumber: bAccountNumber,
+            bankAccountHolder: bAccountHolder,
           },
           update: {
             ...(bName ? { businessName: bName } : {}),
             ...(wAddr ? { warehouseAddress: wAddr } : {}),
             ...(tCode !== undefined ? { taxCode: tCode } : {}),
             ...(typeof req.body.deliveryRadiusKm === 'number' ? { deliveryRadiusKm: req.body.deliveryRadiusKm } : {}),
+            ...(req.body.bankName !== undefined ? { bankName: bBankName } : {}),
+            ...(req.body.bankAccountNumber !== undefined ? { bankAccountNumber: bAccountNumber } : {}),
+            ...(req.body.bankAccountHolder !== undefined ? { bankAccountHolder: bAccountHolder } : {}),
           },
         });
       }
@@ -209,6 +271,9 @@ function createProfileRoutes(prisma, requireAuth) {
 
       res.json({ profile: serialized, message: 'Đã cập nhật thông tin cá nhân và cơ sở kinh doanh thành công.' });
     } catch (error) {
+      if (error?.errors) {
+        return res.status(error.status || 400).json({ message: error.message, errors: error.errors });
+      }
       if (error.code === 'P2002') return res.status(409).json({ message: 'Email hoặc số điện thoại đã được tài khoản khác sử dụng.' });
       next(error);
     }

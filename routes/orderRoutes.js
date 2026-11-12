@@ -14,6 +14,7 @@ const { orderQuery } = require('../services/orderQuery');
 const { paymentDue, fullyPaidByWallet } = require('../services/orderPaymentPolicy');
 const { payReceivedOrder } = require('../services/receivedOrderPayment');
 const { visibleSupplierWhere, audit } = require('../services/platformPolicy');
+const { evaluateAndApplyExpiredTimeouts } = require('../services/complaintWorkflowService');
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const problem = (status, message) => Object.assign(new Error(message), { status });
 const include = { buyer: true, items: true, sourceQuote: true, supplier: { include: { user: true } }, complaint: true, orderPayment: { include: { refund: { select: { id: true } } } } };
@@ -59,6 +60,7 @@ function createOrderRoutes(prisma, requireAuth) {
   router.use(requireAuth);
   router.get('/', requireRole('STORE_OWNER'), async (req, res, next) => {
     try {
+      await evaluateAndApplyExpiredTimeouts(prisma, { buyerId: req.auth.user.id });
       const { page, status } = orderQuery(req.query);
       const where = { buyerId: req.auth.user.id, ...(status ? { status } : {}) };
       const [orders, total] = await Promise.all([

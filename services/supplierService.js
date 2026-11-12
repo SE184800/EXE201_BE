@@ -1,10 +1,12 @@
 const notificationService = require('./notificationService');
 const { audit, problem, httpsDocument, verificationComplete } = require('./platformPolicy');
+const { syncContractSignerInfo } = require('./contractService');
 const { moderateContent } = require('./contentModerationService');
 const deliveryService = require('./deliveryService');
 const { settleOrderToSupplier, refundPaidOrder, walletService } = require('./walletService');
 const { importBlockReason } = require('./inventorySyncService');
 const { paymentDue } = require('./orderPaymentPolicy');
+const { getComplaintWorkflow, evaluateAndApplyExpiredTimeouts } = require('./complaintWorkflowService');
 const ORDER_STATUSES = Object.freeze([
   'PENDING', 'APPROVED', 'REJECTED', 'CANCELLED', 'PREPARING', 'SHIPPING', 'ISSUE_HANDLING', 'DELIVERED', 'COMPLETED',
 ]);
@@ -103,7 +105,7 @@ function serializeOrder(order) {
     note: order.note,
     rejectReason: order.rejectReason,
     driverInfo,
-    complaint: order.complaint ? { id: order.complaint.id, reason: order.complaint.reason, description: order.complaint.description, imageUrl: order.complaint.imageUrl || null, status: order.complaint.status, response: order.complaint.response } : null,
+    complaint: order.complaint ? { id: order.complaint.id, reason: order.complaint.reason, description: order.complaint.description, imageUrl: order.complaint.imageUrl || null, status: order.complaint.status, response: order.complaint.response, workflow: getComplaintWorkflow(order.complaint) } : null,
     createdAt: order.createdAt,
     updatedAt: order.updatedAt,
     buyer: { id: order.buyer.id, name: order.buyer.name, username: order.buyer.username },
@@ -252,24 +254,66 @@ function createSupplierService(prisma) {
     });
   }
 
-  async function upsertProfile(userId, input) {
+  async function upsertProfile(userId, input, options = {}) {
     const { phone, ...profileData } = input;
-    return prisma.$transaction(async tx => {
+    const profile = await prisma.$transaction(async tx => {
+      const dupErrors = {};
+      if (phone) {
+        const dupPhone = await tx.user.findFirst({ where: { id: { not: userId }, phone }, select: { id: true } });
+        if (dupPhone) dupErrors.phone = 'Số điện thoại này đã được đăng ký cho một tài khoản khác.';
+      }
+      if (profileData.businessName) {
+        const dupName = await tx.supplierProfile.findFirst({ where: { userId: { not: userId }, businessName: profileData.businessName }, select: { id: true } });
+        if (dupName) dupErrors.businessName = 'Tên cơ sở kinh doanh này đã được đăng ký bởi một chủ vựa khác.';
+      }
+      if (profileData.taxCode) {
+        const dupTax = await tx.supplierProfile.findFirst({ where: { userId: { not: userId }, taxCode: profileData.taxCode }, select: { id: true } });
+        if (dupTax) dupErrors.taxCode = 'Mã số thuế này đã được đăng ký bởi một chủ vựa khác.';
+      }
+      if (profileData.bankAccountNumber) {
+        const dupBank = await tx.supplierProfile.findFirst({ where: { userId: { not: userId }, bankAccountNumber: profileData.bankAccountNumber }, select: { id: true } });
+        if (dupBank) dupErrors.bankAccountNumber = 'Số tài khoản ngân hàng này đã được đăng ký bởi một chủ vựa khác.';
+      }
+      if (Object.keys(dupErrors).length > 0) {
+        const err = new Error(Object.values(dupErrors)[0]);
+        err.status = 409;
+        err.errors = dupErrors;
+        throw err;
+      }
+
       if (phone) {
         await tx.user.update({ where: { id: userId }, data: { phone } });
       }
       const old = await tx.supplierProfile.findUnique({ where: { userId } });
       const identityFields = ['businessName', 'warehouseAddress', 'region', 'taxCode', 'legalRepresentative', 'verificationDocumentUrl'];
       const changedIdentity = old && identityFields.some(key => profileData[key] !== undefined && profileData[key] !== old[key]);
-      const profile = await tx.supplierProfile.upsert({
+      const isResubmit = Boolean(options?.resubmit && old && ['REJECTED', 'PENDING'].includes(old.verificationStatus));
+      const statusUpdate = isResubmit
+        ? { verificationStatus: 'PENDING', verificationNote: null, reviewedAt: null, reviewedBy: null, submittedAt: new Date(), verificationVersion: { increment: 1 } }
+        : changedIdentity
+          ? { verificationStatus: 'DRAFT', verificationNote: null, reviewedAt: null, reviewedBy: null, submittedAt: null, verificationVersion: { increment: 1 } }
+          : {};
+      const updated = await tx.supplierProfile.upsert({
         where: { userId },
         create: { userId, ...profileData },
-        update: { ...profileData, ...(changedIdentity ? { verificationStatus: 'DRAFT', verificationNote: null, reviewedAt: null, reviewedBy: null, submittedAt: null, verificationVersion: { increment: 1 } } : {}) },
+        update: { ...profileData, ...statusUpdate },
         include: { user: { select: { phone: true, name: true, email: true } } },
       });
-      await audit(tx, userId, 'SUPPLIER_PROFILE_UPDATED', 'SUPPLIER', profile.id, { changedFields: Object.keys(profileData), verificationReset: Boolean(changedIdentity), businessName: profile.businessName });
-      return profile;
+      await audit(tx, userId, isResubmit ? 'SUPPLIER_VERIFICATION_RESUBMITTED' : 'SUPPLIER_PROFILE_UPDATED', 'SUPPLIER', updated.id, { changedFields: Object.keys(profileData), verificationReset: Boolean(changedIdentity && !isResubmit), resubmit: isResubmit, businessName: updated.businessName });
+      return updated;
     }, { isolationLevel: 'Serializable' });
+
+    try {
+      syncContractSignerInfo(userId, {
+        name: profile.user?.name,
+        phone: profile.user?.phone,
+        businessName: profile.businessName,
+        taxCode: profile.taxCode,
+        warehouseAddress: profile.warehouseAddress,
+      });
+    } catch {}
+
+    return profile;
   }
 
   async function submitVerification(userId) {
@@ -430,6 +474,7 @@ function createSupplierService(prisma) {
 
   async function listOrders(userId, query = {}) {
     const profile = await requireProfile(userId);
+    await evaluateAndApplyExpiredTimeouts(prisma, { supplierId: profile.id });
     const { page, status } = require('./orderQuery').orderQuery(query);
     const where = { supplierId: profile.id, ...(status ? { status } : {}) };
     const [orders, total] = await Promise.all([prisma.wholesaleOrder.findMany({
@@ -710,6 +755,7 @@ function createSupplierService(prisma) {
   async function dashboard(userId) {
     const profile = await getProfile(userId);
     if (!profile) return { profile: null, products: [], orders: [], summary: { productCount: 0, lowStockCount: 0, pendingOrders: 0, pendingDepositConfirmations: 0, deliveredRevenue: 0 } };
+    await evaluateAndApplyExpiredTimeouts(prisma, { supplierId: profile.id });
     const [products, orders, pendingOrders, pendingDepositConfirmations, delivered] = await Promise.all([
       prisma.supplierProduct.findMany({
         where: { supplierId: profile.id },

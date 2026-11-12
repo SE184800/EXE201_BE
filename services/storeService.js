@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const documents = require('./documentStorage');
 const path = require('node:path');
+const { syncContractSignerInfo } = require('./contractService');
 
 const dataDir = path.join(__dirname, '../data');
 const storesFile = path.join(dataDir, 'stores.json');
@@ -20,7 +21,7 @@ const DEFAULT_STORE_PROFILES = {
     isAddressVerified: true,
     isConfigured: true,
     verificationStatus: 'APPROVED',
-    verificationNote: 'Hồ sơ hợp lệ, đã xác minh.',
+    verificationNote: null,
     verificationVersion: 1,
     submittedAt: '2026-01-01T00:00:00.000Z',
     reviewedAt: '2026-01-01T00:00:00.000Z',
@@ -238,6 +239,10 @@ function validateStoreInput(body = {}, currentUserId = null) {
       if (taxCode && store.taxCode && store.taxCode.trim().toLowerCase() === taxCode.toLowerCase()) {
         errors.taxCode = 'Mã số thuế này đã được đăng ký bởi một tiệm tạp hóa khác.';
       }
+
+      if (bankAccountNumber && store.bankAccountNumber && store.bankAccountNumber.trim().toLowerCase() === bankAccountNumber.toLowerCase()) {
+        errors.bankAccountNumber = 'Số tài khoản ngân hàng này đã được đăng ký bởi một tiệm tạp hóa khác.';
+      }
     }
   }
 
@@ -268,7 +273,12 @@ function validateStoreInput(body = {}, currentUserId = null) {
 function saveStoreProfile(userId, body) {
   const validation = validateStoreInput(body, userId);
   if (validation.errors) {
-    const error = new Error('Thông tin cửa hàng không hợp lệ.');
+    const errValues = Object.values(validation.errors).filter(Boolean);
+    const error = new Error(
+      errValues.length === 1
+        ? errValues[0]
+        : 'Vui lòng kiểm tra lại các thông tin cửa hàng chưa hợp lệ.'
+    );
     error.status = 400;
     error.errors = validation.errors;
     throw error;
@@ -307,6 +317,9 @@ function saveStoreProfile(userId, body) {
   };
 
   saveData(data);
+  try {
+    syncContractSignerInfo(userId, validation.data);
+  } catch {}
   return data.stores[key];
 }
 
@@ -331,8 +344,15 @@ function updateStoreVerification(userId, { status, note, actorId, expectedVersio
     throw error;
   }
 
+  const currentStatus = store.verificationStatus || 'DRAFT';
+  if (!['PENDING', 'REJECTED'].includes(currentStatus)) {
+    const error = new Error('Chỉ có thể xét duyệt hồ sơ ở trạng thái Đang chờ duyệt hoặc Cần điều chỉnh.');
+    error.status = 400;
+    throw error;
+  }
+
   store.verificationStatus = status;
-  store.verificationNote = note;
+  store.verificationNote = status === 'APPROVED' ? null : (note || null);
   store.reviewedAt = new Date().toISOString();
   store.reviewedBy = actorId;
   store.verificationVersion = (store.verificationVersion || 0) + 1;

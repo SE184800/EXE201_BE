@@ -109,3 +109,39 @@ test('storeService: prevent duplicate storePhone and storeAddress across stores'
     }
   );
 });
+
+test('saveStoreProfile throws specific message and field error when bankAccountNumber is duplicated', () => {
+  const bankUser1 = 9101;
+  const bankUser2 = 9102;
+  const sharedBankAcc = '0071008899001';
+
+  saveStoreProfile(bankUser1, {
+    storeName: 'Tạp Hóa Ngân Hàng A',
+    storeAddress: '101 Nguyễn Thị Minh Khai, Phường Bến Thành, Quận 1, TP. Hồ Chí Minh',
+    taxCode: 'BANK000001',
+    storePhone: '0911223344',
+    bankName: 'Vietcombank',
+    bankAccountNumber: sharedBankAcc,
+    bankAccountHolder: 'NGUYEN VAN A',
+  });
+
+  assert.throws(
+    () => {
+      saveStoreProfile(bankUser2, {
+        storeName: 'Tạp Hóa Ngân Hàng B',
+        storeAddress: '202 Pasteur, Phường Võ Thị Sáu, Quận 3, TP. Hồ Chí Minh',
+        taxCode: 'BANK000002',
+        storePhone: '0911223355',
+        bankName: 'Vietcombank',
+        bankAccountNumber: sharedBankAcc,
+        bankAccountHolder: 'TRAN THI B',
+      });
+    },
+    (err) => {
+      assert.equal(err.status, 400);
+      assert.ok(err.errors?.bankAccountNumber);
+      assert.equal(err.message, err.errors.bankAccountNumber);
+      return true;
+    }
+  );
+});

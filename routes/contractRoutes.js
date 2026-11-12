@@ -1,4 +1,5 @@
 const express = require('express');
+const jwt = require('jsonwebtoken');
 const {
   getOrCreateUserContract,
   signContract,
@@ -7,9 +8,58 @@ const {
   formatRawKey,
 } = require('../services/contractService');
 const { getStoreProfile, setStoreContractSigned } = require('../services/storeService');
+const { maskPrivateKey } = require('../services/contractMailService');
 
-function createContractRoutes(prisma, requireAuth) {
+function createContractRoutes(prisma, requireAuth, config = {}) {
   const router = express.Router();
+
+  // GET /api/contracts/reveal-key?token=... (public signed-link endpoint from email)
+  router.get('/reveal-key', async (req, res, next) => {
+    try {
+      const token = String(req.query.token || '').trim();
+      if (!token) {
+        return res.status(400).json({ success: false, message: 'Thiếu mã xác thực xem khóa bí mật.' });
+      }
+      const jwtSecret = config?.jwtSecret || process.env.JWT_SECRET;
+      if (!jwtSecret) {
+        return res.status(500).json({ success: false, message: 'Hệ thống chưa cấu hình khóa xác thực.' });
+      }
+      let payload;
+      try {
+        payload = jwt.verify(token, jwtSecret, {
+          algorithms: ['HS256'],
+          issuer: 'sg-restock-api',
+          audience: 'sg-restock-contract-key',
+        });
+      } catch {
+        return res.status(401).json({ success: false, message: 'Liên kết xem khóa đã hết hạn hoặc không hợp lệ.' });
+      }
+      if (!payload || payload.purpose !== 'contract-key-reveal' || !payload.sub) {
+        return res.status(401).json({ success: false, message: 'Liên kết xem khóa không hợp lệ.' });
+      }
+
+      const contract = getContractByUserId(String(payload.sub));
+      if (!contract || (payload.contractNumber && contract.contractNumber !== payload.contractNumber)) {
+        return res.status(404).json({ success: false, message: 'Không tìm thấy hợp đồng hoặc khóa bí mật tương ứng.' });
+      }
+
+      const rawPrivateKey = contract.rawPrivateKey || (contract.privateKey ? formatRawKey(contract.privateKey) : '');
+      if (!rawPrivateKey) {
+        return res.status(404).json({ success: false, message: 'Không tìm thấy khóa bí mật của hợp đồng này.' });
+      }
+
+      return res.json({
+        success: true,
+        contractNumber: contract.contractNumber,
+        maskedPrivateKey: maskPrivateKey(rawPrivateKey),
+        rawPrivateKey,
+        isSigned: Boolean(contract.isSigned),
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
   router.use(requireAuth);
 
   // Helper to fetch store/supplier details for the current user
@@ -55,10 +105,6 @@ function createContractRoutes(prisma, requireAuth) {
       const profileInfo = await resolveProfileInfo(req);
       const contract = getOrCreateUserContract(req.auth.user, profileInfo);
       const canonicalText = getCanonicalContractText(contract);
-      const rawPrivateKey = !contract.isSigned
-        ? (contract.rawPrivateKey || (contract.privateKey ? formatRawKey(contract.privateKey) : undefined))
-        : undefined;
-
       return res.json({
         success: true,
         contract: {
@@ -71,7 +117,6 @@ function createContractRoutes(prisma, requireAuth) {
           contractHash: contract.contractHash,
           signerInfo: contract.signerInfo,
           stamp: contract.stamp,
-          rawPrivateKey,
         },
         canonicalText,
       });

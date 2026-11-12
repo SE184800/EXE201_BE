@@ -267,8 +267,8 @@ test('USE-CASE 3: Order Lifecycle, Cancellation & Escrow Refund (Happy, Worst, E
 // -------------------------------------------------------------
 // USE-CASE 4: KHIẾU NẠI, HOÀN TIỀN TOÀN BỘ & ADMIN PHÂN XỬ
 // -------------------------------------------------------------
-test('USE-CASE 4: Complaint Resolution, Full Refund & Escalation (Happy, Worst, Edge)', async (t) => {
-  // 4.1 Happy Case: Vựa chấp thuận RETURN_REFUND -> Hoàn cả cọc 10% và tiền hàng 90% đã trả
+test('USE-CASE 4: Complaint Resolution - Consensual Negotiation & Neutral Result Recording', async (t) => {
+  // 4.1 Happy Case: Vựa đề xuất RETURN_REFUND & Tiệm đồng thuận ACCEPT -> Hoàn cả cọc 10% và tiền hàng 90% đã trả
   let storeWallet = { balance: 2000000 };
   let supplierWallet = { balance: 8000000 };
   let order = {
@@ -279,25 +279,27 @@ test('USE-CASE 4: Complaint Resolution, Full Refund & Escalation (Happy, Worst, 
     depositStatus: 'PAID',
     paymentMethod: 'WALLET',
     paymentStatus: 'PAID',
+    inventoryImportedAt: null,
   };
 
   let complaint = {
     id: 1,
     orderId: 201,
-    status: 'PENDING',
-    type: 'DAMAGED',
+    status: 'IN_REVIEW',
+    round: 1,
+    pendingParty: 'STORE_OWNER',
+    proposedAction: 'RETURN_REFUND',
   };
 
-  function processComplaintResolution(comp, ord, solution, sWallet, supWallet) {
-    if (solution === 'RETURN_REFUND') {
+  function acceptConsensualResolution(comp, ord, sWallet, supWallet) {
+    if (comp.pendingParty !== 'STORE_OWNER') throw new Error('Chờ Chủ vựa đề xuất phương án.');
+    if (comp.proposedAction === 'RETURN_REFUND') {
       comp.status = 'RESOLVED';
-      comp.resolution = 'RETURN_REFUND';
-
+      comp.pendingParty = null;
       if (ord.depositStatus === 'PAID') {
         ord.depositStatus = 'REFUNDED';
         sWallet.balance += ord.depositAmount;
       }
-
       if (ord.paymentMethod === 'WALLET' && ord.paymentStatus === 'PAID') {
         const paidAmount = ord.total - ord.depositAmount;
         if (supWallet.balance < paidAmount) {
@@ -307,62 +309,34 @@ test('USE-CASE 4: Complaint Resolution, Full Refund & Escalation (Happy, Worst, 
         sWallet.balance += paidAmount;
         ord.paymentStatus = 'REFUNDED';
       }
-    } else if (solution === 'REJECT') {
-      comp.status = 'REJECTED';
     }
     return { comp, ord, sWallet, supWallet };
   }
 
-  processComplaintResolution(complaint, order, 'RETURN_REFUND', storeWallet, supplierWallet);
+  acceptConsensualResolution(complaint, order, storeWallet, supplierWallet);
   assert.equal(complaint.status, 'RESOLVED');
   assert.equal(order.depositStatus, 'REFUNDED');
   assert.equal(order.paymentStatus, 'REFUNDED');
   assert.equal(storeWallet.balance, 3000000);
   assert.equal(supplierWallet.balance, 7100000);
 
-  // 4.2 Worst Case: Vựa từ chối (REJECT) -> Tiệm Kháng cáo lên Admin (ESCALATED)
-  let rejectedComplaint = { id: 2, status: 'REJECTED', orderId: 202 };
-  function escalateComplaint(comp) {
-    if (comp.status !== 'REJECTED') {
-      throw new Error('Chỉ khiếu nại bị vựa từ chối mới có thể kháng cáo lên Admin');
-    }
-    comp.status = 'ESCALATED';
+  // 4.2 Bilateral counter-proposals remain open until both sides agree (no arbitrary round cutoff)
+  let negotiated = { id: 2, status: 'IN_REVIEW', orderId: 202, round: 1, pendingParty: 'STORE_OWNER' };
+  function counterProposal(comp) {
+    comp.round += 1;
+    comp.pendingParty = 'SUPPLIER';
     return comp;
   }
-  escalateComplaint(rejectedComplaint);
-  assert.equal(rejectedComplaint.status, 'ESCALATED');
+  counterProposal(negotiated);
+  assert.equal(negotiated.round, 2);
+  negotiated.pendingParty = 'STORE_OWNER';
+  counterProposal(negotiated);
+  assert.equal(negotiated.round, 3);
 
-  // 4.3 Admin phân xử: Xử Cửa Hàng Thắng (BUYER_FAVOR) -> Hoàn cọc cho tiệm
-  let escrowHeld = 500000;
-  let storeBal = 1000000;
-  let supBal = 2000000;
-
-  function adminResolveDispute(comp, decision, escrowAmount) {
-    if (comp.status !== 'ESCALATED') {
-      throw new Error('Khiếu nại phải ở trạng thái ESCALATED để Admin phân xử');
-    }
-    if (decision === 'BUYER_FAVOR') {
-      comp.status = 'ADMIN_RESOLVED_BUYER';
-      storeBal += escrowAmount;
-    } else if (decision === 'SUPPLIER_FAVOR') {
-      comp.status = 'ADMIN_RESOLVED_SUPPLIER';
-      supBal += escrowAmount;
-    } else {
-      throw new Error('Quyết định không hợp lệ');
-    }
-    return comp;
-  }
-
-  adminResolveDispute(rejectedComplaint, 'BUYER_FAVOR', escrowHeld);
-  assert.equal(rejectedComplaint.status, 'ADMIN_RESOLVED_BUYER');
-  assert.equal(storeBal, 1500000);
-  assert.equal(supBal, 2000000);
-
-  // 4.4 Edge Case: Admin phân xử với quyết định sai lệch -> Bị chặn
-  let badComp = { id: 3, status: 'ESCALATED' };
+  // 4.3 Neutral Recording & Non-Arbitration: Admin records complaint history/outcome and cannot adjudicate winner/loser
   assert.throws(() => {
-    adminResolveDispute(badComp, 'UNKNOWN_DECISION', 100000);
-  }, /Quyết định không hợp lệ/);
+    throw Object.assign(new Error('Theo Điều 6 Hợp đồng điện tử, Admin chỉ ghi nhận lịch sử và kết quả thống nhất, không phân xử thắng/thua.'), { status: 410 });
+  }, /không phân xử/);
 });
 
 // -------------------------------------------------------------

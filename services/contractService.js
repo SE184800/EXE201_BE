@@ -97,10 +97,10 @@ function getCanonicalContractText(contract) {
     '2.3. Chủ vựa cam kết xuất xe tự động cấp bù số lượng khi kho tạp hóa cạn hàng và đổi mới 100% sản phẩm cận hạn sử dụng (dưới 14 ngày).',
     '',
     'ĐIỀU 3: MINH BẠCH DÒNG TIỀN VÀ CƠ CHẾ KÝ QUỸ ĐẢM BẢO (ESCROW 10%)',
-    '3.1. Khi tạo đơn hàng sỉ, tiệm tạp hóa thực hiện ký quỹ 10% giá trị đơn hàng vào Ví hệ thống (Escrow) để đảm bảo hợp đồng.',
-    '3.2. Toàn bộ số tiền cọc 10% được giữ an toàn độc lập, chỉ tự động giải ngân cho Chủ vựa ngay khi Tiệm tạp hóa xác nhận đã nhận đủ hàng hóa.',
-    '3.3. 90% giá trị còn lại của đơn hàng được thanh toán bằng tiền mặt (COD) hoặc chuyển khoản tại thời điểm giao nhận.',
-    '3.4. Trường hợp đơn hàng bị hủy do lỗi phía Chủ vựa hoặc hàng hóa bị bể vỡ hư hỏng nặng, 100% tiền cọc sẽ được hoàn trả tức thì vào Ví của Tiệm tạp hóa.',
+    '3.1. Khi tạo đơn hàng sỉ có áp dụng đặt cọc, Tiệm tạp hóa thực hiện ký quỹ đảm bảo (mặc định 10% giá trị đơn hàng) vào Ví bảo chứng hệ thống (Escrow).',
+    '3.2. Khoản ký quỹ được giữ an toàn độc lập, chỉ giải ngân cho Chủ vựa khi Tiệm tạp hóa xác nhận hoàn tất đơn hàng (hoặc khi hết thời hạn tự động hoàn tất mà không có khiếu nại).',
+    '3.3. Phần giá trị còn lại của đơn hàng được thanh toán bằng tiền mặt (COD), chuyển khoản hoặc Ví điện tử tại thời điểm giao nhận thực tế.',
+    '3.4. Việc hoàn trả hoặc giải ngân tiền cọc/tiền hàng phát sinh từ hủy đơn hoặc khiếu nại giao nhận được hệ thống tự động thực hiện căn cứ theo phương án thống nhất cuối cùng giữa Tiệm tạp hóa và Chủ vựa tại Điều 6.',
     '',
     'ĐIỀU 4: MINH BẠCH GIÁ CẢ VÀ ĐIỀU CHỈNH GIÁ DỊP LỄ',
     '4.1. Chủ vựa cam kết không tự ý găm hàng, ép giá hoặc tăng giá đột ngột trái với báo giá đã xác lập.',
@@ -111,9 +111,11 @@ function getCanonicalContractText(contract) {
     '5.2. Sản phẩm phải qua bộ lọc kiểm duyệt AI tự động; nghiêm cấm mặt hàng chứa từ cấm hoặc hàng giả.',
     '5.3. Hàng hóa có điều kiện phải được Admin duyệt giấy phép trước khi mở bán.',
     '',
-    'ĐIỀU 6: QUY TRÌNH BÁO CÁO SỰ CỐ TRONG 2 GIỜ VÀ XỬ PHẠT VI PHẠM',
-    '6.1. Khi phát hiện hàng hóa bể vỡ, thiếu hụt hoặc sai sản phẩm, Tiệm tạp hóa phải gửi Báo cáo sự cố trong vòng 2 giờ để đối soát chuyến xe.',
-    '6.2. Hành vi bùng đơn, gian lận hoặc phá hoại hệ thống ký quỹ sẽ bị tịch thu tiền cọc và khóa tài khoản vĩnh viễn (BANNED).',
+    'ĐIỀU 6: QUY TRÌNH KHIẾU NẠI, ĐỐI SOÁT VÀ GHI NHẬN KẾT QUẢ',
+    '6.1. Điều kiện và thời hạn mở khiếu nại (24 giờ): Khi phát hiện hàng bể vỡ, thiếu hụt, sai sản phẩm, lỗi chất lượng hoặc cận/hết hạn sử dụng, Tiệm tạp hóa có quyền gửi tối đa 01 báo cáo khiếu nại kèm ảnh bằng chứng cho mỗi đơn hàng trong vòng 24 giờ kể từ lúc đơn chuyển trạng thái Đã giao (DELIVERED) và trước khi bấm Hoàn tất đơn. Trong lúc khiếu nại đang xử lý, hệ thống tạm khóa thao tác nhập kho và tất toán đơn để bảo toàn tiền ký quỹ.',
+    '6.2. Cơ chế tự thương lượng hai bên và nguyên tắc đồng thuận: Chủ vựa tiếp nhận khiếu nại và đưa ra phương án xử lý (Giao bù hàng mới 0đ, Giảm trừ tiền COD, Trả hàng hoàn tiền/cọc, Trao đổi thêm, hoặc Từ chối kèm lý do). Phương án của Chủ vựa chỉ có hiệu lực chốt đơn khi Tiệm tạp hóa bấm Xác nhận đồng ý phương án (hoặc chủ động chấp nhận giải trình/rút khiếu nại); Chủ vựa không được tự ý đóng khiếu nại một chiều. Nếu chưa đồng ý, hai bên tiếp tục trao đổi lại phương án cho đến khi đạt thống nhất.',
+    '6.3. Thực thi kết quả thống nhất (Hoàn thành): Ngay khi Tiệm tạp hóa xác nhận đồng ý phương án cuối cùng, trạng thái khiếu nại chuyển sang Hoàn thành (RESOLVED) và hệ thống tự động thực thi phương án đã thống nhất (tạo đơn bù 0đ, giảm trừ trực tiếp số tiền phải thu COD, hoặc hoàn tiền cọc/tiền ví và cập nhật tồn kho) đồng thời mở khóa tất toán đơn hàng.',
+    '6.4. Ghi nhận lịch sử trung lập trên hệ thống Admin: Nền tảng SupplyMind và Quản trị viên (Admin) chỉ cung cấp hệ thống lưu vết và ghi nhận minh bạch toàn bộ thông tin khiếu nại (người khiếu nại, bên bị khiếu nại, nguyên nhân, bằng chứng, giá trị đơn, tiền đã trả, tiền cọc, trạng thái xử lý từ Bắt đầu -> Đang xử lý -> Hoàn thành và kết quả thống nhất cuối cùng). Admin KHÔNG đứng ra phân xử thắng/thua; lịch sử ghi nhận là căn cứ đối soát tài chính và xử lý tài khoản vi phạm khi cần thiết.',
     '',
     'ĐIỀU 7: HIỆU LỰC PHÁP LÝ VÀ CHỮ KÝ SỐ ĐIỆN TỬ',
     '7.1. Thỏa thuận này được lập dưới dạng chứng từ điện tử theo Luật Giao dịch điện tử số 20/2023/QH15.',
@@ -253,6 +255,29 @@ function signContract(userId, signPayload, agreedTerms, clientMeta = {}) {
   return contract;
 }
 
+function syncContractSignerInfo(userId, profileInfo = {}) {
+  const data = getContractsData();
+  const userIdStr = String(userId);
+  const contract = data.contracts[userIdStr];
+  if (!contract) return null;
+
+  contract.signerInfo = {
+    ...contract.signerInfo,
+    ...(profileInfo.name ? { name: profileInfo.name } : {}),
+    ...(profileInfo.phone || profileInfo.storePhone ? { phone: profileInfo.phone || profileInfo.storePhone } : {}),
+    ...(profileInfo.storeName || profileInfo.businessName ? { businessName: profileInfo.storeName || profileInfo.businessName } : {}),
+    ...(profileInfo.taxCode !== undefined ? { taxCode: profileInfo.taxCode || '' } : {}),
+    ...(profileInfo.storeAddress || profileInfo.warehouseAddress ? { address: profileInfo.storeAddress || profileInfo.warehouseAddress } : {}),
+    ...(profileInfo.locationType ? { locationType: profileInfo.locationType } : {}),
+    ...(profileInfo.latitude !== undefined ? { latitude: profileInfo.latitude } : {}),
+    ...(profileInfo.longitude !== undefined ? { longitude: profileInfo.longitude } : {}),
+  };
+
+  data.contracts[userIdStr] = contract;
+  saveContractsData(data);
+  return presentContract(contract);
+}
+
 function getContractByUserId(userId) {
   const data = getContractsData();
   return presentContract(data.contracts[String(userId)] || null);
@@ -262,6 +287,7 @@ module.exports = {
   getOrCreateUserContract,
   signContract,
   getContractByUserId,
+  syncContractSignerInfo,
   getCanonicalContractText,
   formatRawKey,
 };

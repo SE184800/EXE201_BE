@@ -20,9 +20,14 @@ function createSupplierController(service) {
       const validation = validateProfileInput(req.body);
       if (!validation.data) return res.status(400).json({ success: false, message: 'Thông tin gian hàng chưa hợp lệ.', errors: validation.errors });
       try {
-        const profile = await service.upsertProfile(req.auth.user.id, validation.data);
+        const profile = await service.upsertProfile(req.auth.user.id, validation.data, { resubmit: req.body?.resubmit === true });
         return res.json({ success: true, profile: serializeProfile(profile) });
-      } catch (error) { return next(error); }
+      } catch (error) {
+        if (error?.errors) {
+          return res.status(error.status || 409).json({ success: false, message: error.message, errors: error.errors });
+        }
+        return next(error);
+      }
     },
     async submitVerification(req, res, next) {
       try { res.json({ profile: await service.submitVerification(req.auth.user.id) }); } catch (error) { next(error); }

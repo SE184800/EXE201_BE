@@ -1,3 +1,5 @@
+const { getAgreedCodDeduction } = require('./complaintWorkflowService');
+
 const problem = message => Object.assign(new Error(message), { status: 409 });
 
 function paymentDue(order, driverInfo) {
@@ -14,6 +16,10 @@ function paymentDue(order, driverInfo) {
       if (!Number.isFinite(quantity) || quantity < 0) throw problem('Số lượng hàng hỏng chưa hợp lệ.');
       loss += Math.min(quantity, item.quantity) * Number(item.unitPrice);
     }
+  }
+  const complaintDeduct = Number(order?.complaint?.workflow?.agreedDeductAmount || (order?.id ? getAgreedCodDeduction(order.id) : 0) || 0);
+  if (Number.isFinite(complaintDeduct) && complaintDeduct > 0) {
+    loss += complaintDeduct;
   }
   const total = Math.max(0, Number(order.subtotal) - Math.min(Number(order.subtotal), Math.round(loss))) + Number(order.deliveryFee);
   return Math.max(0, total - (order.depositStatus === 'PAID' ? Number(order.depositAmount) : 0));
