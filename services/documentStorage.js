@@ -8,10 +8,10 @@ const conflict = () => Object.assign(new Error('Dữ liệu vừa được cập
 
 // Preserve independent changes from concurrent serverless requests. Reject
 // conflicting edits instead of silently replacing another user's update.
-function mergeDocument(base, proposed, current) {
+function mergeDocument(base, proposed, current, atomicDepth = Infinity) {
   if (isDeepStrictEqual(base, proposed)) return clone(current);
   if (isDeepStrictEqual(base, current) || isDeepStrictEqual(proposed, current)) return clone(proposed);
-  if (!object(base) || !object(proposed) || !object(current)) throw conflict();
+  if (atomicDepth === 0 || !object(base) || !object(proposed) || !object(current)) throw conflict();
   const result = clone(current);
   for (const key of new Set([...Object.keys(base), ...Object.keys(proposed)])) {
     if (isDeepStrictEqual(base[key], proposed[key])) continue;
@@ -19,7 +19,7 @@ function mergeDocument(base, proposed, current) {
       if (!isDeepStrictEqual(base[key], current[key]) && Object.hasOwn(current, key)) throw conflict();
       delete result[key];
     } else {
-      result[key] = mergeDocument(base[key], proposed[key], current[key]);
+      result[key] = mergeDocument(base[key], proposed[key], current[key], atomicDepth - 1);
     }
   }
   return result;
@@ -50,7 +50,10 @@ async function commit(prisma, context) {
       const rows = await tx.$queryRaw`SELECT [payload] FROM [dbo].[application_documents] WITH (UPDLOCK, HOLDLOCK) WHERE [key] = ${key}`;
       const base = context.base.get(key);
       const current = rows.length ? JSON.parse(rows[0].payload) : clone(base);
-      const payload = JSON.stringify(mergeDocument(base, context.documents.get(key), current));
+      // Merge different contracts independently, but never combine a signature
+      // with a concurrent edit to the signer details of that same contract.
+      const atomicDepth = key === 'contracts' ? 2 : Infinity;
+      const payload = JSON.stringify(mergeDocument(base, context.documents.get(key), current, atomicDepth));
       if (rows.length) await tx.$executeRaw`UPDATE [dbo].[application_documents] SET [payload] = ${payload}, [updatedAt] = SYSUTCDATETIME() WHERE [key] = ${key}`;
       else await tx.$executeRaw`INSERT INTO [dbo].[application_documents] ([key], [payload]) VALUES (${key}, ${payload})`;
     }

@@ -161,8 +161,8 @@ function getOrCreateUserContract(user, profileInfo = {}) {
     };
     data.contracts[userIdStr] = contract;
     saveContractsData(data);
-  } else {
-    // Synchronize latest store info into signerInfo
+  } else if (!contract.isSigned) {
+    // Only drafts follow profile changes. Signed content must match its signature.
     if (profileInfo && (profileInfo.storeName || profileInfo.businessName || profileInfo.storeAddress)) {
       contract.signerInfo = {
         ...contract.signerInfo,
@@ -228,6 +228,8 @@ function signContract(userId, signPayload, agreedTerms, clientMeta = {}) {
     throw err;
   }
 
+  if (presentContract(contract).isSigned) return contract;
+
   const contractHash = crypto.createHash('sha256').update(textBuffer).digest('hex');
   const signedAt = new Date().toISOString();
 
@@ -260,6 +262,7 @@ function syncContractSignerInfo(userId, profileInfo = {}) {
   const userIdStr = String(userId);
   const contract = data.contracts[userIdStr];
   if (!contract) return null;
+  if (contract.isSigned) return presentContract(contract);
 
   contract.signerInfo = {
     ...contract.signerInfo,

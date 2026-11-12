@@ -76,6 +76,12 @@ model InventoryItem {
 }
 
 model InventoryLot {
+  consignmentSupplierId Int?
+  consignmentPackPrice Decimal? @db.Decimal(18, 2)
+  consignmentPackSize Int @default(1)
+  consignmentSoldQty Int @default(0)
+  consignmentSettledQty Int @default(0)
+  consignmentSettledAt DateTime?
   sourceOrderId Int?
   sourceOrder WholesaleOrder? @relation(fields: [sourceOrderId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   id            Int           @id @default(autoincrement())
@@ -256,6 +262,7 @@ model WholesaleOrder {
 }
 
 model SupplierQuote {
+  consignmentSettlementPrice Decimal? @db.Decimal(18, 2)
   id           Int                 @id @default(autoincrement())
   supplierId   Int
   buyerId      Int

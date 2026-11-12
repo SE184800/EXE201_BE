@@ -261,6 +261,31 @@ test('consignment acceptance waits for physical receipt and then imports once wi
   assert.equal(result.body.items.find(item => item.name === product.name).isConsignment, true);
   const again = await importOrder(id).expect(200);
   assert.equal(again.body.alreadyImported, true);
+  const lot = await prisma.inventoryLot.findFirstOrThrow({ where: { sourceOrderId: id } });
+  const postAs = (path, user, body) => request(app).post(path).set(csrf).set('Cookie', cookies.get(user.id)).send(body);
+  const payPath = '/api/inventory/consignment/settlements/lots/' + lot.id + '/pay';
+  const payment = { qty: 24, expectedSettledQty: 0, method: 'WALLET' };
+  await postAs(payPath, buyer, payment).expect(409);
+  await postAs(payPath, other, payment).expect(404);
+  await postAs(payPath, buyer, { ...payment, method: 'CASH' }).expect(400);
+  const sale = '/api/inventory/' + lot.itemId + '/movements';
+  const oldStock = (await prisma.inventoryItem.findUniqueOrThrow({ where: { id: lot.itemId } })).quantity - lot.quantity;
+  if (oldStock) await postAs(sale, buyer, { type: 'SALE', quantity: oldStock, note: '', requestId: randomUUID() }).expect(200);
+  assert.equal((await prisma.inventoryLot.findUniqueOrThrow({ where: { id: lot.id } })).consignmentSoldQty, 0);
+  await postAs(sale, buyer, { type: 'SALE', quantity: 24, note: '', requestId: randomUUID() }).expect(200);
+  const due = await request(app).get('/api/inventory/consignment/settlements').set('Cookie', cookies.get(buyer.id)).expect(200);
+  assert.equal(due.body.settlements.find(row => row.lotId === lot.id).dueAmount, 20000);
+  const getBalance = async userId => Number((await prisma.wallet.findUnique({ where: { userId } }))?.balance ?? 0);
+  await prisma.wallet.upsert({ where: { userId: buyer.id }, update: { balance: 0 }, create: { userId: buyer.id, balance: 0 } });
+  const supplierBefore = await getBalance(supplier.id);
+  await postAs(payPath, buyer, payment).expect(409);
+  assert.equal((await prisma.inventoryLot.findUniqueOrThrow({ where: { id: lot.id } })).consignmentSettledQty, 0);
+  await prisma.wallet.update({ where: { userId: buyer.id }, data: { balance: 50000 } });
+  const results = await Promise.all([postAs(payPath, buyer, payment), postAs(payPath, buyer, payment)]);
+  assert.deepEqual(results.map(result => result.status).sort(), [200, 409]);
+  assert.equal(await getBalance(buyer.id), 30000);
+  assert.equal(await getBalance(supplier.id), supplierBefore + 20000);
+  await postAs(payPath, buyer, payment).expect(409);
 });
 
 test('production blocks simulated deposits for ordinary accounts', async () => {

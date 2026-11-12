@@ -498,7 +498,10 @@ function createOrderRoutes(prisma, requireAuth) {
         if (!order) throw problem(404, 'Không tìm thấy đơn hàng.');
         const reason = importBlockReason(order, deliveryService.getDriverInfo(id));
         if (reason) throw problem(409, reason);
-        const receipt = await syncOrderToStoreInventory(tx, buyerId, order);
+        const quote = order.sourceQuote;
+        const legacy = quote && require('../services/consignmentService').getQuoteConsignment(quote.id);
+        const price = quote?.consignmentSettlementPrice ?? (legacy?.isConsignment ? legacy.settlementPrice : null);
+        const receipt = await syncOrderToStoreInventory(tx, buyerId, order, price);
         if (!receipt.alreadyImported) await audit(tx, buyerId, 'ORDER_IMPORTED_TO_INVENTORY', 'ORDER', id, { count: receipt.count });
         const saved = await tx.wholesaleOrder.findUniqueOrThrow({ where: { id }, include });
         return { ...receipt, order: saved };

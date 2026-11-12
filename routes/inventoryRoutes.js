@@ -14,7 +14,6 @@ const { createStockService } = require('../services/stockService');
 const { createStoreRevenueService } = require('../services/storeRevenueService');
 const inventorySupplierService = require('../services/inventorySupplierService');
 const consignmentService = require('../services/consignmentService');
-const { walletService } = require('../services/walletService');
 
 const inventoryWorkbookUpload = multer({
   storage: multer.memoryStorage(),
@@ -215,20 +214,25 @@ function createInventoryRoutes(prisma, requireAuth) {
     }
   });
 
-  router.post('/consignment/settlements/:itemId/pay', async (req, res, next) => {
-    const itemId = Number(req.params.itemId);
-    const { qty, method = 'WALLET' } = req.body || {};
+  router.post('/consignment/settlements/:itemId/pay', (_req, res) => {
+    res.status(409).json({ message: 'Vui lòng tải lại ứng dụng để quyết toán theo lô ký gửi.' });
+  });
+
+  router.post('/consignment/settlements/lots/:lotId/pay', async (req, res, next) => {
+    const lotId = Number(req.params.lotId);
+    const { qty, expectedSettledQty, method = 'WALLET' } = req.body || {};
     try {
       const result = await consignmentService.settleConsignmentItem({
         storeId: req.auth.user.id,
-        itemId,
+        lotId,
         qtyToSettle: qty,
+        expectedSettledQty,
         method,
         prisma,
-        walletService,
       });
       res.json(result);
     } catch (error) {
+      if (error.status) return res.status(error.status).json({ message: error.message });
       next(error);
     }
   });

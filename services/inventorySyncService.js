@@ -27,7 +27,7 @@ function importBlockReason(order, driverInfo) {
 }
 // Call inside a Serializable transaction. Marker, stock, lots and history
 // must commit or roll back together; the UI is never the duplicate guard.
-async function syncOrderToStoreInventory(tx, buyerId, order) {
+async function syncOrderToStoreInventory(tx, buyerId, order, consignmentPrice) {
   if (!order.items.length) throw problem('Đơn hàng không có mặt hàng để nhập kho.');
   if (order.inventoryImportedAt) return { alreadyImported: true, count: 0 };
   const orderTag = `[ĐƠN SỈ #${order.id}]`, oldPrefix = `đơn sỉ #${order.id} [`;
@@ -80,7 +80,14 @@ async function syncOrderToStoreInventory(tx, buyerId, order) {
     if (tracked < before) await tx.inventoryLot.create({ data: { itemId: item.id, quantity: before - tracked, receivedAt: item.createdAt, expiryDate: item.expiryDate, purchasePrice: item.purchasePrice } });
     const saved = await tx.inventoryItem.update({ where: { id: item.id }, data: { quantity: { increment: quantity }, purchasePrice } });
     // Preserve all earlier lots; each new receipt has its own source order.
-    await tx.inventoryLot.create({ data: { itemId: item.id, quantity, purchasePrice, receivedAt: importedAt, sourceOrderId: order.id } });
+    await tx.inventoryLot.create({ data: {
+      itemId: item.id, quantity, purchasePrice, receivedAt: importedAt, sourceOrderId: order.id,
+      ...(consignmentPrice != null ? {
+        consignmentSupplierId: order.supplierId,
+        consignmentPackPrice: consignmentPrice,
+        consignmentPackSize: multiplier,
+      } : {}),
+    } });
     const note = `[ĐƠN SỈ #${order.id}] Nhập ${line.quantity} × ${line.packaging || 'cái'} → ${quantity} ${item.unit}. NCC: ${supplierName}`;
     await tx.stockMovement.create({ data: { id: randomUUID(), itemId: item.id, type: 'RECEIPT', quantityChange: quantity, quantityBefore: before, quantityAfter: saved.quantity, productName: saved.name, unit: saved.unit, note: note.slice(0, 250), createdAt: importedAt } });
     Object.assign(item, saved);

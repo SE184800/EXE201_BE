@@ -126,6 +126,13 @@ function createStockService(prisma) {
       if (!old) throw problem(404, 'Không tìm thấy sản phẩm trong kho của bạn.');
       if (expectedUpdatedAt && old.updatedAt.toISOString() !== expectedUpdatedAt) throw problem(409, 'Kho đã thay đổi. Tải lại kho và chọn Sửa lại để tránh ghi đè số lượng mới.');
       if (old.unit !== itemData.unit && old.quantity > 0) throw problem(400, 'Chỉ đổi đơn vị khi tồn kho bằng 0 để tránh sai số lượng.');
+      if (old.quantity !== itemData.quantity || old.unit !== itemData.unit) {
+        const consignmentLot = await tx.inventoryLot.findFirst({
+          where: { itemId: id, consignmentSupplierId: { not: null } },
+          select: { id: true },
+        });
+        if (consignmentLot) throw problem(409, 'Mặt hàng có lô ký gửi. Hãy dùng thao tác nhập hoặc bán để cập nhật tồn kho.');
+      }
       const changed = await tx.inventoryItem.updateMany({ where: { id, ownerId, quantity: old.quantity, updatedAt: old.updatedAt }, data: itemData });
       if (!changed.count) throw problem(409, 'Kho vừa thay đổi. Vui lòng tải lại và thử lại.');
       if (supplierName !== undefined) {
@@ -180,7 +187,10 @@ function createStockService(prisma) {
           for (const lot of lots) {
             if (!remaining) break;
             const used = Math.min(remaining, lot.quantity);
-            await tx.inventoryLot.update({ where: { id: lot.id }, data: { quantity: { decrement: used } } });
+            await tx.inventoryLot.update({ where: { id: lot.id }, data: {
+              quantity: { decrement: used },
+              ...(lot.consignmentSupplierId != null ? { consignmentSoldQty: { increment: used } } : {}),
+            } });
             remaining -= used;
           }
         }

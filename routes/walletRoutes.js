@@ -114,7 +114,7 @@ function createWalletRoutes(prisma, requireAuth, config = {}) {
   router.post('/deposits/qr/:id/confirm', run(async (req, res) => {
     const id = idParam(req.params.id);
     if (!id) return res.status(400).json({ message: 'Mã phiếu không hợp lệ.' });
-    res.json({ request: await service.confirmQrDeposit(req.auth.user.id, id, req.body || {}) });
+    res.json({ request: await service.confirmQrDeposit(req.auth.user.id, id) });
   }));
 
   router.get('/withdrawals', run(async (req, res) => {
@@ -186,7 +186,10 @@ function createAdminWalletRoutes(prisma, requireAuth) {
     if (status && !['PENDING', 'APPROVED', 'REJECTED'].includes(status)) {
       return res.status(400).json({ message: 'Trạng thái yêu cầu nạp tiền không hợp lệ.' });
     }
-    const where = status ? { status } : {};
+    const where = {
+      status: status || { not: 'AWAITING_TRANSFER' },
+      NOT: { method: 'VIET_QR', status: 'PENDING', isSandbox: true },
+    };
     const [rows, total] = await Promise.all([
       prisma.depositRequest.findMany({
         where,

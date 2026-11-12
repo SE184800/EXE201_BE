@@ -140,7 +140,7 @@ test('creating a QR ticket returns a scannable code and keeps the ticket pending
   const created = await post('/wallet/deposits/qr', { amount: 750000, note: 'QR demo' }, 1).expect(201);
   const { request: ticket, qr } = created.body;
 
-  assert.equal(ticket.status, 'PENDING');
+  assert.equal(ticket.status, 'AWAITING_TRANSFER');
   assert.equal(ticket.amount, 750000);
   assert.equal(ticket.method, 'VIET_QR');
   assert.equal(qr.accountNumber, qrBank.accountNumber);
@@ -148,27 +148,32 @@ test('creating a QR ticket returns a scannable code and keeps the ticket pending
   assert.ok(qr.payload.startsWith('00020101'));
   assert.ok(qr.payload.includes(qrBank.accountNumber));
 
-  // The money is not credited until the user confirms the transfer.
+  // Generating a QR code does not create a review request or move money.
   const wallet = (await get('/wallet', 1).expect(200)).body.wallet;
   assert.equal(wallet.balance, before);
   const overview = (await get('/wallet', 1).expect(200)).body;
-  assert.equal(overview.pendingDeposits, 1);
+  assert.equal(overview.pendingDeposits, 0);
 });
 
-test('confirming a QR ticket credits the wallet exactly once', async () => {
+test('reporting a QR transfer queues review and only admin approval credits once', async () => {
   const created = await post('/wallet/deposits/qr', { amount: 300000 }, 1).expect(201);
   const id = created.body.request.id;
+  const confirm = `/wallet/deposits/qr/${id}/confirm`;
+  const approve = `/admin/wallet/deposits/${id}/approve`;
 
-  const confirmed = await post(`/wallet/deposits/qr/${id}/confirm`, {}, 1).expect(200);
-  assert.equal(confirmed.body.request.status, 'APPROVED');
+  await post(approve, {}, 0).expect(409);
+  const confirmed = await post(confirm, {}, 1).expect(200);
+  assert.equal(confirmed.body.request.status, 'PENDING');
+  assert.equal(confirmed.body.request.isSandbox, false);
+  await post(confirm, {}, 1).expect(200);
+  const pending = (await get('/wallet', 1).expect(200)).body;
+  assert.equal(pending.pendingDeposits, 1);
+  assert.equal(pending.wallet.balance, 0);
 
-  const wallet = (await get('/wallet', 1).expect(200)).body.wallet;
-  assert.equal(wallet.balance, 300000);
-
-  // The same ticket can never be settled twice.
-  await post(`/wallet/deposits/qr/${id}/confirm`, {}, 1).expect(409);
-  const unchanged = (await get('/wallet', 1).expect(200)).body.wallet;
-  assert.equal(unchanged.balance, 300000);
+  await post(approve, {}, 0).expect(200);
+  await post(approve, {}, 0).expect(409);
+  await post(confirm, {}, 1).expect(409);
+  assert.equal((await get('/wallet', 1).expect(200)).body.wallet.balance, 300000);
 });
 
 test('a QR ticket can only be confirmed by its owner', async () => {
@@ -181,7 +186,7 @@ test('a QR ticket can only be confirmed by its owner', async () => {
 
   // The ticket is still waiting for its owner, so no money moved.
   const pending = (await get('/wallet', 1).expect(200)).body;
-  assert.equal(pending.pendingDeposits, 2);
+  assert.equal(pending.pendingDeposits, 0);
   assert.equal(pending.wallet.balance, 300000);
 });
 
@@ -196,6 +201,7 @@ test('the QR ledger row is tagged so the history stays readable', async () => {
   const row = ledger.body.transactions.find(item => item.type === 'QR_DEPOSIT');
   assert.ok(row);
   assert.equal(row.direction, 'CREDIT');
+  assert.equal(row.method, 'REAL');
   assert.equal(row.amount, 300000);
   assert.equal(row.balanceAfter, 300000);
 });

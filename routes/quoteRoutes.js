@@ -43,8 +43,8 @@ function serializeQuote(quote) {
     version: quote.version,
     createdAt: quote.createdAt,
     updatedAt: quote.updatedAt,
-    isConsignment: Boolean(consignment?.isConsignment),
-    settlementPrice: consignment?.settlementPrice || 0,
+    isConsignment: quote.consignmentSettlementPrice != null || Boolean(consignment?.isConsignment),
+    settlementPrice: Number(quote.consignmentSettlementPrice ?? consignment?.settlementPrice ?? 0),
     autoRestock: consignment?.autoRestock !== false,
     autoExchangeExpiry: consignment?.autoExchangeExpiry !== false,
     termsNote: consignment?.termsNote || null,
@@ -131,7 +131,11 @@ function createSupplierQuoteRoutes(prisma, requireAuth) {
     if (typeof depositRate === 'number' && depositRate > maxAllowedDeposit) {
       return res.status(400).json({ message: `Tỷ lệ ký quỹ (${depositRate}%) vượt quá mức trần tối đa của sàn (${maxAllowedDeposit}%). Vui lòng điều chỉnh lại.` });
     }
-    const isConsignment = Boolean(body.isConsignment);
+    const isConsignment = body.isConsignment === true;
+    if (isConsignment && (!hasTwoDecimals(body.settlementPrice) || body.settlementPrice <= 0 ||
+      body.settlementPrice > 1000000000 || depositRate !== 0)) {
+      return res.status(400).json({ message: 'Báo giá ký gửi cần giá quyết toán hợp lệ và không thu tiền cọc.' });
+    }
     const minUnitPrice = isConsignment ? 0 : 0.01;
     if (!Number.isInteger(buyerId) || buyerId < 1 || buyerId > 2147483647 || title.length < 2 || title.length > 150 ||
       !dateOnly(validUntil) || validUntil < today || new Date(validUntil) - new Date(today) > 90 * DAY ||
@@ -166,6 +170,7 @@ function createSupplierQuoteRoutes(prisma, requireAuth) {
           const originalUnitPrice = new Prisma.Decimal(line.unitPrice);
           const discountRate = line.discountRate ?? 0;
           const unitPrice = originalUnitPrice.mul(new Prisma.Decimal(100).sub(discountRate)).div(100).toDecimalPlaces(2);
+          if (isConsignment && !originalUnitPrice.isZero()) throw problem(400, 'Đơn giá trả trước của hàng ký gửi phải bằng 0.');
           if (!isConsignment && unitPrice.lessThanOrEqualTo(0)) throw problem(400, 'Giá sau giảm phải lớn hơn 0.');
           return { productId: product.id, productName: product.name, packaging: product.packaging, quantity: line.quantity, originalUnitPrice, discountRate, unitPrice, lineTotal: unitPrice.mul(line.quantity) };
         });
@@ -177,6 +182,7 @@ function createSupplierQuoteRoutes(prisma, requireAuth) {
             supplierId: profile.id, buyerId, title, status: 'SENT',
             validUntil: new Date(validUntil + 'T00:00:00.000Z'), subtotal,
             deliveryFee, total, depositRate, note: note || null,
+            consignmentSettlementPrice: isConsignment ? body.settlementPrice : null,
             lines: { create: snapshots },
           },
           include: quoteInclude,
@@ -266,6 +272,10 @@ function createStoreQuoteRoutes(prisma, requireAuth) {
         if (!quote) throw problem(404, 'Không tìm thấy báo giá.');
         if (quote.status === 'ACCEPTED' && quote.order) return quote.order;
         if (quote.status !== 'SENT' || quote.validUntil.toISOString().slice(0, 10) < vnDate(new Date())) throw problem(409, 'Báo giá đã hết hạn hoặc không còn chờ phản hồi.');
+        const legacyConsignment = quote.consignmentSettlementPrice == null && consignmentService.getQuoteConsignment(quote.id)?.isConsignment;
+        if (legacyConsignment && (!quote.subtotal.isZero() || !quote.depositRate.isZero())) {
+          throw problem(409, 'Báo giá ký gửi cũ có khoản trả trước. Vui lòng yêu cầu chủ vựa gửi lại báo giá.');
+        }
         if (quote.supplier.verificationStatus !== 'APPROVED' || quote.supplier.user.role.code !== 'SUPPLIER' || !accountAvailable(quote.supplier.user)) throw problem(409, 'Gian hàng hiện không còn khả dụng.');
         const products = await tx.supplierProduct.findMany({ where: { id: { in: quote.lines.map(line => line.productId) }, supplierId: quote.supplierId, isActive: true } });
         if (products.length !== quote.lines.length) throw problem(409, 'Có mặt hàng trong báo giá đã ngừng bán.');
