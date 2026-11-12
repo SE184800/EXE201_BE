@@ -94,7 +94,7 @@ function addHoursIso(hours = RESPONSE_TIMEOUT_HOURS, baseDate = new Date()) {
   return new Date(baseDate.getTime() + hours * 60 * 60 * 1000).toISOString();
 }
 
-function buildFallbackWorkflow(complaint) {
+function buildFallbackWorkflow(complaint, { includeResponseHistory = true } = {}) {
   if (!complaint) return null;
   const createdIso = complaint.createdAt ? new Date(complaint.createdAt).toISOString() : new Date().toISOString();
   const updatedIso = complaint.updatedAt ? new Date(complaint.updatedAt).toISOString() : createdIso;
@@ -116,7 +116,7 @@ function buildFallbackWorkflow(complaint) {
       note: complaint.description || complaint.reason || '',
     },
   ];
-  if (complaint.response) {
+  if (includeResponseHistory && complaint.response) {
     history.push({
       at: updatedIso,
       actorRole: 'SUPPLIER',
@@ -141,17 +141,19 @@ function buildFallbackWorkflow(complaint) {
     proposedNote: complaint.response || null,
     finalOutcome: isClosed ? st : null,
     finalSummary: isClosed ? (OUTCOME_LABELS[st] || complaint.response || 'Đã xử lý xong') : null,
-    closedReason: isClosed ? (complaint.response || null) : null,
+    closedReason: isClosed && complaint.response && complaint.response !== (OUTCOME_LABELS[st] || 'Đã xử lý xong')
+      ? complaint.response
+      : null,
     resolvedAt: isClosed ? updatedIso : null,
     history,
   };
 }
 
-function getComplaintWorkflow(complaint) {
+function getComplaintWorkflow(complaint, options = {}) {
   if (!complaint) return null;
   const store = loadStore();
   const saved = store.complaints[String(complaint.id)];
-  if (!saved) return buildFallbackWorkflow(complaint);
+  if (!saved) return buildFallbackWorkflow(complaint, options);
   return {
     ...saved,
     maxRounds: null,
@@ -211,7 +213,7 @@ function initComplaintWorkflow(complaint, actorName = 'Tiệm tạp hóa') {
 }
 
 function recordSupplierProposal(complaint, { supplierName, action, deductAmount = null, note }) {
-  const current = getComplaintWorkflow(complaint);
+  const current = getComplaintWorkflow(complaint, { includeResponseHistory: false });
   const now = new Date();
   const round = current?.round || 1;
   const actionLabel = SUPPLIER_ACTION_LABELS[action] || action;

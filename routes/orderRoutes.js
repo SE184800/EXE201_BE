@@ -10,7 +10,7 @@ const deliveryFeeService = require('../services/deliveryFeeService');
 const { syncOrderToStoreInventory, importBlockReason } = require('../services/inventorySyncService');
 const { walletService, settleOrderToSupplier } = require('../services/walletService');
 const { validateDeliveryTime, pendingRequest } = require('../services/reschedulePolicy');
-const { orderQuery } = require('../services/orderQuery');
+const { orderQuery, buildOrderWhere } = require('../services/orderQuery');
 const { paymentDue, fullyPaidByWallet } = require('../services/orderPaymentPolicy');
 const { payReceivedOrder } = require('../services/receivedOrderPayment');
 const { visibleSupplierWhere, audit } = require('../services/platformPolicy');
@@ -61,8 +61,8 @@ function createOrderRoutes(prisma, requireAuth) {
   router.get('/', requireRole('STORE_OWNER'), async (req, res, next) => {
     try {
       await evaluateAndApplyExpiredTimeouts(prisma, { buyerId: req.auth.user.id });
-      const { page, status } = orderQuery(req.query);
-      const where = { buyerId: req.auth.user.id, ...(status ? { status } : {}) };
+      const { page, status, q } = orderQuery(req.query);
+      const where = buildOrderWhere({ buyerId: req.auth.user.id }, { status, q });
       const [orders, total] = await Promise.all([
         prisma.wholesaleOrder.findMany({ where, include, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 21, skip: (page - 1) * 20 }),
         prisma.wholesaleOrder.count({ where }),

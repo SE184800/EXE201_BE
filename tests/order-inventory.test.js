@@ -32,6 +32,9 @@ after(async () => {
   const ids = users.map(user => user.id);
   await prisma.auditLog.deleteMany({ where: { actorId: { in: ids } } });
   await prisma.walletTransaction.deleteMany({ where: { userId: { in: ids } } });
+  await prisma.inventoryLot.deleteMany({ where: { sourceOrderId: { in: orderIds } } });
+  await prisma.stockMovement.deleteMany({ where: { item: { ownerId: { in: ids } } } });
+  await prisma.inventoryLot.deleteMany({ where: { item: { ownerId: { in: ids } } } });
   await prisma.inventoryItem.deleteMany({ where: { ownerId: { in: ids } } });
   await prisma.orderComplaint.deleteMany({ where: { orderId: { in: orderIds } } });
   await prisma.orderPayment.deleteMany({ where: { orderId: { in: orderIds } } });
@@ -66,12 +69,12 @@ test('only the owning store can import an order after receipt', async () => {
   assert.equal(await prisma.inventoryItem.count({ where: { ownerId: buyer.id } }), 0);
 });
 
-test('received goods can enter inventory before payment without marking the order paid or complete', async () => {
+test('received goods cannot enter inventory before order is paid and completed', async () => {
   const purchase = await order('received unpaid', { unpaid: true, status: 'ISSUE_HANDLING' });
+  await importOrder(purchase.id).expect(409);
+  await prisma.wholesaleOrder.update({ where: { id: purchase.id }, data: { status: 'COMPLETED' } });
   await importOrder(purchase.id).expect(200);
-  const saved = await prisma.wholesaleOrder.findUniqueOrThrow({ where: { id: purchase.id }, include: { orderPayment: true } });
-  assert.equal(saved.status, 'ISSUE_HANDLING');
-  assert.equal(saved.orderPayment, null);
+  const saved = await prisma.wholesaleOrder.findUniqueOrThrow({ where: { id: purchase.id } });
   assert.ok(saved.inventoryImportedAt);
   await importOrder(purchase.id).expect(200);
 });
@@ -252,7 +255,7 @@ test('consignment acceptance waits for physical receipt and then imports once wi
   orderIds.push(id);
   assert.equal(await prisma.inventoryItem.count({ where: { ownerId: buyer.id } }), before);
   await importOrder(id).expect(409);
-  await prisma.wholesaleOrder.update({ where: { id }, data: { status: 'ISSUE_HANDLING' } });
+  await prisma.wholesaleOrder.update({ where: { id }, data: { status: 'COMPLETED' } });
   await importOrder(id).expect(200);
   const result = await request(app).get('/api/inventory').set('Cookie', cookies.get(buyer.id)).expect(200);
   assert.equal(result.body.items.find(item => item.name === product.name).isConsignment, true);

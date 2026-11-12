@@ -224,10 +224,12 @@ function saveDriverInfo(orderId, input, supplierId) {
   store[String(orderId)] = record;
   persistDeliveries();
 
-  // Also record in saved drivers list
-  try {
-    saveDriverToSavedList(validation.data, supplierId);
-  } catch {}
+  // Only record in saved drivers list when the supplier explicitly opts in
+  if (input && input.saveToDirectory === true) {
+    try {
+      saveDriverToSavedList(validation.data, supplierId);
+    } catch {}
+  }
 
   return record;
 }

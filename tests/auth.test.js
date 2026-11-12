@@ -206,11 +206,16 @@ test('tài khoản bị khóa mất quyền ngay cả khi JWT còn hạn', async
   });
   try {
     await request(app).get('/api/auth/me').set('Cookie', cookie).expect(401);
-    await request(app)
+    const bannedLogin = await request(app)
       .post('/api/auth/login')
       .set(csrf)
       .send({ username: users[1].username, password })
-      .expect(401);
+      .expect(403);
+    assert.equal(bannedLogin.body.code, 'ACCOUNT_BANNED');
+    assert.equal(
+      bannedLogin.body.message,
+      'Tài khoản của bạn đã bị khóa vĩnh viễn. Vui lòng tạo tài khoản mới để tiếp tục.',
+    );
   } finally {
     await prisma.user.update({
       where: { id: users[1].id },
@@ -427,4 +432,61 @@ test('giới hạn số lần đăng nhập sai', async () => {
     .set(csrf)
     .send({ username: '', password: '' })
     .expect(429);
+});
+
+test('đăng nhập tài khoản tạm khóa hoặc khóa vĩnh viễn chỉ báo lý do khi đúng mật khẩu', async () => {
+  const futureDate = new Date(Date.now() + 2 * 60 * 60 * 1000);
+  const lockedUser = await prisma.user.create({
+    data: {
+      username: `${prefix}_locked`,
+      name: 'Locked Account Test',
+      passwordHash: users[0].passwordHash,
+      roleId: users[0].roleId,
+      suspendedUntil: futureDate,
+    },
+  });
+  createdIds.push(lockedUser.id);
+
+  // Wrong password stays generic 401
+  const wrongPw = await request(app)
+    .post('/api/auth/login')
+    .set(csrf)
+    .send({ username: lockedUser.username, password: 'WrongPassword123!' })
+    .expect(401);
+  assert.equal(wrongPw.body.message, 'Username hoặc mật khẩu không chính xác.');
+
+  // Correct password on SUSPENDED returns 403 with exact suspended message
+  const suspendedRes = await request(app)
+    .post('/api/auth/login')
+    .set(csrf)
+    .send({ username: lockedUser.username, password })
+    .expect(403);
+  assert.equal(suspendedRes.body.code, 'ACCOUNT_SUSPENDED');
+  assert.match(suspendedRes.body.message, /^Tài khoản của bạn hiện đang tạm khóa\. Vui lòng đợi đến .+ để đăng nhập lại\.$/);
+
+  // Move to BANNED (isActive: false)
+  await prisma.user.update({
+    where: { id: lockedUser.id },
+    data: { isActive: false, suspendedUntil: null },
+  });
+
+  // Wrong password on BANNED still stays generic 401
+  const wrongBannedPw = await request(app)
+    .post('/api/auth/login')
+    .set(csrf)
+    .send({ username: lockedUser.username, password: 'WrongPassword123!' })
+    .expect(401);
+  assert.equal(wrongBannedPw.body.message, 'Username hoặc mật khẩu không chính xác.');
+
+  // Correct password on BANNED returns 403 with exact permanent ban message
+  const bannedRes = await request(app)
+    .post('/api/auth/login')
+    .set(csrf)
+    .send({ username: lockedUser.username, password })
+    .expect(403);
+  assert.equal(bannedRes.body.code, 'ACCOUNT_BANNED');
+  assert.equal(
+    bannedRes.body.message,
+    'Tài khoản của bạn đã bị khóa vĩnh viễn. Vui lòng tạo tài khoản mới để tiếp tục.',
+  );
 });

@@ -441,3 +441,90 @@ test('5. Paused timeout check keeps complaint open and buyer WITHDRAW records fi
   assert.equal(withdrawRes.body.complaint.status, 'RESOLVED');
   assert.equal(withdrawRes.body.complaint.workflow.finalOutcome, 'STORE_WITHDRAWN');
 });
+
+test('6. Order search (q), HAS_COMPLAINT filter, and complaint notice/response email templates', async () => {
+  const { sendComplaintNoticeEmail, sendComplaintResponseEmail } = require('../services/complaintMailService');
+  const fs = require('node:fs/promises');
+  const path = require('node:path');
+
+  const ord = await createTestOrder({ status: 'DELIVERED', quantity: 2, price: 85000 });
+
+  // Before complaint: HAS_COMPLAINT filter does not match this order
+  const beforeFilter = await request(app)
+    .get('/api/orders?status=HAS_COMPLAINT')
+    .set('Cookie', cookies.get(buyer.id))
+    .expect(200);
+  assert.equal(beforeFilter.body.orders.some((o) => o.id === ord.id), false);
+
+  const createRes = await request(app)
+    .post('/api/complaints')
+    .set(csrf)
+    .set('Cookie', cookies.get(buyer.id))
+    .send({
+      orderId: ord.id,
+      reason: 'DAMAGED',
+      description: '[Sự cố: Gạo ST25 test x2 | Bồi hoàn ước tính: 50.000 đ | Đề xuất: Giao bù]\nBao gạo bị rách khi giao',
+    })
+    .expect(201);
+  const compId = createRes.body.complaint.id;
+  complaintIds.push(compId);
+
+  // Active complaint matches HAS_COMPLAINT & q=<orderId> for both store owner and supplier
+  const storeFiltered = await request(app)
+    .get(`/api/orders?status=HAS_COMPLAINT&q=${encodeURIComponent(String(ord.id))}`)
+    .set('Cookie', cookies.get(buyer.id))
+    .expect(200);
+  assert.equal(storeFiltered.body.orders.some((o) => o.id === ord.id), true);
+
+  const supplierFiltered = await request(app)
+    .get(`/api/supplier/orders?status=HAS_COMPLAINT&q=${encodeURIComponent(`#${ord.id}`)}`)
+    .set('Cookie', cookies.get(supplier.id))
+    .expect(200);
+  assert.equal(supplierFiltered.body.orders.some((o) => o.id === ord.id), true);
+
+  // Search by product name matches cleanly
+  const productSearch = await request(app)
+    .get(`/api/orders?q=${encodeURIComponent(product.name)}`)
+    .set('Cookie', cookies.get(buyer.id))
+    .expect(200);
+  assert.equal(productSearch.body.orders.some((o) => o.id === ord.id), true);
+
+  // Verify email templates (without real SMTP creds -> fallback returns clean subject + .local-mail file)
+  const localMailDir = path.join(__dirname, '..', '.local-mail');
+  const beforeFiles = new Set(await fs.readdir(localMailDir).catch(() => []));
+
+  const noticeMail = await sendComplaintNoticeEmail({
+    to: 'supplier-test@example.com',
+    supplierName: 'Vựa Test',
+    storeName: 'Tạp Hóa Test',
+    orderId: ord.id,
+    orderTotal: 170000,
+    reasonLabel: 'Hàng hư hỏng / bể vỡ',
+    description: 'Bao gạo bị rách khi giao',
+    itemSummaries: 'Gạo ST25 x2',
+    evidenceImages: ['/uploads/a.jpg'],
+    config: { gmail: { user: '', appPassword: '' } },
+  });
+  assert.match(noticeMail.subject, /Đơn hàng #\d+ của bạn vừa bị khiếu nại/);
+
+  const responseMail = await sendComplaintResponseEmail({
+    to: 'store-test@example.com',
+    storeName: 'Tạp Hóa Test',
+    supplierName: 'Vựa Test',
+    orderId: ord.id,
+    orderTotal: 170000,
+    reasonLabel: 'Hàng hư hỏng / bể vỡ',
+    itemSummaries: 'Gạo ST25 x2',
+    actionLabel: 'Giao bù hàng mới',
+    supplierNote: 'Vựa sẽ giao bù vào sáng mai',
+    config: { gmail: { user: '', appPassword: '' } },
+  });
+  assert.match(responseMail.subject, /Bạn có một phản hồi về đơn khiếu nại #\d+ mà bạn đã tạo/);
+
+  const afterFiles = await fs.readdir(localMailDir).catch(() => []);
+  for (const file of afterFiles) {
+    if (!beforeFiles.has(file) && file.includes(`order-${ord.id}`)) {
+      await fs.unlink(path.join(localMailDir, file)).catch(() => {});
+    }
+  }
+});

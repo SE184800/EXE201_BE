@@ -30,6 +30,15 @@ function createAuthController(authService, config) {
               success: false,
               message: 'Username hoặc mật khẩu không chính xác.',
             });
+        if (result.blocked) {
+          res.clearCookie(COOKIE_NAME, cookieOptions(config));
+          return res.status(403).json({
+            success: false,
+            code: result.code,
+            ...(result.suspendedUntil ? { suspendedUntil: result.suspendedUntil } : {}),
+            message: result.message,
+          });
+        }
         if (result.subscriptionRequired) {
           res.clearCookie(COOKIE_NAME, cookieOptions(config));
           return res.status(402).json({

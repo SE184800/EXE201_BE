@@ -475,8 +475,9 @@ function createSupplierService(prisma) {
   async function listOrders(userId, query = {}) {
     const profile = await requireProfile(userId);
     await evaluateAndApplyExpiredTimeouts(prisma, { supplierId: profile.id });
-    const { page, status } = require('./orderQuery').orderQuery(query);
-    const where = { supplierId: profile.id, ...(status ? { status } : {}) };
+    const { orderQuery: parseOrderQuery, buildOrderWhere } = require('./orderQuery');
+    const { page, status, q } = parseOrderQuery(query);
+    const where = buildOrderWhere({ supplierId: profile.id }, { status, q });
     const [orders, total] = await Promise.all([prisma.wholesaleOrder.findMany({
       where,
       include: { buyer: true, items: true, complaint: true, orderPayment: { include: { refund: { select: { id: true } } } } },
@@ -673,7 +674,7 @@ function createSupplierService(prisma) {
       include: { buyer: true, items: true, complaint: true },
     });
     if (!order) return null;
-    deliveryService.saveDriverInfo(order.id, driverInfo);
+    deliveryService.saveDriverInfo(order.id, driverInfo, profile.id);
     return serializeOrder(order);
   }
 

@@ -63,11 +63,14 @@ test('Inventory Import & Packaging Unit Test Suite', async (t) => {
   await t.test('3. importBlockReason - Guards on Order Statuses and Incidents', () => {
     // Order in PENDING status cannot be imported
     const pendingOrder = { status: 'PENDING', inventoryImportedAt: null };
-    assert.equal(importBlockReason(pendingOrder, null), 'Nhận và kiểm hàng trước khi nhập kho.');
+    assert.equal(importBlockReason(pendingOrder, null), 'Cần hoàn tất thanh toán và xác nhận đơn thành công trước khi nhập kho.');
 
-    // Order in SHIPPING status cannot be imported
+    // Order in SHIPPING / ISSUE_HANDLING / DELIVERED status cannot be imported before COMPLETED
     const shippingOrder = { status: 'SHIPPING', inventoryImportedAt: null };
-    assert.equal(importBlockReason(shippingOrder, null), 'Nhận và kiểm hàng trước khi nhập kho.');
+    assert.equal(importBlockReason(shippingOrder, null), 'Cần hoàn tất thanh toán và xác nhận đơn thành công trước khi nhập kho.');
+
+    const issueHandlingOrder = { status: 'ISSUE_HANDLING', inventoryImportedAt: null };
+    assert.equal(importBlockReason(issueHandlingOrder, null), 'Cần hoàn tất thanh toán và xác nhận đơn thành công trước khi nhập kho.');
 
     // Order with active OPEN complaint cannot be imported
     const complaintOrder = {
@@ -85,9 +88,9 @@ test('Inventory Import & Packaging Unit Test Suite', async (t) => {
     };
     assert.equal(importBlockReason(reviewOrder, null), 'Cần xử lý xong khiếu nại trước khi thêm vào kho.');
 
-    // Order with transit damaged items cannot be imported automatically without adjustment
+    // Completed order with transit damaged items cannot be imported automatically without adjustment
     const damagedOrder = {
-      status: 'DELIVERED',
+      status: 'COMPLETED',
       inventoryImportedAt: null,
     };
     const driverInfo = {
@@ -97,9 +100,9 @@ test('Inventory Import & Packaging Unit Test Suite', async (t) => {
     };
     assert.equal(importBlockReason(damagedOrder, driverInfo), 'Đơn có báo cáo hàng hỏng. Cần nhập theo số lượng thực nhận để tránh cộng cả hàng hỏng.');
 
-    // Happy case: Delivered order with resolved complaint and no transit damage can be imported
+    // Happy case: Completed order with resolved complaint and no transit damage can be imported
     const validOrder = {
-      status: 'DELIVERED',
+      status: 'COMPLETED',
       inventoryImportedAt: null,
       complaint: { status: 'RESOLVED' },
     };
@@ -107,7 +110,7 @@ test('Inventory Import & Packaging Unit Test Suite', async (t) => {
 
     // Already imported order is not blocked by reason check
     const importedOrder = {
-      status: 'DELIVERED',
+      status: 'COMPLETED',
       inventoryImportedAt: new Date(),
     };
     assert.equal(importBlockReason(importedOrder, null), null);

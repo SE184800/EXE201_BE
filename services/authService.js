@@ -131,6 +131,20 @@ function createAuthService(prisma, config) {
       throw error;
     }
   }
+function formatSuspendedUntil(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('vi-VN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    timeZone: 'Asia/Ho_Chi_Minh',
+  });
+}
+
 async function login(username, password) {
   return withDatabaseRetry(async () => {
     const user = await prisma.user.findUnique({
@@ -143,7 +157,27 @@ async function login(username, password) {
       user?.passwordHash || dummyHash,
     );
 
-    if (!accountAvailable(user) || !validPassword) return null;
+    if (!user || user.deletedAt || !validPassword) return null;
+    if (!user.isActive) {
+      return {
+        blocked: true,
+        code: 'ACCOUNT_BANNED',
+        message: 'Tài khoản của bạn đã bị khóa vĩnh viễn. Vui lòng tạo tài khoản mới để tiếp tục.',
+      };
+    }
+    const now = new Date();
+    if (user.suspendedUntil && user.suspendedUntil > now) {
+      const formattedUntil = formatSuspendedUntil(user.suspendedUntil);
+      return {
+        blocked: true,
+        code: 'ACCOUNT_SUSPENDED',
+        suspendedUntil: user.suspendedUntil.toISOString(),
+        message: formattedUntil
+          ? `Tài khoản của bạn hiện đang tạm khóa. Vui lòng đợi đến ${formattedUntil} để đăng nhập lại.`
+          : 'Tài khoản của bạn hiện đang tạm khóa. Vui lòng thử đăng nhập lại sau khi hết thời hạn khóa.',
+      };
+    }
+    if (!accountAvailable(user, now)) return null;
     const safeUser = publicUser(user);
     const access = await subscriptionService.access(safeUser);
     if (!access.hasAccess) {

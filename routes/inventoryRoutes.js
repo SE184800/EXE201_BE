@@ -97,9 +97,10 @@ function createInventoryRoutes(prisma, requireAuth) {
       (from !== undefined && !validDate(from)) || (to !== undefined && !validDate(to)) || (from && to && from > to)) return res.status(400).json({ message: 'Bộ lọc lịch sử hoặc khoảng ngày không hợp lệ.' });
     const where = { item: { ownerId: req.auth.user.id }, ...(itemId ? { itemId: Number(itemId) } : {}), ...(type ? { type } : {}),
       ...(from || to ? { createdAt: { ...(from ? { gte: new Date(`${from}T00:00:00+07:00`) } : {}), ...(to ? { lt: new Date(new Date(`${to}T00:00:00+07:00`).getTime() + 86400000) } : {}) } } : {}) };
+    const take = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
     try {
-      const rows = await prisma.stockMovement.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: (page - 1) * 20, take: 21 });
-      res.json({ movements: rows.slice(0, 20), hasMore: rows.length > 20 });
+      const rows = await prisma.stockMovement.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: (page - 1) * take, take: take + 1 });
+      res.json({ movements: rows.slice(0, take), hasMore: rows.length > take });
     } catch (error) { next(error); }
   });
   async function readInventoryWorkbook(req) {

@@ -6,7 +6,7 @@ const { Prisma } = require('@prisma/client');
 const notificationService = require('../services/notificationService');
 const { sqlEnabled, sqlUploadStorage } = require('../services/uploadStorage');
 const { requireRole } = require('../middlewares/authMiddleware');
-const { sendComplaintNoticeEmail } = require('../services/complaintMailService');
+const { sendComplaintNoticeEmail, sendComplaintResponseEmail } = require('../services/complaintMailService');
 const systemConfigService = require('../services/systemConfigService');
 const deliveryService = require('../services/deliveryService');
 const { paymentDue, fullyPaidByWallet } = require('../services/orderPaymentPolicy');
@@ -51,6 +51,22 @@ const VALID_SUPPLIER_ACTIONS = new Set([
   'DISCUSS',
   'REJECT',
 ]);
+
+function extractComplaintMeta(description, items = []) {
+  const raw = String(description || '');
+  const match = raw.match(
+    /^\[Sự cố:\s*([^|\]]+)(?:\s*\|\s*Bồi hoàn ước tính:\s*([^|\]]+))?(?:\s*\|\s*Đề xuất:\s*([^|\]]+))?\]\s*\n?([\s\S]*)$/
+  );
+  const fallbackItems = Array.isArray(items) && items.length
+    ? items.map((it) => `${it.productName} x${it.quantity}`).join(', ')
+    : '';
+  return {
+    itemSummaries: (match && match[1]?.trim()) || fallbackItems,
+    claimValue: match ? (match[2]?.trim() || '') : '',
+    resolutionProposal: match ? (match[3]?.trim() || '') : '',
+    details: match ? (match[4]?.trim() || '') : raw,
+  };
+}
 
 const uploadsDir = path.join(__dirname, '../public/uploads');
 if (!sqlEnabled() && !fs.existsSync(uploadsDir)) {
@@ -150,6 +166,7 @@ function createComplaintRoutes(prisma, requireAuth) {
           buyerId: req.auth.user.id,
           status: { in: ['SHIPPING', 'ISSUE_HANDLING', 'DELIVERED'] },
         },
+        include: { items: true },
       });
       if (!order) {
         return res.status(404).json({ message: 'Chỉ được báo cáo đơn hàng đang vận chuyển, tiếp nhận xử lý hoặc đã giao.' });
@@ -203,13 +220,12 @@ function createComplaintRoutes(prisma, requireAuth) {
           include: { user: true },
         });
         const supplierEmail = supplier?.user?.email || 'supplier@supplymind.vn';
-        const match = normalizedDescription.match(
-          /^\[Sự cố:\s*([^|\]]+)(?:\s*\|\s*Bồi hoàn ước tính:\s*([^|\]]+))?(?:\s*\|\s*Đề xuất:\s*([^|\]]+))?\]\s*\n?([\s\S]*)$/
-        );
-        const itemSummaries = match ? match[1]?.trim() : '';
-        const claimValue = match ? match[2]?.trim() : '';
-        const resolutionProposal = match ? match[3]?.trim() : '';
-        const details = match ? match[4]?.trim() : normalizedDescription;
+        const {
+          itemSummaries,
+          claimValue,
+          resolutionProposal,
+          details,
+        } = extractComplaintMeta(normalizedDescription, order.items);
         const images = normalizedImageUrl
           ? normalizedImageUrl.includes('|||') ? normalizedImageUrl.split('|||') : [normalizedImageUrl]
           : [];
@@ -230,6 +246,7 @@ function createComplaintRoutes(prisma, requireAuth) {
           supplierName: supplier?.businessName || supplier?.user?.name || 'Quý Chủ Vựa',
           storeName,
           orderId,
+          orderTotal: Number(order.total || 0),
           reasonLabel: REASON_LABELS[normalizedReason] || normalizedReason,
           description: details,
           itemSummaries,
@@ -257,7 +274,10 @@ function createComplaintRoutes(prisma, requireAuth) {
 
     const c = await prisma.orderComplaint.findFirst({
       where: { id: complaintId, supplierId: profile.id },
-      include: { order: { include: { items: true, orderPayment: { include: { refund: true } } } } },
+      include: {
+        buyer: { select: { id: true, name: true, username: true, email: true } },
+        order: { include: { items: true, orderPayment: { include: { refund: true } } } },
+      },
     });
     if (!c) return res.status(404).json({ message: 'Không tìm thấy khiếu nại.' });
 
@@ -325,6 +345,23 @@ function createComplaintRoutes(prisma, requireAuth) {
         link: '/orders',
       });
     } catch {}
+
+    const buyerEmail = c.buyer?.email;
+    if (buyerEmail) {
+      const { itemSummaries } = extractComplaintMeta(c.description, c.order?.items);
+      sendComplaintResponseEmail({
+        to: buyerEmail,
+        storeName: c.buyer?.name || c.buyer?.username || 'Quý Tiệm Tạp Hóa',
+        supplierName: profile.businessName || req.auth.user.name || 'Chủ vựa',
+        orderId: c.orderId,
+        orderTotal: Number(c.order?.total || 0),
+        reasonLabel: REASON_LABELS[c.reason] || c.reason,
+        itemSummaries,
+        actionLabel,
+        deductAmount: numericDeduct,
+        supplierNote: cleanNote,
+      }).catch((err) => console.error('Lỗi gửi email phản hồi khiếu nại:', err.message));
+    }
 
     return res.json({
       success: true,
@@ -539,7 +576,7 @@ function createComplaintRoutes(prisma, requireAuth) {
         label: 'Tiệm đồng ý phương án — Hoàn thành',
         finalOutcome: txResult.finalOutcome,
         finalSummary: txResult.finalSummary,
-        closedReason: note || txResult.finalSummary,
+        closedReason: note || null,
         agreedDeductAmount: txResult.agreedDeductAmount,
         supplementaryOrderId: txResult.supplementaryOrder?.id || null,
       });

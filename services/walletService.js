@@ -25,6 +25,7 @@ const TRANSACTION_TYPES = Object.freeze({
   ESCROW_REFUND: 'ESCROW_REFUND',
   PENALTY_CONFISCATION: 'PENALTY_CONFISCATION',
   COMPENSATION_RECEIVED: 'COMPENSATION_RECEIVED',
+  COMMISSION_FEE: 'COMMISSION_FEE',
 });
 
 // REAL money needs an admin review, SANDBOX money settles instantly.
@@ -293,24 +294,45 @@ async function settleOrderToSupplier(tx, order) {
   if (!payment) return null;
   if (payment.status === 'SETTLED' || payment.status === 'REFUNDED') return null;
   const supplierWallet = await ensureWallet(tx, payment.supplierUserId);
-  const amount = payment.supplierAmount === null ? payment.amount : payment.supplierAmount;
-  if (amount.lessThanOrEqualTo(0)) return null;
-  await applyBalance(tx, {
+  const grossAmount = payment.amount;
+  const commissionAmount = payment.commissionAmount || ZERO;
+  const netAmount = payment.supplierAmount === null ? payment.amount : payment.supplierAmount;
+  if (grossAmount.lessThanOrEqualTo(0)) return null;
+  const updatedWallet = await applyBalance(tx, {
     wallet: supplierWallet,
     userId: payment.supplierUserId,
     type: TRANSACTION_TYPES.ORDER_RECEIVE,
     direction: 'CREDIT',
-    amount,
+    amount: grossAmount,
     reference: `OP-RECV-${payment.id}`,
     orderId: order.id,
     note: `Tiền đơn hàng #${order.id} sau khi giao`,
   });
+  if (commissionAmount.greaterThan(0)) {
+    const rateLabel = order.commissionRate !== null && order.commissionRate !== undefined
+      ? ` (${Number(order.commissionRate)}%)`
+      : '';
+    await applyBalance(tx, {
+      wallet: updatedWallet,
+      userId: payment.supplierUserId,
+      type: TRANSACTION_TYPES.COMMISSION_FEE,
+      direction: 'DEBIT',
+      amount: commissionAmount,
+      reference: `COMM-OP-${payment.id}`,
+      orderId: order.id,
+      note: `Phí hoa hồng nền tảng${rateLabel} đơn hàng #${order.id}`,
+    });
+  }
   await tx.orderPayment.update({
     where: { id: payment.id },
     data: { status: 'SETTLED' },
   });
   await audit(tx, null, 'ORDER_SETTLED_TO_SUPPLIER', 'ORDER', order.id, {
-    paymentId: payment.id, amount: amount.toString(), supplierUserId: payment.supplierUserId,
+    paymentId: payment.id,
+    grossAmount: grossAmount.toString(),
+    commissionAmount: commissionAmount.toString(),
+    amount: netAmount.toString(),
+    supplierUserId: payment.supplierUserId,
   });
   return payment;
 }
@@ -1269,32 +1291,33 @@ const walletService = {
         },
       });
 
-      // 2. Credit deposit to supplier's wallet (minus commission if any)
+      // 2. Credit full deposit to supplier's wallet and record platform commission explicitly
       const supplierWallet = await ensureWallet(tx, supplierUserId);
       const commissionAmount = commissionRate > 0
         ? depositAmount.mul(commissionRate).div(100).toDecimalPlaces(2)
         : ZERO;
-      const supplierAmount = depositAmount.sub(commissionAmount);
-      const nextSupplierBalance = supplierWallet.balance.add(supplierAmount);
-
-      await tx.wallet.update({
-        where: { id: supplierWallet.id },
-        data: { balance: nextSupplierBalance },
+      const creditedWallet = await applyBalance(tx, {
+        wallet: supplierWallet,
+        userId: supplierUserId,
+        type: TRANSACTION_TYPES.ESCROW_RECEIVED,
+        direction: 'CREDIT',
+        amount: depositAmount,
+        reference: `ESCROW-RECV-${orderId}-${Date.now()}`,
+        orderId,
+        note: `Nhận tiền cọc đơn hàng #${orderId} khi giao thành công`,
       });
-      await tx.walletTransaction.create({
-        data: {
-          walletId: supplierWallet.id,
+      if (commissionAmount.greaterThan(0)) {
+        await applyBalance(tx, {
+          wallet: creditedWallet,
           userId: supplierUserId,
-          type: TRANSACTION_TYPES.ESCROW_RECEIVED,
-          direction: 'CREDIT',
-          amount: supplierAmount,
-          balanceAfter: nextSupplierBalance,
-          reference: `ESCROW-RECV-${orderId}-${Date.now()}`,
-          status: 'COMPLETED',
+          type: TRANSACTION_TYPES.COMMISSION_FEE,
+          direction: 'DEBIT',
+          amount: commissionAmount,
+          reference: `COMM-ESCROW-${orderId}-${Date.now()}`,
           orderId,
-          note: `Nhận tiền cọc đơn hàng #${orderId} khi giao thành công`,
-        },
-      });
+          note: `Phí hoa hồng nền tảng (${commissionRate}%) trên tiền cọc đơn hàng #${orderId}`,
+        });
+      }
     };
     if (externalTx) return run(externalTx);
     return defaultDb.$transaction(run);
