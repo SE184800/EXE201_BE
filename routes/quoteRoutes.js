@@ -125,18 +125,13 @@ function createSupplierQuoteRoutes(prisma, requireAuth) {
     const body = req.body || {};
     const title = typeof body.title === 'string' ? body.title.trim().replace(/\s+/g, ' ') : '';
     const note = typeof body.note === 'string' ? body.note.trim() : '';
-    const { buyerId, validUntil, deliveryFee, depositRate, lines } = body;
+    const { buyerId, validUntil, deliveryFee, lines } = body;
     const today = vnDate(new Date());
-    const maxAllowedDeposit = systemConfigService.getConfig().escrowDeposit?.maxDepositRate ?? 50;
-    if (typeof depositRate === 'number' && depositRate > maxAllowedDeposit) {
-      return res.status(400).json({ message: `Tỷ lệ ký quỹ (${depositRate}%) vượt quá mức trần tối đa của sàn (${maxAllowedDeposit}%). Vui lòng điều chỉnh lại.` });
+    if (body.isConsignment) return res.status(400).json({ message: 'Báo giá mới chỉ hỗ trợ bán sỉ thông thường.' });
+    const depositRate = systemConfigService.getConfig().escrowDeposit.defaultDepositRate;
+    if (body.depositRate !== undefined && body.depositRate !== depositRate) {
+      return res.status(409).json({ message: 'Tỷ lệ cọc hiện tại là ' + depositRate + '%. Vui lòng tải lại trang trước khi gửi báo giá.' });
     }
-    const isConsignment = body.isConsignment === true;
-    if (isConsignment && (!hasTwoDecimals(body.settlementPrice) || body.settlementPrice <= 0 ||
-      body.settlementPrice > 1000000000 || depositRate !== 0)) {
-      return res.status(400).json({ message: 'Báo giá ký gửi cần giá quyết toán hợp lệ và không thu tiền cọc.' });
-    }
-    const minUnitPrice = isConsignment ? 0 : 0.01;
     if (!Number.isInteger(buyerId) || buyerId < 1 || buyerId > 2147483647 || title.length < 2 || title.length > 150 ||
       !dateOnly(validUntil) || validUntil < today || new Date(validUntil) - new Date(today) > 90 * DAY ||
       !hasTwoDecimals(deliveryFee) || deliveryFee < 0 || deliveryFee > 1000000000 ||
@@ -144,7 +139,7 @@ function createSupplierQuoteRoutes(prisma, requireAuth) {
       !Array.isArray(lines) || lines.length < 1 || lines.length > 50 ||
       lines.some(line => !line || !Number.isInteger(line.productId) || line.productId < 1 || line.productId > 2147483647 ||
         !Number.isInteger(line.quantity) || line.quantity < 1 || line.quantity > 2147483647 ||
-        !hasTwoDecimals(line.unitPrice) || line.unitPrice < minUnitPrice || line.unitPrice > 1000000000 ||
+        !hasTwoDecimals(line.unitPrice) || line.unitPrice < 0.01 || line.unitPrice > 1000000000 ||
         (line.discountRate !== undefined && (!hasTwoDecimals(line.discountRate) || line.discountRate < 0 || line.discountRate > 100)) ||
         typeof line.expectedUpdatedAt !== 'string' || !Number.isFinite(Date.parse(line.expectedUpdatedAt))) ||
       new Set(lines.map(line => line.productId)).size !== lines.length) {
@@ -170,8 +165,7 @@ function createSupplierQuoteRoutes(prisma, requireAuth) {
           const originalUnitPrice = new Prisma.Decimal(line.unitPrice);
           const discountRate = line.discountRate ?? 0;
           const unitPrice = originalUnitPrice.mul(new Prisma.Decimal(100).sub(discountRate)).div(100).toDecimalPlaces(2);
-          if (isConsignment && !originalUnitPrice.isZero()) throw problem(400, 'Đơn giá trả trước của hàng ký gửi phải bằng 0.');
-          if (!isConsignment && unitPrice.lessThanOrEqualTo(0)) throw problem(400, 'Giá sau giảm phải lớn hơn 0.');
+          if (unitPrice.lessThanOrEqualTo(0)) throw problem(400, 'Giá sau giảm phải lớn hơn 0.');
           return { productId: product.id, productName: product.name, packaging: product.packaging, quantity: line.quantity, originalUnitPrice, discountRate, unitPrice, lineTotal: unitPrice.mul(line.quantity) };
         });
         const subtotal = snapshots.reduce((sum, line) => sum.add(line.lineTotal), new Prisma.Decimal(0));
@@ -182,21 +176,11 @@ function createSupplierQuoteRoutes(prisma, requireAuth) {
             supplierId: profile.id, buyerId, title, status: 'SENT',
             validUntil: new Date(validUntil + 'T00:00:00.000Z'), subtotal,
             deliveryFee, total, depositRate, note: note || null,
-            consignmentSettlementPrice: isConsignment ? body.settlementPrice : null,
             lines: { create: snapshots },
           },
           include: quoteInclude,
         });
-        await audit(tx, req.auth.user.id, 'QUOTE_SENT', 'QUOTE', created.id, { buyerId, total: total.toString(), depositRate: String(depositRate), lines: snapshots.length, isConsignment });
-        if (isConsignment) {
-          consignmentService.setQuoteConsignment(created.id, {
-            isConsignment: true,
-            settlementPrice: typeof body.settlementPrice === 'number' && body.settlementPrice >= 0 ? body.settlementPrice : 0,
-            autoRestock: body.autoRestock !== false,
-            autoExchangeExpiry: body.autoExchangeExpiry !== false,
-            termsNote: typeof body.termsNote === 'string' ? body.termsNote.trim() : 'Cam kết đổi trả 100% khi cận date và giao bù hàng khi hết.',
-          });
-        }
+        await audit(tx, req.auth.user.id, 'QUOTE_SENT', 'QUOTE', created.id, { buyerId, total: total.toString(), depositRate: String(depositRate), lines: snapshots.length });
         return created;
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
       res.status(201).json({ quote: serializeQuote(quote) });
@@ -272,9 +256,8 @@ function createStoreQuoteRoutes(prisma, requireAuth) {
         if (!quote) throw problem(404, 'Không tìm thấy báo giá.');
         if (quote.status === 'ACCEPTED' && quote.order) return quote.order;
         if (quote.status !== 'SENT' || quote.validUntil.toISOString().slice(0, 10) < vnDate(new Date())) throw problem(409, 'Báo giá đã hết hạn hoặc không còn chờ phản hồi.');
-        const legacyConsignment = quote.consignmentSettlementPrice == null && consignmentService.getQuoteConsignment(quote.id)?.isConsignment;
-        if (legacyConsignment && (!quote.subtotal.isZero() || !quote.depositRate.isZero())) {
-          throw problem(409, 'Báo giá ký gửi cũ có khoản trả trước. Vui lòng yêu cầu chủ vựa gửi lại báo giá.');
+        if (quote.consignmentSettlementPrice != null || consignmentService.getQuoteConsignment(quote.id)?.isConsignment) {
+          throw problem(409, 'Báo giá ký gửi không còn nhận đơn mới. Vui lòng yêu cầu báo giá bán sỉ.');
         }
         if (quote.supplier.verificationStatus !== 'APPROVED' || quote.supplier.user.role.code !== 'SUPPLIER' || !accountAvailable(quote.supplier.user)) throw problem(409, 'Gian hàng hiện không còn khả dụng.');
         const products = await tx.supplierProduct.findMany({ where: { id: { in: quote.lines.map(line => line.productId) }, supplierId: quote.supplierId, isActive: true } });
