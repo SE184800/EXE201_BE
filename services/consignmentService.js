@@ -250,175 +250,93 @@ function updateRequestStatus(requestId, status, reason = '') {
   return item;
 }
 
+const { Prisma } = require('@prisma/client');
+const { ensureWallet, applyBalance } = require('./walletService');
+
+const problem = (status, message) => Object.assign(new Error(message), { status });
+const lotValue = (lot, qty) => lot.consignmentPackPrice.mul(qty).div(lot.consignmentPackSize).toDecimalPlaces(2);
+
 async function getConsignmentSettlements({ storeId, supplierId, prisma }) {
-  const items = loadItems();
-  const results = [];
-
-  for (const [key, data] of Object.entries(items)) {
-    if (!data || !data.isConsignment) continue;
-    const itemId = Number(key);
-    if (!itemId) continue;
-
-    if (supplierId && data.supplierId && Number(data.supplierId) !== Number(supplierId)) {
-      continue;
-    }
-
-    const inventoryItem = await prisma.inventoryItem.findUnique({
-      where: { id: itemId },
-      include: {
-        movements: {
-          where: { type: 'SALE' },
-        },
-      },
-    });
-
-    if (!inventoryItem) continue;
-    if (storeId && inventoryItem.ownerId !== Number(storeId)) continue;
-
-    const totalSold = inventoryItem.movements.reduce((sum, m) => sum + Math.abs(m.quantityChange), 0);
-    const settledQty = Number(data.settledQty || 0);
-    const unsettledQty = Math.max(0, totalSold - settledQty);
-    const settlementPrice = Number(data.settlementPrice || 0);
-    const dueAmount = unsettledQty * settlementPrice;
-
-    results.push({
-      itemId,
-      productName: inventoryItem.name,
-      unit: inventoryItem.unit,
-      currentStock: inventoryItem.quantity,
-      sellingPrice: inventoryItem.sellingPrice,
-      settlementPrice,
-      totalSold,
-      settledQty,
-      unsettledQty,
-      dueAmount,
-      supplierId: data.supplierId || null,
-      supplierName: data.supplierName || 'Nhà cung cấp',
-      termsNote: data.termsNote || null,
-      lastSettledAt: data.lastSettledAt || null,
-    });
-  }
-
-  return results;
+  const lots = await prisma.inventoryLot.findMany({
+    where: {
+      consignmentSupplierId: supplierId ?? { not: null },
+      consignmentPackPrice: { not: null },
+      ...(storeId ? { item: { ownerId: storeId } } : {}),
+    },
+    include: { item: true, sourceOrder: { include: { supplier: true, sourceQuote: true } } },
+    orderBy: { id: 'desc' },
+  });
+  return lots.map(lot => ({
+    lotId: lot.id,
+    itemId: lot.itemId,
+    orderId: lot.sourceOrderId,
+    productName: lot.item.name,
+    unit: lot.item.unit,
+    currentStock: lot.quantity,
+    sellingPrice: lot.item.sellingPrice,
+    settlementPrice: Number(lot.consignmentPackPrice.div(lot.consignmentPackSize)),
+    totalSold: lot.consignmentSoldQty,
+    settledQty: lot.consignmentSettledQty,
+    unsettledQty: lot.consignmentSoldQty - lot.consignmentSettledQty,
+    dueAmount: Number(lotValue(lot, lot.consignmentSoldQty).sub(lotValue(lot, lot.consignmentSettledQty))),
+    supplierId: lot.consignmentSupplierId,
+    supplierName: lot.sourceOrder?.supplier.businessName || 'Chủ vựa',
+    termsNote: lot.sourceOrder?.sourceQuote ? getQuoteConsignment(lot.sourceOrder.sourceQuote.id)?.termsNote ?? null : null,
+    lastSettledAt: lot.consignmentSettledAt,
+  }));
 }
 
-async function settleConsignmentItem({ storeId, itemId, qtyToSettle, method = 'WALLET', prisma, walletService }) {
-  const items = loadItems();
-  const key = String(itemId);
-  const data = items[key];
-  if (!data || !data.isConsignment) {
-    throw Object.assign(new Error('Mặt hàng này không phải là hàng ký gửi tiếp thị.'), { status: 400 });
+async function settleConsignmentItem({ storeId, lotId, qtyToSettle, expectedSettledQty, method = 'WALLET', prisma }) {
+  if (method !== 'WALLET') throw problem(400, 'Chỉ hỗ trợ quyết toán qua ví.');
+  if (!Number.isInteger(lotId) || lotId < 1 || lotId > 2147483647 ||
+      !Number.isInteger(qtyToSettle) || qtyToSettle < 1 || qtyToSettle > 2147483647 ||
+      !Number.isInteger(expectedSettledQty) || expectedSettledQty < 0 || expectedSettledQty > 2147483647) {
+    throw problem(400, 'Mã lô và số lượng quyết toán không hợp lệ.');
   }
-
-  const inventoryItem = await prisma.inventoryItem.findFirst({
-    where: { id: Number(itemId), ownerId: Number(storeId) },
-    include: {
-      movements: { where: { type: 'SALE' } },
-    },
-  });
-  if (!inventoryItem) {
-    throw Object.assign(new Error('Không tìm thấy mặt hàng trong kho của tiệm.'), { status: 404 });
-  }
-
-  const totalSold = inventoryItem.movements.reduce((sum, m) => sum + Math.abs(m.quantityChange), 0);
-  const settledQty = Number(data.settledQty || 0);
-  const unsettledQty = Math.max(0, totalSold - settledQty);
-
-  let qty;
-  if (qtyToSettle !== undefined && qtyToSettle !== null) {
-    const num = Number(qtyToSettle);
-    if (!Number.isFinite(num) || num <= 0) {
-      throw Object.assign(new Error('Số lượng kết toán phải lớn hơn 0.'), { status: 400 });
-    }
-    if (num > unsettledQty) {
-      throw Object.assign(new Error(`Số lượng kết toán (${num}) vượt quá số lượng chưa thanh toán (${unsettledQty}).`), { status: 400 });
-    }
-    qty = num;
-  } else {
-    qty = unsettledQty;
-  }
-  if (qty <= 0) {
-    throw Object.assign(new Error('Hiện không có số lượng hàng đã bán nào cần kết toán.'), { status: 400 });
-  }
-
-  const settlementPrice = Number(data.settlementPrice || 0);
-  const amount = Math.round(qty * settlementPrice);
-
-  if (method === 'WALLET' && amount > 0) {
-    const storeWallet = await walletService.getWallet(storeId);
-    if (storeWallet.availableBalance < amount) {
-      throw Object.assign(new Error(`Số dư ví khả dụng (${storeWallet.availableBalance.toLocaleString('vi-VN')} ₫) không đủ để thanh toán kết toán ${amount.toLocaleString('vi-VN')} ₫. Vui lòng nạp thêm tiền vào ví.`), { status: 400 });
-    }
-
-    let supplierUserId = null;
-    if (data.supplierId) {
-      const supplierProfile = await prisma.supplierProfile.findUnique({
-        where: { id: Number(data.supplierId) },
+  try {
+    return await prisma.$transaction(async tx => {
+      const lot = await tx.inventoryLot.findFirst({
+        where: { id: lotId, item: { ownerId: storeId }, consignmentSupplierId: { not: null } },
+        include: { item: true },
       });
-      if (supplierProfile) supplierUserId = supplierProfile.userId;
-    }
-
-    await prisma.$transaction(async tx => {
-      const debitRef = `CONSIGN-PAY-${itemId}-${Date.now()}`;
-      await tx.$executeRaw`
-        UPDATE dbo.wallets
-        SET balance = balance - ${amount}, updatedAt = CURRENT_TIMESTAMP
-        WHERE userId = ${storeId}
-      `;
-      const storeWalletAfter = await tx.wallet.findUnique({ where: { userId: storeId } });
-      await tx.walletTransaction.create({
-        data: {
-          walletId: storeWalletAfter.id,
-          userId: storeId,
-          type: 'ORDER_PAYMENT',
-          direction: 'DEBIT',
-          amount,
-          balanceAfter: storeWalletAfter.balance,
-          reference: debitRef,
-          status: 'COMPLETED',
-          note: `Kết toán tiền sỉ hàng ký gửi: ${inventoryItem.name} (${qty} ${inventoryItem.unit})`,
-        },
-      });
-
-      if (supplierUserId) {
-        const creditRef = `CONSIGN-REC-${itemId}-${Date.now()}`;
-        await tx.$executeRaw`
-          UPDATE dbo.wallets
-          SET balance = balance + ${amount}, updatedAt = CURRENT_TIMESTAMP
-          WHERE userId = ${supplierUserId}
-        `;
-        const supplierWalletAfter = await tx.wallet.findUnique({ where: { userId: supplierUserId } });
-        if (supplierWalletAfter) {
-          await tx.walletTransaction.create({
-            data: {
-              walletId: supplierWalletAfter.id,
-              userId: supplierUserId,
-              type: 'ORDER_RECEIVE',
-              direction: 'CREDIT',
-              amount,
-              balanceAfter: supplierWalletAfter.balance,
-              reference: creditRef,
-              status: 'COMPLETED',
-              note: `Tiệm ${inventoryItem.ownerId} kết toán hàng ký gửi: ${inventoryItem.name} (${qty} ${inventoryItem.unit})`,
-            },
-          });
-        }
+      if (!lot || lot.consignmentPackPrice == null) throw problem(404, 'Không tìm thấy lô ký gửi trong kho.');
+      const settledQty = lot.consignmentSettledQty;
+      const nextQty = settledQty + qtyToSettle;
+      if (settledQty !== expectedSettledQty || nextQty > lot.consignmentSoldQty) {
+        throw problem(409, 'Số lượng cần quyết toán đã thay đổi. Vui lòng tải lại.');
       }
-    });
+      const supplier = await tx.supplierProfile.findUnique({ where: { id: lot.consignmentSupplierId } });
+      if (!supplier || supplier.userId === storeId) throw problem(409, 'Không xác định được ví chủ vựa.');
+
+      const amount = lotValue(lot, nextQty).sub(lotValue(lot, settledQty));
+      const claimed = await tx.inventoryLot.updateMany({
+        where: { id: lotId, consignmentSettledQty: settledQty, consignmentSoldQty: { gte: nextQty } },
+        data: { consignmentSettledQty: nextQty, consignmentSettledAt: new Date() },
+      });
+      if (!claimed.count) throw problem(409, 'Lô vừa được quyết toán. Vui lòng tải lại.');
+      if (amount.greaterThan(0)) {
+        const buyerWallet = await ensureWallet(tx, storeId);
+        const supplierWallet = await ensureWallet(tx, supplier.userId);
+        const reference = 'CONSIGN-' + lotId + '-' + nextQty;
+        const note = 'Quyết toán lô ký gửi #' + lotId + ': ' + qtyToSettle + ' ' + lot.item.unit;
+        await applyBalance(tx, { wallet: buyerWallet, userId: storeId, type: 'ORDER_PAYMENT',
+          direction: 'DEBIT', amount, reference: reference + '-PAY', note });
+        await applyBalance(tx, { wallet: supplierWallet, userId: supplier.userId, type: 'ORDER_RECEIVE',
+          direction: 'CREDIT', amount, reference: reference + '-REC', note });
+      }
+      return {
+        success: true,
+        settledQty: qtyToSettle,
+        amount: Number(amount),
+        remainingUnsettled: lot.consignmentSoldQty - nextQty,
+        productName: lot.item.name,
+        message: 'Đã quyết toán lô ký gửi #' + lotId + '.',
+      };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  } catch (error) {
+    if (error.code === 'P2034') throw problem(409, 'Số dư hoặc lô hàng vừa thay đổi. Vui lòng tải lại.');
+    throw error;
   }
-
-  data.settledQty = settledQty + qty;
-  data.lastSettledAt = new Date().toISOString();
-  persistItems();
-
-  return {
-    success: true,
-    settledQty: qty,
-    amount,
-    remainingUnsettled: unsettledQty - qty,
-    productName: inventoryItem.name,
-    message: `Đã kết toán thành công ${qty} ${inventoryItem.unit} "${inventoryItem.name}" với số tiền ${amount.toLocaleString('vi-VN')} ₫.`,
-  };
 }
 
 module.exports = {
