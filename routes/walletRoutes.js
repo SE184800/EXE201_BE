@@ -16,8 +16,6 @@ function createWalletRoutes(prisma, requireAuth, config = {}) {
   const router = express.Router();
   const service = createWalletService(prisma, config.qrBank);
 
-  router.use(requireAuth, requireRole(ROLES.STORE_OWNER, ROLES.SUPPLIER));
-
   const run = handler => async (req, res, next) => {
     try {
       await handler(req, res);
@@ -25,6 +23,33 @@ function createWalletRoutes(prisma, requireAuth, config = {}) {
       next(error);
     }
   };
+
+  // Webhook endpoint from SePay (public, authenticated via Authorization: Apikey <token>)
+  router.post('/webhook/sepay', run(async (req, res) => {
+    const authHeader =
+      req.get('Authorization') ||
+      req.get('authorization') ||
+      req.get('apikey') ||
+      req.get('ApiKey') ||
+      req.get('x-api-key') ||
+      req.get('X-Api-Key') ||
+      req.body?.apiKey ||
+      '';
+    console.log('[SEPAY WEBHOOK INCOMING]', {
+      auth: authHeader ? authHeader.slice(0, 15) + '...' : '(none)',
+      body: req.body,
+    });
+    const result = await service.processSepayWebhook(req.body || {}, authHeader, config.sepayApiKey);
+    res.json(result);
+  }));
+
+  // Admin Webhook Simulator for Demo/Testing in offline environments
+  router.post('/webhook/sepay/simulate', requireAuth, requireRole(ROLES.ADMIN), run(async (req, res) => {
+    const result = await service.processSepayWebhook(req.body || {}, `Apikey ${config.sepayApiKey}`, config.sepayApiKey);
+    res.json(result);
+  }));
+
+  router.use(requireAuth, requireRole(ROLES.STORE_OWNER, ROLES.SUPPLIER));
 
   router.get('/', run(async (req, res) => {
     res.json(await service.getWallet(req.auth.user.id));
@@ -62,23 +87,6 @@ function createWalletRoutes(prisma, requireAuth, config = {}) {
     });
   }));
 
-  router.post('/mock-add', run(async (req, res) => {
-    const amount = Number(req.body?.amount) || 5000000;
-    await service.createSandboxDeposit(req.auth.user.id, { amount, note: 'Nap tien thu nghiem' });
-    const w = await service.getWallet(req.auth.user.id);
-    res.json({
-      success: true,
-      wallet: {
-        userId: req.auth.user.id,
-        availableBalance: w.wallet.balance,
-        lockedBalance: w.wallet.heldBalance,
-        totalBalance: w.wallet.total,
-        updatedAt: w.wallet.updatedAt,
-      },
-      message: 'Nap tien thanh cong',
-    });
-  }));
-
   router.get('/payments', run(async (req, res) => {
     res.json(await service.listOrderPayments(req.auth.user.id, req.query));
   }));
@@ -97,9 +105,9 @@ function createWalletRoutes(prisma, requireAuth, config = {}) {
     res.status(201).json({ request: await service.createDepositRequest(req.auth.user.id, req.body || {}) });
   }));
 
-  // Sandbox deposit: simulated money, credited instantly without admin review.
+  // Block sandbox deposit
   router.post('/deposits/sandbox', run(async (req, res) => {
-    res.status(201).json({ request: await service.createSandboxDepositRequest(req.auth.user.id, req.body || {}) });
+    return res.status(403).json({ message: 'Tính năng nạp tiền ảo (sandbox) đã bị gỡ bỏ vì lý do an toàn tài chính.' });
   }));
 
   // VietQR deposit: returns the QR payload for a freshly created ticket.
@@ -110,11 +118,18 @@ function createWalletRoutes(prisma, requireAuth, config = {}) {
     res.status(201).json(await service.createQrDepositRequest(req.auth.user.id, req.body || {}));
   }));
 
-  // Confirms the user already transferred the money for a QR ticket.
-  router.post('/deposits/qr/:id/confirm', run(async (req, res) => {
+  // Retrieves the status of a QR deposit ticket for polling
+  router.get('/deposits/qr/:id', run(async (req, res) => {
     const id = idParam(req.params.id);
     if (!id) return res.status(400).json({ message: 'Mã phiếu không hợp lệ.' });
-    res.json({ request: await service.confirmQrDeposit(req.auth.user.id, id, req.body || {}) });
+    res.json({ request: await service.getQrDepositTicket(req.auth.user.id, id) });
+  }));
+
+  // Block client-side self-confirmation to prevent unverified free money
+  router.post('/deposits/qr/:id/confirm', run(async (req, res) => {
+    return res.status(403).json({
+      message: 'Chức năng tự xác nhận đã bị vô hiệu hóa vì lý do an toàn. Hệ thống sẽ tự động cập nhật số dư khi nhận được thông báo từ ngân hàng qua SePay Webhook.',
+    });
   }));
 
   router.get('/withdrawals', run(async (req, res) => {

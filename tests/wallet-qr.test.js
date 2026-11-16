@@ -155,34 +155,71 @@ test('creating a QR ticket returns a scannable code and keeps the ticket pending
   assert.equal(overview.pendingDeposits, 1);
 });
 
-test('confirming a QR ticket credits the wallet exactly once', async () => {
+test('client-side self-confirmation is forbidden to prevent unverified free money', async () => {
   const created = await post('/wallet/deposits/qr', { amount: 300000 }, 1).expect(201);
   const id = created.body.request.id;
 
-  const confirmed = await post(`/wallet/deposits/qr/${id}/confirm`, {}, 1).expect(200);
-  assert.equal(confirmed.body.request.status, 'APPROVED');
+  // Regular user self-confirmation returns 403 Forbidden
+  await post(`/wallet/deposits/qr/${id}/confirm`, {}, 1).expect(403);
 
+  // Balance remains 0
+  const wallet = (await get('/wallet', 1).expect(200)).body.wallet;
+  assert.equal(wallet.balance, 0);
+});
+
+test('SePay webhook credits the wallet exactly once upon genuine bank receipt', async () => {
+  const created = await post('/wallet/deposits/qr', { amount: 300000 }, 1).expect(201);
+  const id = created.body.request.id;
+
+  // Webhook without authorization key is rejected with 401
+  await request(app)
+    .post('/api/wallet/webhook/sepay')
+    .send({ transferType: 'in', transferAmount: 300000, content: `NAP TIEN VI ${id}` })
+    .expect(401);
+
+  // Valid SePay webhook payload with ApiKey
+  const res = await request(app)
+    .post('/api/wallet/webhook/sepay')
+    .set('Authorization', `Apikey ${config.sepayApiKey}`)
+    .send({
+      id: 999123,
+      gateway: 'Sacombank',
+      transactionDate: '2026-11-14 23:30:00',
+      accountNumber: '050138052378',
+      content: `NAP TIEN VI ${id} LE TRAN MINH DUC`,
+      transferType: 'in',
+      transferAmount: 300000,
+      referenceCode: 'SAC.FT.123456',
+    })
+    .expect(200);
+
+  assert.equal(res.body.success, true);
+  assert.equal(res.body.requestId, id);
+
+  // Wallet is credited
   const wallet = (await get('/wallet', 1).expect(200)).body.wallet;
   assert.equal(wallet.balance, 300000);
 
-  // The same ticket can never be settled twice.
-  await post(`/wallet/deposits/qr/${id}/confirm`, {}, 1).expect(409);
+  // Polling endpoint confirms the ticket is now APPROVED
+  const polled = await get(`/wallet/deposits/qr/${id}`, 1).expect(200);
+  assert.equal(polled.body.request.status, 'APPROVED');
+
+  // Replay of the same webhook is idempotent and does not double-credit
+  const replay = await request(app)
+    .post('/api/wallet/webhook/sepay')
+    .set('Authorization', `Apikey ${config.sepayApiKey}`)
+    .send({
+      id: 999123,
+      gateway: 'Sacombank',
+      content: `NAP TIEN VI ${id}`,
+      transferType: 'in',
+      transferAmount: 300000,
+    })
+    .expect(200);
+
+  assert.equal(replay.body.success, true);
   const unchanged = (await get('/wallet', 1).expect(200)).body.wallet;
   assert.equal(unchanged.balance, 300000);
-});
-
-test('a QR ticket can only be confirmed by its owner', async () => {
-  const created = await post('/wallet/deposits/qr', { amount: 120000 }, 1).expect(201);
-  const id = created.body.request.id;
-
-  // The admin cannot settle a user ticket, and an unknown ticket is a 404.
-  await post(`/wallet/deposits/qr/${id}/confirm`, {}, 0).expect(403);
-  await post('/wallet/deposits/qr/999999/confirm', {}, 1).expect(404);
-
-  // The ticket is still waiting for its owner, so no money moved.
-  const pending = (await get('/wallet', 1).expect(200)).body;
-  assert.equal(pending.pendingDeposits, 2);
-  assert.equal(pending.wallet.balance, 300000);
 });
 
 test('QR amounts are validated like other deposits', async () => {

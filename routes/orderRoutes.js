@@ -253,15 +253,8 @@ function createOrderRoutes(prisma, requireAuth) {
       res.json({ order: serialize(updated) });
     } catch (error) { next(error); }
   });
-  router.post('/:id/deposit/sandbox', requireRole('STORE_OWNER'), async (req, res, next) => {
-    if (process.env.NODE_ENV === 'production' && !req.auth.user.username.startsWith('demo_')) return res.status(403).json({ message: 'Thử nghiệm chỉ dành cho tài khoản demo.' });
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id) || id < 1 || id > 2147483647) return res.status(400).json({ message: 'Mã đơn hàng không hợp lệ.' });
-    try {
-      const reference = `SANDBOX-${id}-${Date.now()}`;
-      const order = await submitDeposit(req.auth.user.id, id, reference, 'DEPOSIT_SANDBOX_SUBMITTED');
-      res.json({ order: serialize(order) });
-    } catch (error) { next(error); }
+  router.post('/:id/deposit/sandbox', requireRole('STORE_OWNER'), async (req, res) => {
+    return res.status(403).json({ message: 'Tính năng cọc thử nghiệm (sandbox) đã bị vô hiệu hóa vì lý do an toàn.' });
   });
   router.post('/:id/reschedule', requireRole('STORE_OWNER'), async (req, res, next) => {
     const id = Number(req.params.id);

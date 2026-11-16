@@ -41,23 +41,21 @@ async function answerWithAI({ message, history = [], calendar, apiKey, model, pr
   try {
     if (provider === 'GEMINI') {
       const safeDefaultModels = [
-        'gemini-2.5-flash',
-        'gemini-2.0-flash',
-        'gemini-1.5-flash-latest',
-        'gemini-1.5-flash-8b',
-        'gemini-1.5-pro-latest',
+        'gemini-flash-lite-latest',
+        'gemini-3.5-flash-lite',
+        'gemini-3-flash-preview',
+        'gemini-flash-latest',
       ];
       const rawModel = (model || '').trim().replace(/^models\//, '');
-      const mappedModel = rawModel === 'gemini-1.5-flash' ? 'gemini-1.5-flash-latest' : rawModel;
       const candidates = [
-        mappedModel,
+        rawModel,
         ...safeDefaultModels,
       ].filter(Boolean).filter((m, idx, arr) => arr.indexOf(m) === idx);
 
       let lastError = null;
       for (const candidateModel of candidates) {
         try {
-          const response = await fetcher(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(candidateModel)}:generateContent`, {
+          let response = await fetcher(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(candidateModel)}:generateContent`, {
             method: 'POST',
             headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
             signal: AbortSignal.timeout(25000),
@@ -75,6 +73,29 @@ async function answerWithAI({ message, history = [], calendar, apiKey, model, pr
               generationConfig: { maxOutputTokens: 1800 },
             }),
           });
+
+          // Nếu gặp 503 (quá tải tạm thời), đợi 1 giây rồi thử lại 1 lần nữa trước khi chuyển sang model khác
+          if (response.status === 503) {
+            await new Promise(r => setTimeout(r, 1200));
+            response = await fetcher(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(candidateModel)}:generateContent`, {
+              method: 'POST',
+              headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
+              signal: AbortSignal.timeout(25000),
+              body: JSON.stringify({
+                systemInstruction: {
+                  parts: [{
+                    text: 'Bạn là trợ lý kho tạp hóa thông minh, trả lời bằng tiếng Việt thân thiện, rõ ràng. Bạn có dữ liệu Lịch Ngày Lễ tại Việt Nam. Khi người dùng hỏi về kế hoạch nhập hàng hoặc ngày lễ, hãy phân tích tác động của các dịp lễ sắp tới lên nhu cầu tiêu dùng của các nhóm hàng tương ứng (như nước giải khát, bia, bánh kẹo). Chỉ dùng dữ liệu được cung cấp. Trả lời văn bản thuần, không HTML.'
+                  }]
+                },
+                contents: [
+                  { role: 'user', parts: [{ text: JSON.stringify({ items: rows, upcomingHolidays, truncated: calendar.items.length > 100, assumptions: calendar.assumptions }) }] },
+                  ...history.map(h => ({ role: h.role === 'assistant' ? 'model' : 'user', parts: [{ text: h.content }] })),
+                  { role: 'user', parts: [{ text: message }] }
+                ],
+                generationConfig: { maxOutputTokens: 1800 },
+              }),
+            });
+          }
 
           if (!response.ok) {
             const errorText = await response.text().catch(() => '');

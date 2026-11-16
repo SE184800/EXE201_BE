@@ -285,4 +285,77 @@ describe('Address Verification & Gmail Verification Delivery Tests', () => {
       else process.env.GMAIL_PASS = prevPass;
     }
   });
+
+  it('8. Successfully geocodes Vietnamese rural address via Geoapify', async () => {
+    const mockGeoapifyFetch = async (url) => {
+      const urlStr = String(url);
+      if (urlStr.includes('api.geoapify.com')) {
+        return jsonResponse({
+          type: 'FeatureCollection',
+          features: [
+            {
+              type: 'Feature',
+              properties: {
+                formatted: 'Công an huyện Bình Chánh, Ấp 1, Thành phố Hồ Chí Minh, HC 71816, Việt Nam',
+                lat: 10.688446,
+                lon: 106.582801,
+              },
+              geometry: {
+                type: 'Point',
+                coordinates: [106.582801, 10.688446],
+              },
+            },
+          ],
+        });
+      }
+      return jsonResponse({ features: [] });
+    };
+
+    const res = await verifyAddressOnline('Ấp 1, Xã Bình Chánh, Huyện Bình Chánh, TP. Hồ Chí Minh', {
+      geoapifyApiKey: '422df503fc1542eca50878c3af4e293b',
+      fetchImpl: mockGeoapifyFetch,
+    });
+    assert.equal(res.verified, true);
+    assert.equal(res.status, 'success');
+    assert.equal(res.source, 'geoapify');
+    assert.equal(res.lat, 10.688446);
+    assert.equal(res.lon, 106.582801);
+    assert.match(res.displayName, /Ấp 1/);
+  });
+
+  it('9. Automatically cleans Google Maps Plus Code, road abbreviations (HL2), postal code & country suffix', async () => {
+    let capturedQuery = '';
+    const mockFetch = async (url) => {
+      capturedQuery = decodeURIComponent(String(url));
+      return jsonResponse({
+        type: 'FeatureCollection',
+        features: [
+          {
+            type: 'Feature',
+            properties: {
+              formatted: 'Bệnh viện Đa khoa Bình Tân, 809, Hương Lộ 2, Phường Bình Trị Đông, Thành phố Hồ Chí Minh, 71910, Việt Nam',
+              lat: 10.764476,
+              lon: 106.6032051,
+            },
+            geometry: {
+              type: 'Point',
+              coordinates: [106.6032051, 10.764476],
+            },
+          },
+        ],
+      });
+    };
+
+    const res = await verifyAddressOnline('QJ73+86P, 809 HL2, Bình Trị Đông, Hồ Chí Minh 100000, Việt Nam', {
+      geoapifyApiKey: '422df503fc1542eca50878c3af4e293b',
+      fetchImpl: mockFetch,
+    });
+    assert.equal(res.verified, true);
+    assert.equal(res.status, 'success');
+    assert.equal(res.source, 'geoapify');
+    assert.equal(res.lat, 10.764476);
+    assert.equal(res.lon, 106.6032051);
+    assert.ok(capturedQuery.includes('Hương Lộ 2'));
+    assert.ok(!capturedQuery.includes('QJ73+86P'));
+  });
 });
