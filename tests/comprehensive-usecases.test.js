@@ -4,12 +4,7 @@ const assert = require('node:assert/strict');
 // Import services and helpers
 const systemConfigService = require('../services/systemConfigService');
 const { moderateContent } = require('../services/contentModerationService');
-const {
-  setItemConsignment,
-  deleteItemConsignment,
-  getConsignmentSettlements,
-  settleConsignmentItem,
-} = require('../services/consignmentService');
+const { settleConsignmentItem } = require('../services/consignmentService');
 const { createAdminService, idParam, period, csvCell } = require('../services/adminService');
 
 // -------------------------------------------------------------
@@ -342,114 +337,10 @@ test('USE-CASE 4: Complaint Resolution - Consensual Negotiation & Neutral Result
 // -------------------------------------------------------------
 // USE-CASE 5: KẾT TOÁN ĐỐI SOÁT HÀNG KÝ GỬI TIẾP THỊ 0Đ
 // -------------------------------------------------------------
-test('USE-CASE 5: Consignment Settlement Flow (Happy, Worst, Edge)', async (t) => {
-  const itemId = 999;
-  setItemConsignment(itemId, {
-    isConsignment: true,
-    settlementPrice: 8500,
-    supplierId: 2,
-    supplierName: 'Vựa Nước Giải Khát Miền Nam',
-  });
-
-  const mockInventoryItem = {
-    id: itemId,
-    ownerId: 1,
-    name: 'Trà ô long Tea+ Plus 450ml',
-    unit: 'Chai',
-    quantity: 50,
-    sellingPrice: 12000,
-    movements: [{ type: 'SALE', quantityChange: -50 }],
-  };
-
-  const mockPrisma = {
-    inventoryItem: {
-      findUnique: async () => mockInventoryItem,
-      findFirst: async () => mockInventoryItem,
-    },
-    supplierProfile: {
-      findUnique: async () => ({ id: 2, userId: 20 }),
-    },
-    $executeRaw: async () => {},
-    wallet: {
-      findUnique: async ({ where }) => ({ id: where.userId, balance: 1000000 }),
-    },
-    walletTransaction: {
-      create: async () => {},
-    },
-    $transaction: async (fn) => fn(mockPrisma),
-  };
-
-  // 5.1 Happy Case: Tính bảng kê đối soát chính xác
-  const settlements = await getConsignmentSettlements({
-    storeId: 1,
-    supplierId: null,
-    prisma: mockPrisma,
-  });
-
-  assert.ok(settlements.length >= 1);
-  const found = settlements.find((s) => s.itemId === itemId);
-  assert.ok(found);
-  assert.equal(found.totalSold, 50);
-  assert.equal(found.settledQty, 0);
-  assert.equal(found.unsettledQty, 50);
-  assert.equal(found.dueAmount, 50 * 8500);
-
-  // 5.2 Happy Case: Thực hiện kết toán qua Ví cho 20 chai
-  const mockWalletService = {
-    getWallet: async (userId) => {
-      return { availableBalance: 1000000, balance: 1000000 };
-    },
-  };
-
-  const settleResult = await settleConsignmentItem({
-    storeId: 1,
-    itemId,
-    qtyToSettle: 20,
-    method: 'WALLET',
-    prisma: mockPrisma,
-    walletService: mockWalletService,
-  });
-
-  assert.equal(settleResult.success, true);
-  assert.equal(settleResult.settledQty, 20);
-  assert.equal(settleResult.amount, 20 * 8500);
-  assert.equal(settleResult.remainingUnsettled, 30);
-
-  // 5.3 Worst Case: Tiệm muốn trả số lượng âm hoặc 0 -> Bị chặn
-  await assert.rejects(
-    async () => {
-      await settleConsignmentItem({
-        storeId: 1,
-        itemId,
-        qtyToSettle: 0,
-        method: 'WALLET',
-        prisma: mockPrisma,
-        walletService: mockWalletService,
-      });
-    },
-    /Số lượng kết toán phải lớn hơn 0/
-  );
-
-  // 5.4 Edge Case: Ví tiệm không đủ tiền thanh toán kết toán
-  const poorWalletService = {
-    getWallet: async () => ({ availableBalance: 5000, balance: 5000 }),
-  };
-  await assert.rejects(
-    async () => {
-      await settleConsignmentItem({
-        storeId: 1,
-        itemId,
-        qtyToSettle: 10,
-        method: 'WALLET',
-        prisma: mockPrisma,
-        walletService: poorWalletService,
-      });
-    },
-    /không đủ để thanh toán kết toán/
-  );
-
-  // Clean up
-  deleteItemConsignment(itemId);
+test('USE-CASE 5: Consignment rejects unsupported methods and fractional quantities', async () => {
+  const input = { storeId: 1, lotId: 2, qtyToSettle: 1, expectedSettledQty: 0 };
+  await assert.rejects(settleConsignmentItem({ ...input, method: 'CASH' }), { status: 400 });
+  await assert.rejects(settleConsignmentItem({ ...input, qtyToSettle: 0.5 }), { status: 400 });
 });
 
 // -------------------------------------------------------------

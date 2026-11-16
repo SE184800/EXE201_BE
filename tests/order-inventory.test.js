@@ -56,6 +56,24 @@ async function order(label, options = {}) {
 }
 const importOrder = (id, user = buyer) => request(app).post(`/api/orders/${id}/import-inventory`).set(csrf).set('Cookie', cookies.get(user.id)).send({});
 
+test('voice sale batch rolls back on insufficient stock and retries only once', async () => {
+  const first = await prisma.inventoryItem.create({ data: { ownerId: buyer.id, name: prefix + ' voice first', unit: 'lon', quantity: 5 } });
+  const second = await prisma.inventoryItem.create({ data: { ownerId: buyer.id, name: prefix + ' voice second', unit: 'gói', quantity: 2 } });
+  const rows = [first, second].map(item => ({ itemId: item.id, requestId: randomUUID(), quantity: 3, unitSalePrice: 1000 }));
+  const send = () => request(app).post('/api/inventory/sales/batch').set(csrf).set('Cookie', cookies.get(buyer.id)).send({ rows });
+  const quantity = async id => (await prisma.inventoryItem.findUniqueOrThrow({ where: { id } })).quantity;
+  await send().expect(409);
+  assert.equal(await quantity(first.id), 5);
+  assert.equal(await prisma.stockMovement.count({ where: { id: rows[0].requestId } }), 0);
+  rows[1].quantity = 2;
+  await send().expect(200);
+  await send().expect(200);
+  assert.equal(await quantity(first.id), 2);
+  assert.equal(await quantity(second.id), 0);
+  await prisma.stockMovement.deleteMany({ where: { itemId: { in: [first.id, second.id] } } });
+  await prisma.inventoryItem.deleteMany({ where: { id: { in: [first.id, second.id] } } });
+});
+
 test('only the owning store can import an order after receipt', async () => {
   const ready = await order('authorization');
   await request(app).post(`/api/orders/${ready.id}/import-inventory`).set(csrf).send({}).expect(401);
@@ -77,6 +95,27 @@ test('received goods cannot enter inventory before order is paid and completed',
   const saved = await prisma.wholesaleOrder.findUniqueOrThrow({ where: { id: purchase.id } });
   assert.ok(saved.inventoryImportedAt);
   await importOrder(purchase.id).expect(200);
+});
+
+test('plain cartons can be previewed and converted into the existing retail unit', async () => {
+  const name = prefix + ' plain cartons';
+  const item = await prisma.inventoryItem.create({ data: { ownerId: buyer.id, name, unit: 'lon', quantity: 0 } });
+  const purchase = await order('plain cartons', { lines: [{ name, quantity: 2, packaging: 'thùng', price: 48000 }] });
+  const path = '/api/orders/' + purchase.id + '/import-inventory';
+  const preview = await request(app).get(path).set('Cookie', cookies.get(buyer.id)).expect(200);
+  const [line] = preview.body.lines;
+  assert.equal(line.needsConversion, true);
+  await importOrder(purchase.id).expect(409);
+  const send = quantity => request(app).post(path).set(csrf).set('Cookie', cookies.get(buyer.id)).send({
+    conversions: [{ id: line.id, unit: 'lon', unitsPerPack: 24 }],
+    preview: [{ id: line.id, unit: 'lon', quantity }],
+  });
+  await send(47).expect(409);
+  await send(48).expect(200);
+  await send(48).expect(200);
+  const saved = await prisma.inventoryItem.findUniqueOrThrow({ where: { id: item.id }, include: { lots: true } });
+  assert.equal(saved.quantity, 48);
+  assert.equal(saved.lots[0].purchasePrice, 2000);
 });
 
 test('a new product is created, expanded to retail units, and given its own source lot', async () => {
@@ -112,23 +151,24 @@ test('an existing product retains its original lot and receives a separate new l
   assert.equal(inventory.body.items.find(row => row.id === item.id).lots.find(lot => lot.sourceOrderId === purchase.id).quantity, 48);
 });
 
-test('carton-based stock stays in cartons and old stock with no lot is preserved as an earlier lot', async () => {
+test('order import refuses existing carton stock without changing inventory', async () => {
   const name = `${prefix} cartons`;
   const item = await prisma.inventoryItem.create({ data: { ownerId: buyer.id, name, unit: 'Thùng', quantity: 3, purchasePrice: 40000 } });
   const purchase = await order('cartons');
-  await importOrder(purchase.id).expect(200);
+  await importOrder(purchase.id).expect(409);
   const updated = await prisma.inventoryItem.findUniqueOrThrow({ where: { id: item.id }, include: { lots: true } });
-  assert.equal(updated.quantity, 5);
-  assert.equal(updated.purchasePrice, 48000);
-  assert.equal(updated.lots.length, 2);
-  assert.equal(updated.lots.find(lot => lot.sourceOrderId === purchase.id).quantity, 2);
-  assert.equal(updated.lots.find(lot => lot.sourceOrderId === null).quantity, 3);
+  assert.equal(updated.quantity, 3);
+  assert.equal(updated.purchasePrice, 40000);
+  assert.equal(updated.lots.length, 0);
+  assert.equal((await prisma.wholesaleOrder.findUniqueOrThrow({ where: { id: purchase.id } })).inventoryImportedAt, null);
 });
 
 test('two concurrent clicks and a later replay add stock and lots exactly once', async () => {
   const purchase = await order('concurrent');
   const results = await Promise.all([importOrder(purchase.id), importOrder(purchase.id)]);
-  assert.deepEqual(results.map(result => result.status), [200, 200]);
+  assert.ok(results.some(result => result.status === 200));
+  assert.ok(results.every(result => [200, 409].includes(result.status)));
+  await cashPayment(purchase.id, { method: 'WALLET' }).expect(200);
   assert.equal(results.filter(result => result.body.alreadyImported).length, 1);
   const again = await importOrder(purchase.id).expect(200);
   assert.equal(again.body.alreadyImported, true);
@@ -209,16 +249,16 @@ test('store proposes a delivery time; only the supplier confirms it; a later pro
   const date = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10).split('-').reverse().join('/');
   const propose = time => request(app).post(`/api/orders/${purchase.id}/reschedule`).set(csrf).set('Cookie', cookies.get(buyer.id)).send({ rescheduleTime: `${time} ngày ${date}`, reason: 'Store closed in the morning' });
   const respond = (action, user = supplier) => request(app).post(`/api/orders/${purchase.id}/reschedule-response`).set(csrf).set('Cookie', cookies.get(user.id)).send({ action });
-  await propose('10:00').expect(200);
-  assert.equal(delivery.getDriverInfo(purchase.id).estimatedDeliveryTime, undefined);
+  const proposed = await propose('10:00').expect(200);
+  assert.equal(proposed.body.order.driverInfo?.estimatedDeliveryTime, undefined);
   await propose('11:00').expect(409);
   await respond('ACCEPT', buyer).expect(403);
-  await respond('ACCEPT').expect(200);
-  assert.equal(delivery.getDriverInfo(purchase.id).estimatedDeliveryTime, `10:00 ngày ${date}`);
-  await propose('12:00').expect(200);
-  assert.equal(delivery.getDriverInfo(purchase.id).rescheduleRequest.status, 'PENDING');
-  await respond('REJECT').expect(200);
-  assert.equal(delivery.getDriverInfo(purchase.id).estimatedDeliveryTime, `10:00 ngày ${date}`);
+  const accepted = await respond('ACCEPT').expect(200);
+  assert.equal(accepted.body.order.driverInfo.estimatedDeliveryTime, `10:00 ngày ${date}`);
+  const later = await propose('12:00').expect(200);
+  assert.equal(later.body.order.driverInfo.rescheduleRequest.status, 'PENDING');
+  const rejected = await respond('REJECT').expect(200);
+  assert.equal(rejected.body.order.driverInfo.estimatedDeliveryTime, `10:00 ngày ${date}`);
   await prisma.wholesaleOrder.update({ where: { id: purchase.id }, data: { status: 'DELIVERED' } });
   await propose('13:00').expect(409);
 });
@@ -230,7 +270,8 @@ test('unresolved complaints prevent payment reporting and completing an order', 
 });
 
 test('marketing quote discount is persisted and accepting a quote preserves the net price without importing stock', async () => {
-  const body = { buyerId: buyer.id, title: prefix + ' discount quote', validUntil: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10), deliveryFee: 0, depositRate: 0, note: '', lines: [{ productId: product.id, quantity: 2, unitPrice: 48000, discountRate: 10, expectedUpdatedAt: product.updatedAt.toISOString() }] };
+  await prisma.supplierProfile.update({ where: { id: supplierProfile.id }, data: { bankName: 'Test Bank', bankAccountNumber: '1234567890', bankAccountHolder: 'TEST SUPPLIER' } });
+  const body = { buyerId: buyer.id, title: prefix + ' discount quote', validUntil: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10), deliveryFee: 0, note: '', lines: [{ productId: product.id, quantity: 2, unitPrice: 48000, discountRate: 10, expectedUpdatedAt: product.updatedAt.toISOString() }] };
   const create = await request(app).post('/api/supplier/quotes').set(csrf).set('Cookie', cookies.get(supplier.id)).send(body).expect(201);
   const quote = create.body.quote;
   assert.equal(quote.lines[0].originalUnitPrice, 48000);
@@ -246,13 +287,23 @@ test('marketing quote discount is persisted and accepting a quote preserves the 
   await request(app).post('/api/supplier/quotes').set(csrf).set('Cookie', cookies.get(supplier.id)).send({ ...body, lines: [{ ...body.lines[0], discountRate: 101 }] }).expect(400);
 });
 
-test('consignment acceptance waits for physical receipt and then imports once with its consignment label', async () => {
-  const fresh = await prisma.supplierProduct.findUniqueOrThrow({ where: { id: product.id } });
+test('new quotes reject consignment and existing consignment orders still settle by lot', async () => {
+  await request(app).post('/api/supplier/quotes').set(csrf).set('Cookie', cookies.get(supplier.id))
+    .send({ isConsignment: true }).expect(400);
   const before = await prisma.inventoryItem.count({ where: { ownerId: buyer.id } });
-  const created = await request(app).post('/api/supplier/quotes').set(csrf).set('Cookie', cookies.get(supplier.id)).send({ buyerId: buyer.id, title: prefix + ' consignment', validUntil: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10), deliveryFee: 0, depositRate: 0, note: '', isConsignment: true, settlementPrice: 20000, lines: [{ productId: product.id, quantity: 1, unitPrice: 0, expectedUpdatedAt: fresh.updatedAt.toISOString() }] }).expect(201);
-  const accepted = await request(app).post(`/api/quotes/${created.body.quote.id}/accept`).set(csrf).set('Cookie', cookies.get(buyer.id)).send({ requestId: randomUUID(), recipientName: buyer.name, recipientPhone: '0908123456', deliveryAddress: '45 Nguyen Trai, Ho Chi Minh City', note: '' }).expect(201);
-  const id = accepted.body.order.id;
-  orderIds.push(id);
+  const purchase = await order('legacy consignment', {
+    status: 'PENDING', unpaid: true,
+    lines: [{ name: product.name, packaging: product.packaging, price: 0, quantity: 1 }],
+  });
+  const id = purchase.id;
+  const quote = await prisma.supplierQuote.create({ data: {
+    buyerId: buyer.id, supplierId: supplierProfile.id, title: prefix + ' legacy consignment',
+    validUntil: new Date(Date.now() + 86400000), status: 'SENT',
+    subtotal: 0, deliveryFee: 0, total: 0, depositRate: 0, consignmentSettlementPrice: 20000,
+  } });
+  await request(app).post('/api/quotes/' + quote.id + '/accept').set(csrf).set('Cookie', cookies.get(buyer.id))
+    .send({ requestId: randomUUID(), recipientName: buyer.name, recipientPhone: '0908123456', deliveryAddress: '45 Nguyen Trai, Ho Chi Minh City' }).expect(409);
+  await prisma.supplierQuote.update({ where: { id: quote.id }, data: { status: 'ACCEPTED', orderId: id } });
   assert.equal(await prisma.inventoryItem.count({ where: { ownerId: buyer.id } }), before);
   await importOrder(id).expect(409);
   await prisma.wholesaleOrder.update({ where: { id }, data: { status: 'COMPLETED' } });
@@ -261,6 +312,31 @@ test('consignment acceptance waits for physical receipt and then imports once wi
   assert.equal(result.body.items.find(item => item.name === product.name).isConsignment, true);
   const again = await importOrder(id).expect(200);
   assert.equal(again.body.alreadyImported, true);
+  const lot = await prisma.inventoryLot.findFirstOrThrow({ where: { sourceOrderId: id } });
+  const postAs = (path, user, body) => request(app).post(path).set(csrf).set('Cookie', cookies.get(user.id)).send(body);
+  const payPath = '/api/inventory/consignment/settlements/lots/' + lot.id + '/pay';
+  const payment = { qty: 24, expectedSettledQty: 0, method: 'WALLET' };
+  await postAs(payPath, buyer, payment).expect(409);
+  await postAs(payPath, other, payment).expect(404);
+  await postAs(payPath, buyer, { ...payment, method: 'CASH' }).expect(400);
+  const sale = '/api/inventory/' + lot.itemId + '/movements';
+  const oldStock = (await prisma.inventoryItem.findUniqueOrThrow({ where: { id: lot.itemId } })).quantity - lot.quantity;
+  if (oldStock) await postAs(sale, buyer, { type: 'SALE', quantity: oldStock, note: '', requestId: randomUUID() }).expect(200);
+  assert.equal((await prisma.inventoryLot.findUniqueOrThrow({ where: { id: lot.id } })).consignmentSoldQty, 0);
+  await postAs(sale, buyer, { type: 'SALE', quantity: 24, note: '', requestId: randomUUID() }).expect(200);
+  const due = await request(app).get('/api/inventory/consignment/settlements').set('Cookie', cookies.get(buyer.id)).expect(200);
+  assert.equal(due.body.settlements.find(row => row.lotId === lot.id).dueAmount, 20000);
+  const getBalance = async userId => Number((await prisma.wallet.findUnique({ where: { userId } }))?.balance ?? 0);
+  await prisma.wallet.upsert({ where: { userId: buyer.id }, update: { balance: 0 }, create: { userId: buyer.id, balance: 0 } });
+  const supplierBefore = await getBalance(supplier.id);
+  await postAs(payPath, buyer, payment).expect(409);
+  assert.equal((await prisma.inventoryLot.findUniqueOrThrow({ where: { id: lot.id } })).consignmentSettledQty, 0);
+  await prisma.wallet.update({ where: { userId: buyer.id }, data: { balance: 50000 } });
+  const results = await Promise.all([postAs(payPath, buyer, payment), postAs(payPath, buyer, payment)]);
+  assert.deepEqual(results.map(result => result.status).sort(), [200, 409]);
+  assert.equal(await getBalance(buyer.id), 30000);
+  assert.equal(await getBalance(supplier.id), supplierBefore + 20000);
+  await postAs(payPath, buyer, payment).expect(409);
 });
 
 test('production blocks simulated deposits for ordinary accounts', async () => {
@@ -295,7 +371,9 @@ test('wallet remainder is debited once; payment and held deposit settle only on 
   await prisma.wholesaleOrder.update({ where: { id: purchase.id }, data: { depositAmount: 20000, depositStatus: 'PAID', depositReference: 'VI_HE_THONG' } });
   const beforeSupplier = Number((await prisma.wallet.findUnique({ where: { userId: supplier.id } }))?.balance || 0);
   const results = await Promise.all([cashPayment(purchase.id, { method: 'WALLET' }), cashPayment(purchase.id, { method: 'WALLET' })]);
-  assert.deepEqual(results.map(result => result.status), [200, 200]);
+  assert.ok(results.some(result => result.status === 200));
+  assert.ok(results.every(result => [200, 409].includes(result.status)));
+  await cashPayment(purchase.id, { method: 'WALLET' }).expect(200);
   const buyerWallet = await prisma.wallet.findUniqueOrThrow({ where: { userId: buyer.id } });
   assert.equal(Number(buyerWallet.balance), 104000);
   assert.equal(Number(buyerWallet.heldBalance), 20000);

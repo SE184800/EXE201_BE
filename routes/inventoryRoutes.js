@@ -10,11 +10,11 @@ const {
   parseInventoryWorkbook,
   serializeImportRow,
 } = require('../services/inventoryImport');
+const { toRetailStock } = require('../services/inventoryUnits');
 const { createStockService } = require('../services/stockService');
 const { createStoreRevenueService } = require('../services/storeRevenueService');
 const inventorySupplierService = require('../services/inventorySupplierService');
 const consignmentService = require('../services/consignmentService');
-const { walletService } = require('../services/walletService');
 
 const inventoryWorkbookUpload = multer({
   storage: multer.memoryStorage(),
@@ -90,12 +90,12 @@ function createInventoryRoutes(prisma, requireAuth) {
   router.get('/history', async (req, res, next) => {
     const page = Number(req.query.page || 1);
     if (!Number.isInteger(page) || page < 1 || page > 100000) return res.status(400).json({ message: 'Trang không hợp lệ.' });
-    const { itemId, type, from, to } = req.query;
+    const { itemId, type, from, to, product } = req.query;
     const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && value >= '1900-01-01' && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
     if ((itemId !== undefined && (typeof itemId !== 'string' || !/^\d+$/.test(itemId) || Number(itemId) < 1 || Number(itemId) > 2147483647)) ||
       (type !== undefined && !['OPENING', 'SALE', 'RECEIPT', 'ADJUSTMENT'].includes(type)) ||
-      (from !== undefined && !validDate(from)) || (to !== undefined && !validDate(to)) || (from && to && from > to)) return res.status(400).json({ message: 'Bộ lọc lịch sử hoặc khoảng ngày không hợp lệ.' });
-    const where = { item: { ownerId: req.auth.user.id }, ...(itemId ? { itemId: Number(itemId) } : {}), ...(type ? { type } : {}),
+      (product !== undefined && (typeof product !== 'string' || product.length > 100)) || (from !== undefined && !validDate(from)) || (to !== undefined && !validDate(to)) || (from && to && from > to)) return res.status(400).json({ message: 'Bộ lọc lịch sử hoặc khoảng ngày không hợp lệ.' });
+    const where = { item: { ownerId: req.auth.user.id }, ...(itemId ? { itemId: Number(itemId) } : {}), ...(type ? { type } : {}), ...(product?.trim() ? { productName: { contains: product.trim() } } : {}),
       ...(from || to ? { createdAt: { ...(from ? { gte: new Date(`${from}T00:00:00+07:00`) } : {}), ...(to ? { lt: new Date(new Date(`${to}T00:00:00+07:00`).getTime() + 86400000) } : {}) } } : {}) };
     const take = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
     try {
@@ -114,10 +114,18 @@ function createInventoryRoutes(prisma, requireAuth) {
       where: { ownerId: req.auth.user.id },
       select: { id: true, name: true, unit: true },
     });
-    const annotated = annotateInventoryImport(parsed.rows, existing);
+    const unitErrors = [];
+    const rows = parsed.rows.map(row => {
+      try { return toRetailStock(row); }
+      catch (error) {
+        unitErrors.push({ rowNumber: row.rowNumber, message: error.message });
+        return row;
+      }
+    });
+    const annotated = annotateInventoryImport(rows, existing);
     return {
       rows: annotated.rows,
-      errors: [...parsed.errors, ...annotated.errors],
+      errors: [...parsed.errors, ...unitErrors, ...annotated.errors],
     };
   }
   router.post('/import/preview', receiveInventoryWorkbook, async (req, res, next) => {
@@ -163,6 +171,28 @@ function createInventoryRoutes(prisma, requireAuth) {
       next(error);
     }
   });
+  router.post('/sales/batch', async (req, res, next) => {
+    const { rows } = req.body || {};
+    const validInt = value => Number.isInteger(value) && value > 0 && value <= 2147483647;
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (!Array.isArray(rows) || rows.length < 1 || rows.length > 50 ||
+      rows.some(row => !row || !validInt(row.itemId) || !validInt(row.quantity) ||
+        typeof row.requestId !== 'string' || !uuid.test(row.requestId) || !Number.isInteger(row.unitSalePrice) ||
+        row.unitSalePrice < 0 || row.unitSalePrice > 2147483647) ||
+      new Set(rows.map(row => row.requestId.toLowerCase())).size !== rows.length) {
+      return res.status(400).json({ message: 'Kiểm tra số lượng và giá bán của từng mặt hàng.' });
+    }
+    try {
+      const movements = await stock.moveBatch(req.auth.user.id, rows.map(row => ({
+        itemId: row.itemId, quantity: row.quantity, requestId: row.requestId,
+        unitSalePrice: row.unitSalePrice, type: 'SALE', quickSale: true, expectedUnit: row.unit, note: 'Bán nhanh bằng giọng nói',
+      })));
+      res.json({ movements });
+    } catch (error) {
+      if (error.status) return res.status(error.status).json({ message: error.message });
+      next(error);
+    }
+  });
   router.post('/:id/movements', async (req, res, next) => {
     const id = Number(req.params.id);
     const { type, quantity, requestId, note = '', occurredOn, lotExpiryDate } = req.body || {};
@@ -185,7 +215,7 @@ function createInventoryRoutes(prisma, requireAuth) {
           return {
             ...item,
             supplierName: inventorySupplierService.getSupplier(item.id),
-            isConsignment: Boolean(consignment?.isConsignment),
+            isConsignment: item.lots.some(lot => lot.consignmentSupplierId != null),
             settlementPrice: consignment?.settlementPrice || 0,
             autoRestock: consignment?.autoRestock !== false,
             autoExchangeExpiry: consignment?.autoExchangeExpiry !== false,
@@ -215,20 +245,25 @@ function createInventoryRoutes(prisma, requireAuth) {
     }
   });
 
-  router.post('/consignment/settlements/:itemId/pay', async (req, res, next) => {
-    const itemId = Number(req.params.itemId);
-    const { qty, method = 'WALLET' } = req.body || {};
+  router.post('/consignment/settlements/:itemId/pay', (_req, res) => {
+    res.status(409).json({ message: 'Vui lòng tải lại ứng dụng để quyết toán theo lô ký gửi.' });
+  });
+
+  router.post('/consignment/settlements/lots/:lotId/pay', async (req, res, next) => {
+    const lotId = Number(req.params.lotId);
+    const { qty, expectedSettledQty, method = 'WALLET' } = req.body || {};
     try {
       const result = await consignmentService.settleConsignmentItem({
         storeId: req.auth.user.id,
-        itemId,
+        lotId,
         qtyToSettle: qty,
+        expectedSettledQty,
         method,
         prisma,
-        walletService,
       });
       res.json(result);
     } catch (error) {
+      if (error.status) return res.status(error.status).json({ message: error.message });
       next(error);
     }
   });
@@ -331,7 +366,7 @@ function createInventoryRoutes(prisma, requireAuth) {
     const ownerId = req.auth.user.id;
     try {
       if (req.method === 'POST') {
-        const item = await stock.create(ownerId, data);
+        const item = await stock.create(ownerId, toRetailStock(data));
         return res.status(201).json({ item });
       }
       const id = Number(req.params.id);

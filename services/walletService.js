@@ -545,8 +545,7 @@ function createWalletService(prisma, qrBank = {}) {
 
   /**
    * Creates a VietQR deposit ticket and returns the QR payload for it.
-   * The ticket stays PENDING until the user confirms the transfer, so the
-   * admin still has a record of every QR deposit.
+   * Admin reviews the ticket after the user reports the transfer.
    */
   async function createQrDepositRequest(userId, body = {}) {
     const amount = parseAmount(body.amount);
@@ -556,13 +555,13 @@ function createWalletService(prisma, qrBank = {}) {
         userId,
         amount,
         method: 'VIET_QR',
-        isSandbox: true,
+        isSandbox: false,
         bankName: qrBank.name || 'QR',
         bankAccountNumber: qrBank.accountNumber,
         bankAccountHolder: qrBank.accountHolder,
         reference: `QR-DEP-${Date.now()}`,
         note: note || null,
-        status: 'PENDING',
+        status: 'AWAITING_TRANSFER',
       },
       include: { user: { select: { id: true, name: true, username: true } } },
     });
@@ -605,12 +604,8 @@ function createWalletService(prisma, qrBank = {}) {
         throw problem(409, 'Phiếu nạp QR đã được xử lý. Tải lại danh sách.');
       }
       const changed = await tx.depositRequest.updateMany({
-        where: { id, status: 'PENDING' },
-        data: {
-          status: 'APPROVED',
-          reviewedAt: new Date(),
-          reference: reference || request.reference,
-        },
+        where: { id, status: request.status, isSandbox: request.isSandbox },
+        data: { status: 'PENDING', isSandbox: false },
       });
       if (!changed.count) throw problem(409, 'Phiếu nạp QR vừa được xử lý.');
       const wallet = await ensureWallet(tx, request.userId);
@@ -775,7 +770,7 @@ function createWalletService(prisma, qrBank = {}) {
     if (!Number.isInteger(page) || page < 1 || page > 100000) {
       throw problem(400, 'Trang không hợp lệ.');
     }
-    if (status && !['PENDING', 'APPROVED', 'REJECTED'].includes(status)) {
+    if (status && !['AWAITING_TRANSFER', 'PENDING', 'APPROVED', 'REJECTED'].includes(status)) {
       throw problem(400, 'Trạng thái yêu cầu nạp tiền không hợp lệ.');
     }
     const where = { userId, ...(status ? { status } : {}) };
@@ -810,6 +805,9 @@ function createWalletService(prisma, qrBank = {}) {
       if (request.status !== 'PENDING') {
         throw problem(409, 'Yêu cầu nạp tiền đã được xử lý. Tải lại danh sách.');
       }
+      if (request.method === 'VIET_QR' && request.isSandbox) {
+        throw problem(409, 'Người dùng chưa báo chuyển khoản cho phiếu QR này.');
+      }
       const changed = await tx.depositRequest.updateMany({
         where: { id, status: 'PENDING' },
         data: {
@@ -825,7 +823,7 @@ function createWalletService(prisma, qrBank = {}) {
       await applyBalance(tx, {
         wallet,
         userId: request.userId,
-        type: TRANSACTION_TYPES.DEPOSIT,
+        type: request.method === 'VIET_QR' ? TRANSACTION_TYPES.QR_DEPOSIT : TRANSACTION_TYPES.DEPOSIT,
         direction: 'CREDIT',
         amount: request.amount,
         reference: `DEP-${request.id}`,

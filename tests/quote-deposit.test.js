@@ -55,20 +55,24 @@ test('supplier sends a marketing quote; store reports transfer, supplier confirm
   const supplierCookie = await login(supplier.username);
   const storeCookie = await login(store.username);
 
+  const { body: policy } = await request(app).get('/api/supplier/quotes/config').set('Cookie', supplierCookie).expect(200);
   const validUntil = new Date();
   validUntil.setDate(validUntil.getDate() + 7);
-  const created = await request(app).post('/api/supplier/quotes').set(csrf).set('Cookie', supplierCookie).send({
+  const offer = {
     buyerId: store.id,
     title: 'Offer after store visit',
     validUntil: validUntil.toISOString().slice(0, 10),
     deliveryFee: 10000,
-    depositRate: 20,
+    depositRate: policy.defaultDepositRate,
     note: 'Deliver in two days',
     lines: [{ productId: product.id, quantity: 5, unitPrice: 180000, expectedUpdatedAt: product.updatedAt.toISOString() }],
-  }).expect(201);
+  };
+  const sendOffer = body => request(app).post('/api/supplier/quotes').set(csrf).set('Cookie', supplierCookie).send(body);
+  await sendOffer({ ...offer, depositRate: policy.defaultDepositRate + 1 }).expect(409);
+  const created = await sendOffer(offer).expect(201);
   quoteId = created.body.quote.id;
   assert.equal(created.body.quote.total, 910000);
-  assert.equal(created.body.quote.depositAmount, 182000);
+  assert.equal(created.body.quote.depositAmount, 910000 * policy.defaultDepositRate / 100);
 
   const accepted = await request(app).post(`/api/quotes/${quoteId}/accept`).set(csrf).set('Cookie', storeCookie).send({
     requestId: randomUUID(),

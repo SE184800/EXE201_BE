@@ -6,6 +6,7 @@ const {
   signContract,
   getContractByUserId,
   getCanonicalContractText,
+  syncContractSignerInfo,
 } = require('../services/contractService');
 
 test('contractService: generate contract with keys and sign successfully', () => {
@@ -59,4 +60,15 @@ test('contractService: generate contract with keys and sign successfully', () =>
   const retrieved = getContractByUserId(userId);
   assert.equal(retrieved.isSigned, true);
   assert.equal(retrieved.contractHash, signedContract.contractHash);
+
+  const signedText = getCanonicalContractText(signedContract);
+  const updatedStore = { ...mockStore, storeName: 'Updated store', storeAddress: 'Updated address' };
+  syncContractSignerInfo(userId, { ...updatedStore, name: 'Updated representative' });
+  const afterProfileChange = getOrCreateUserContract({ ...mockUser, name: 'Updated representative' }, updatedStore);
+  assert.deepEqual(afterProfileChange.signerInfo, signedContract.signerInfo);
+  assert.equal(getCanonicalContractText(afterProfileChange), signedText);
+
+  const retry = signContract(userId, contract.rawPrivateKey, true, { ip: '127.0.0.2' });
+  assert.deepEqual(retry.stamp, signedContract.stamp);
+  assert.equal(retry.signature, signedContract.signature);
 });

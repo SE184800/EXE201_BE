@@ -140,7 +140,7 @@ test('creating a QR ticket returns a scannable code and keeps the ticket pending
   const created = await post('/wallet/deposits/qr', { amount: 750000, note: 'QR demo' }, 1).expect(201);
   const { request: ticket, qr } = created.body;
 
-  assert.equal(ticket.status, 'PENDING');
+  assert.equal(ticket.status, 'AWAITING_TRANSFER');
   assert.equal(ticket.amount, 750000);
   assert.equal(ticket.method, 'VIET_QR');
   assert.equal(qr.accountNumber, qrBank.accountNumber);
@@ -148,11 +148,11 @@ test('creating a QR ticket returns a scannable code and keeps the ticket pending
   assert.ok(qr.payload.startsWith('00020101'));
   assert.ok(qr.payload.includes(qrBank.accountNumber));
 
-  // The money is not credited until the user confirms the transfer.
+  // Generating a QR code does not create a review request or move money.
   const wallet = (await get('/wallet', 1).expect(200)).body.wallet;
   assert.equal(wallet.balance, before);
   const overview = (await get('/wallet', 1).expect(200)).body;
-  assert.equal(overview.pendingDeposits, 1);
+  assert.equal(overview.pendingDeposits, 0);
 });
 
 test('client-side self-confirmation is forbidden to prevent unverified free money', async () => {
@@ -233,6 +233,7 @@ test('the QR ledger row is tagged so the history stays readable', async () => {
   const row = ledger.body.transactions.find(item => item.type === 'QR_DEPOSIT');
   assert.ok(row);
   assert.equal(row.direction, 'CREDIT');
+  assert.equal(row.method, 'REAL');
   assert.equal(row.amount, 300000);
   assert.equal(row.balanceAfter, 300000);
 });

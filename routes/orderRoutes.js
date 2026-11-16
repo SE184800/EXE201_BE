@@ -7,7 +7,7 @@ const { normalizePhone } = require('../services/registrationValidation');
 const { serializeOrder } = require('../services/supplierService');
 const deliveryService = require('../services/deliveryService');
 const deliveryFeeService = require('../services/deliveryFeeService');
-const { syncOrderToStoreInventory, importBlockReason } = require('../services/inventorySyncService');
+const { syncOrderToStoreInventory, importBlockReason, importLinePlan, looseUnits } = require('../services/inventorySyncService');
 const { walletService, settleOrderToSupplier } = require('../services/walletService');
 const { validateDeliveryTime, pendingRequest } = require('../services/reschedulePolicy');
 const { orderQuery, buildOrderWhere } = require('../services/orderQuery');
@@ -182,7 +182,7 @@ function createOrderRoutes(prisma, requireAuth) {
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
       
       try {
-        const supProf = await prisma.supplierProfile.findUnique({ where: { id: supplierId }, select: { userId: true, businessName: true } });
+        const supProf = await prisma.supplierProfile.findUnique({ where: { id: order.supplierId }, select: { userId: true, businessName: true } });
         if (supProf?.userId) {
           notificationService.createNotification({
             userId: supProf.userId,
@@ -479,9 +479,31 @@ function createOrderRoutes(prisma, requireAuth) {
       res.json({ success: true, order: serialize(updated), message: 'Đã hoàn tất đơn.' });
     } catch (error) { next(error); }
   });
+  router.get('/:id/import-inventory', requireRole('STORE_OWNER'), async (req, res, next) => {
+    const id = Number(req.params.id), buyerId = req.auth.user.id;
+    if (!Number.isInteger(id) || id < 1 || id > 2147483647) return res.status(400).json({ message: 'Mã đơn hàng không hợp lệ.' });
+    try {
+      const order = await prisma.wholesaleOrder.findFirst({ where: { id, buyerId }, include });
+      if (!order) throw problem(404, 'Không tìm thấy đơn hàng.');
+      if (order.inventoryImportedAt) throw problem(409, 'Đơn này đã được nhập kho.');
+      const reason = importBlockReason(order, deliveryService.getDriverInfo(id));
+      if (reason) throw problem(409, reason);
+      const existing = await prisma.inventoryItem.findMany({ where: { ownerId: buyerId } });
+      res.json({ units: looseUnits, lines: order.items.map(line => {
+        const { item, ...plan } = importLinePlan(line, existing);
+        return { ...plan, existingUnit: item?.unit ?? null, id: line.id,
+          name: line.productName, packaging: line.packaging, packs: line.quantity };
+      }) });
+    } catch (error) { next(error); }
+  });
   router.post('/:id/import-inventory', requireRole('STORE_OWNER'), async (req, res, next) => {
     const id = Number(req.params.id), buyerId = req.auth.user.id;
     if (!Number.isInteger(id) || id < 1 || id > 2147483647) return res.status(400).json({ message: 'Mã đơn hàng không hợp lệ.' });
+    const rows = req.body?.conversions ?? [], preview = req.body?.preview ?? [];
+    if (![rows, preview].every(list => Array.isArray(list) && list.every(row => row && Number.isInteger(row.id)) &&
+      new Set(list.map(row => row.id)).size === list.length)) {
+      return res.status(400).json({ message: 'Dữ liệu quy đổi không hợp lệ.' });
+    }
     try {
       const result = await prisma.$transaction(async tx => {
         const resource = 'SupplyMindOrderInventory:' + id;
@@ -491,7 +513,14 @@ function createOrderRoutes(prisma, requireAuth) {
         if (!order) throw problem(404, 'Không tìm thấy đơn hàng.');
         const reason = importBlockReason(order, deliveryService.getDriverInfo(id));
         if (reason) throw problem(409, reason);
-        const receipt = await syncOrderToStoreInventory(tx, buyerId, order);
+        const quote = order.sourceQuote;
+        const legacy = quote && require('../services/consignmentService').getQuoteConsignment(quote.id);
+        const price = quote?.consignmentSettlementPrice ?? (legacy?.isConsignment ? legacy.settlementPrice : null);
+        if ([...rows, ...preview].some(row => !order.items.some(line => line.id === row.id))) {
+          throw problem(400, 'Mặt hàng quy đổi không thuộc đơn này.');
+        }
+        const receipt = await syncOrderToStoreInventory(tx, buyerId, order, price,
+          new Map(rows.map(row => [row.id, row])), new Map(preview.map(row => [row.id, row])));
         if (!receipt.alreadyImported) await audit(tx, buyerId, 'ORDER_IMPORTED_TO_INVENTORY', 'ORDER', id, { count: receipt.count });
         const saved = await tx.wholesaleOrder.findUniqueOrThrow({ where: { id }, include });
         return { ...receipt, order: saved };
@@ -500,7 +529,10 @@ function createOrderRoutes(prisma, requireAuth) {
         try {
           require('../services/inventorySupplierService').setSupplier(update.itemId, update.supplierName);
           const quote = result.order.sourceQuote;
-          const consignment = quote && require('../services/consignmentService').getQuoteConsignment(quote.id);
+          const savedTerms = quote && require('../services/consignmentService').getQuoteConsignment(quote.id);
+          const consignment = quote?.consignmentSettlementPrice != null
+            ? { ...savedTerms, isConsignment: true, settlementPrice: Number(quote.consignmentSettlementPrice) }
+            : savedTerms;
           if (consignment?.isConsignment) require('../services/consignmentService').setItemConsignment(update.itemId, {
             ...consignment, supplierId: result.order.supplierId, supplierName: update.supplierName,
             supplierPhone: result.order.supplier.user?.phone || null,

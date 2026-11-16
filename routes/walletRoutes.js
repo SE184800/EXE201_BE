@@ -201,7 +201,10 @@ function createAdminWalletRoutes(prisma, requireAuth) {
     if (status && !['PENDING', 'APPROVED', 'REJECTED'].includes(status)) {
       return res.status(400).json({ message: 'Trạng thái yêu cầu nạp tiền không hợp lệ.' });
     }
-    const where = status ? { status } : {};
+    const where = {
+      status: status || { not: 'AWAITING_TRANSFER' },
+      NOT: { method: 'VIET_QR', status: 'PENDING', isSandbox: true },
+    };
     const [rows, total] = await Promise.all([
       prisma.depositRequest.findMany({
         where,
