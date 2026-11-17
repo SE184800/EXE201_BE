@@ -1,4 +1,4 @@
-const { expiryInfo } = require('./inventoryExpiry');
+const { expiryInfo, purgeExpiredItems } = require('./inventoryExpiry');
 const { getUpcomingHolidays, getHolidayMultiplierForItem } = require('./holidayService');
 const DAY = 86400000;
 const VN_OFFSET = 7 * 3600000;
@@ -75,6 +75,7 @@ function forecastItem(item, movements, horizonDays = 7, safetyDays = 2, now = ne
 }
 
 async function getForecast(prisma, ownerId, horizonDays, safetyDays, now = new Date()) {
+  await purgeExpiredItems(prisma, ownerId, now);
   const upcomingHolidays = await getUpcomingHolidays(prisma, 14, now);
   const items = await prisma.inventoryItem.findMany({ where: { ownerId }, orderBy: { name: 'asc' }, include: { movements: { orderBy: { createdAt: 'asc' }, take: 1, select: { createdAt: true } } } });
   const movements = await prisma.stockMovement.findMany({ where: { item: { ownerId }, createdAt: { gte: new Date(dayStart(now) - 30 * DAY), lt: new Date(dayStart(now)) } } });

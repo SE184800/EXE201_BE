@@ -4,6 +4,15 @@ const { requireRole } = require('../middlewares/authMiddleware');
 const { getForecast } = require('../services/restockForecast');
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const validDays = (h, s) => [7, 14, 30].includes(h) && Number.isInteger(s) && s >= 0 && s <= 7;
+
+// Danh mục các mặt hàng đề xuất mùa vụ / dịp lễ ngoài kho (ghi nhận nhu cầu nhập thử nghiệm)
+const SEASONAL_CATALOG = [
+  { itemId: 90001, name: 'Khay Mứt Tết Ngũ Phúc 600g (Hộp lục giác sang trọng)', unit: 'Hộp', purchasePrice: null, quantity: 0, suggestedQuantity: 10, averageDailySales: null, observedDays: 0 },
+  { itemId: 90002, name: 'Hạt Điều Rang Muối Bình Phước (Hũ 500g loại 1)', unit: 'Hũ', purchasePrice: null, quantity: 0, suggestedQuantity: 10, averageDailySales: null, observedDays: 0 },
+  { itemId: 90003, name: 'Hộp Quà Bánh Quy Bơ Thượng Hạng (Hộp thiếc đỏ 450g)', unit: 'Hộp', purchasePrice: null, quantity: 0, suggestedQuantity: 10, averageDailySales: null, observedDays: 0 },
+  { itemId: 90004, name: 'Nước Ngọt Pepsi (Thùng 24 lon 330ml)', unit: 'Thùng', purchasePrice: null, quantity: 0, suggestedQuantity: 10, averageDailySales: null, observedDays: 0 },
+  { itemId: 90005, name: 'Bánh Chưng / Bánh Tét Đóng Hộp (Hộp 400g)', unit: 'Hộp', purchasePrice: null, quantity: 0, suggestedQuantity: 10, averageDailySales: null, observedDays: 0 },
+];
 function createRestockRoutes(prisma, requireAuth) {
   const router = express.Router();
   router.use(requireAuth, requireRole('STORE_OWNER'));
@@ -41,7 +50,10 @@ function createRestockRoutes(prisma, requireAuth) {
       } else if (!body.expectedUpdatedAt || Number.isNaN(Date.parse(body.expectedUpdatedAt))) return res.status(400).json({ message: 'Tải lại kế hoạch trước khi sửa.' });
       const forecast = await getForecast(prisma, ownerId, horizonDays, safetyDays);
       const byId = new Map(forecast.items.map((item) => [item.itemId, item]));
-      if (lines.some((line) => !byId.has(line.itemId))) return res.status(404).json({ message: 'Một mặt hàng không còn thuộc kho của bạn. Tải lại danh sách.' });
+      for (const s of SEASONAL_CATALOG) {
+        byId.set(s.itemId, s);
+      }
+      if (lines.some((line) => !byId.has(line.itemId))) return res.status(404).json({ message: 'Một mặt hàng không còn thuộc danh mục đề xuất hoặc kho của bạn. Tải lại danh sách.' });
       const snapshots = lines.map((line) => {
         const item = byId.get(line.itemId);
         return { purchasePrice: item.purchasePrice, sourceItemId: item.itemId, productName: item.name, unit: item.unit, quantity: line.quantity, stockSnapshot: item.quantity, suggestedQuantity: item.suggestedQuantity, averageDailySales: item.averageDailySales, observedDays: item.observedDays };
