@@ -33,6 +33,7 @@ function createWalletRoutes(prisma, requireAuth, config = {}) {
       req.get('ApiKey') ||
       req.get('x-api-key') ||
       req.get('X-Api-Key') ||
+      req.query?.apiKey ||
       req.body?.apiKey ||
       '';
     console.log('[SEPAY WEBHOOK INCOMING]', {
@@ -40,6 +41,7 @@ function createWalletRoutes(prisma, requireAuth, config = {}) {
       body: req.body,
     });
     const result = await service.processSepayWebhook(req.body || {}, authHeader, config.sepayApiKey);
+    console.log('[SEPAY WEBHOOK RESULT]', result);
     res.json(result);
   }));
 

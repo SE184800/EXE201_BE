@@ -82,7 +82,11 @@ function createApp(prisma, config) {
 
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
       // Exclude third-party webhooks (they are authenticated with their own API Key / HMAC signature)
-      if (req.path.startsWith('/wallet/webhook/')) {
+      if (
+        req.path.startsWith('/wallet/webhook/') ||
+        req.path.startsWith('/api/wallet/webhook/') ||
+        (req.originalUrl && req.originalUrl.includes('/wallet/webhook/'))
+      ) {
         return next();
       }
 
@@ -142,7 +146,11 @@ function createApp(prisma, config) {
   const subscriptionGate = createSubscriptionGate(prisma);
   app.use('/api', (req, res, next) => {
     // Webhook endpoints are public and authenticated by API Key / signature
-    if (req.path.startsWith('/wallet/webhook/')) {
+    if (
+      req.path.startsWith('/wallet/webhook/') ||
+      req.path.startsWith('/api/wallet/webhook/') ||
+      (req.originalUrl && req.originalUrl.includes('/wallet/webhook/'))
+    ) {
       return next();
     }
 

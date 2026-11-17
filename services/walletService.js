@@ -417,6 +417,7 @@ function createWalletService(prisma, qrBank = {}) {
   /** Ledger of the signed-in user. */
   async function listTransactions(userId, query = {}) {
     const page = query.page === undefined ? 1 : Number(query.page);
+    const limit = query.limit !== undefined ? Math.min(200, Math.max(1, Number(query.limit))) : 100;
     const type = text(query.type, 30);
     if (!Number.isInteger(page) || page < 1 || page > 100000) {
       throw problem(400, 'Trang không hợp lệ.');
@@ -430,8 +431,8 @@ function createWalletService(prisma, qrBank = {}) {
       prisma.walletTransaction.findMany({
         where,
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-        skip: (page - 1) * 20,
-        take: 20,
+        skip: (page - 1) * limit,
+        take: limit,
       }),
       prisma.walletTransaction.count({ where }),
     ]);
@@ -439,7 +440,9 @@ function createWalletService(prisma, qrBank = {}) {
       transactions: rows.map(serializeTransaction),
       total,
       page,
-      hasMore: page * 20 < total,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+      hasMore: page * limit < total,
     };
   }
 
@@ -583,7 +586,7 @@ function createWalletService(prisma, qrBank = {}) {
         accountNumber: qrBank.accountNumber,
         accountHolder: qrBank.accountHolder,
         amount: amount.toNumber(),
-        billNumber: request.reference,
+        billNumber: `NAP TIEN VI ${request.id}`,
       },
     };
   }
@@ -689,6 +692,16 @@ function createWalletService(prisma, qrBank = {}) {
       }
 
       if (!request) {
+        const refMatch = fullContent.match(/QR-DEP-\d+/i);
+        if (refMatch) {
+          request = await tx.depositRequest.findFirst({
+            where: { reference: refMatch[0] },
+            include: { user: true },
+          });
+        }
+      }
+
+      if (!request) {
         return {
           success: false,
           message: `Không tìm thấy phiếu nạp tương ứng với nội dung: "${fullContent}"`,
@@ -703,7 +716,7 @@ function createWalletService(prisma, qrBank = {}) {
         };
       }
 
-      if (request.status !== 'PENDING') {
+      if (request.status !== 'PENDING' && request.status !== 'AWAITING_TRANSFER') {
         return {
           success: false,
           message: `Phiếu nạp #${request.id} đang ở trạng thái ${request.status}, không thể xử lý.`,
@@ -722,7 +735,7 @@ function createWalletService(prisma, qrBank = {}) {
 
       const reference = text(payload.referenceCode || payload.reference || `SEPAY-${payload.id || Date.now()}`, 100);
       const changed = await tx.depositRequest.updateMany({
-        where: { id: request.id, status: 'PENDING' },
+        where: { id: request.id, status: { in: ['PENDING', 'AWAITING_TRANSFER'] } },
         data: {
           status: 'APPROVED',
           reviewedAt: new Date(),
