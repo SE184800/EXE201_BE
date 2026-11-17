@@ -45,10 +45,10 @@ function readConfig(env = process.env) {
   // Bank account that receives the VietQR deposits. Every value is optional so
   // a deployment without the feature simply hides the QR button.
   const qrBank = {
-    code: (env.QR_BANK_CODE || '970403').trim(),
-    name: (env.QR_BANK_NAME || 'Sacombank').trim(),
-    accountNumber: (env.QR_BANK_ACCOUNT || '050138052378').trim(),
-    accountHolder: (env.QR_BANK_HOLDER || 'LE TRAN MINH DUC').trim(),
+    code: (env.QR_BANK_CODE || '970416').trim(),
+    name: (env.QR_BANK_NAME || 'ACB').trim(),
+    accountNumber: (env.QR_BANK_ACCOUNT || '34451607').trim(),
+    accountHolder: (env.QR_BANK_HOLDER || 'NGUYEN NAM MINH TRI').trim(),
   };
   const qrEnabled = Boolean(qrBank.code && qrBank.accountNumber && qrBank.accountHolder);
   return {
@@ -68,6 +68,10 @@ function readConfig(env = process.env) {
     sessionSeconds: 28800,
     qrBank,
     qrEnabled,
+    sepayApiKey: (env.SEPAY_API_KEY || 'spsk_test_DqqUZDQ8JJ8ritBjCAi9fAswp5N9Zc5D').trim(),
+    goongApiKey: (env.GOONG_API_KEY || '').trim(),
+    googleMapsApiKey: (env.GOOGLE_MAPS_API_KEY || '').trim(),
+    geoapifyApiKey: (env.GEOAPIFY_API_KEY || '').trim(),
   };
 }
 module.exports = { readConfig };

@@ -81,6 +81,11 @@ function createApp(prisma, config) {
     res.set('X-Content-Type-Options', 'nosniff');
 
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+      // Exclude third-party webhooks (they are authenticated with their own API Key / HMAC signature)
+      if (req.path.startsWith('/wallet/webhook/')) {
+        return next();
+      }
+
       const origin = req.get('origin');
 
       if (
@@ -136,6 +141,11 @@ function createApp(prisma, config) {
 
   const subscriptionGate = createSubscriptionGate(prisma);
   app.use('/api', (req, res, next) => {
+    // Webhook endpoints are public and authenticated by API Key / signature
+    if (req.path.startsWith('/wallet/webhook/')) {
+      return next();
+    }
+
     const protectedRoots = [
       '/admin',
       '/users',
@@ -189,7 +199,7 @@ function createApp(prisma, config) {
 
   app.use(
     '/api/profile',
-    createProfileRoutes(prisma, requireAuth)
+    createProfileRoutes(prisma, requireAuth, config)
   );
 
   app.use(

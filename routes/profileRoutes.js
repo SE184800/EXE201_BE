@@ -90,7 +90,7 @@ function validateProfile(body) {
   return { data: { name, email: email || null, phone: phone || null, dateOfBirth } };
 }
 
-function createProfileRoutes(prisma, requireAuth) {
+function createProfileRoutes(prisma, requireAuth, config = {}) {
   const router = express.Router();
   router.use(requireAuth);
 
@@ -107,7 +107,11 @@ function createProfileRoutes(prisma, requireAuth) {
         message: 'Địa chỉ cần kiểm tra không hợp lệ.',
       });
     }
-    const result = await verifyAddressOnline(q);
+    const result = await verifyAddressOnline(q, {
+      geoapifyApiKey: config?.geoapifyApiKey,
+      goongApiKey: config?.goongApiKey,
+      googleApiKey: config?.googleMapsApiKey,
+    });
     return res.json(result);
   });
 

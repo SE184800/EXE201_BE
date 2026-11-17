@@ -4,7 +4,7 @@ const multer = require('multer');
 const { requireRole } = require('../middlewares/authMiddleware');
 const { ROLES } = require('../config/roles');
 const { answerInventory } = require('../services/inventoryChat');
-const { expiryInfo } = require('../services/inventoryExpiry');
+const { expiryInfo, purgeExpiredItems } = require('../services/inventoryExpiry');
 const {
   annotateInventoryImport,
   parseInventoryWorkbook,
@@ -209,13 +209,14 @@ function createInventoryRoutes(prisma, requireAuth) {
   const list = (ownerId) => prisma.inventoryItem.findMany({ where: { ownerId }, orderBy: { name: 'asc' }, include: { lots: { orderBy: [{ expiryDate: 'asc' }, { receivedAt: 'asc' }] } } });
   router.get('/', async (req, res, next) => {
     try {
+      await purgeExpiredItems(prisma, req.auth.user.id);
       res.json({
         items: (await list(req.auth.user.id)).map((item) => {
           const consignment = consignmentService.getItemConsignment(item.id);
           return {
             ...item,
             supplierName: inventorySupplierService.getSupplier(item.id),
-            isConsignment: item.lots.some(lot => lot.consignmentSupplierId != null),
+            isConsignment: item.lots?.some((lot) => lot.consignmentSupplierId != null) || false,
             settlementPrice: consignment?.settlementPrice || 0,
             autoRestock: consignment?.autoRestock !== false,
             autoExchangeExpiry: consignment?.autoExchangeExpiry !== false,

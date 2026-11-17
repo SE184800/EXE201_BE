@@ -110,8 +110,25 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   return 2 * r * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+function cleanRawAddress(rawAddress) {
+  let text = String(rawAddress || '').replace(/\s+/g, ' ').trim();
+  // 1. Strip Google Plus Code prefix (e.g. "QJ73+86P, " or "QJ73+86P ")
+  text = text.replace(/^[A-Z0-9]{4,8}\+[A-Z0-9]{2,}\s*,?\s*/i, '');
+  // 2. Strip trailing country (e.g. ", Việt Nam", ", Vietnam", ", VN")
+  text = text.replace(/,\s*(?:Việt Nam|Vietnam|VN)\s*$/i, '');
+  // 3. Strip 5-6 digit postal codes (e.g. "Hồ Chí Minh 100000" -> "Hồ Chí Minh")
+  text = text.replace(/\b\d{5,6}\b/g, '').replace(/\s+,/g, ',');
+  // 4. Expand common Vietnamese road abbreviations:
+  text = text.replace(/\bHL\s*(\d+)\b/gi, (_, n) => `Hương Lộ ${n}`);
+  text = text.replace(/\bQL\s*(\d+[a-zA-Z]?)\b/gi, (_, n) => `Quốc Lộ ${n}`);
+  text = text.replace(/\bTL\s*(\d+[a-zA-Z]?)\b/gi, (_, n) => `Tỉnh Lộ ${n}`);
+  text = text.replace(/\bĐT\s*(\d+[a-zA-Z]?)\b/gi, (_, n) => `Đường Tỉnh ${n}`);
+  return text.replace(/\s+/g, ' ').replace(/,\s*,/g, ',').trim();
+}
+
 function parseAddress(rawAddress) {
-  const trimmed = String(rawAddress || '').replace(/\s+/g, ' ').trim();
+  const cleaned = cleanRawAddress(rawAddress);
+  const trimmed = cleaned.replace(/\s+/g, ' ').trim();
   const segments = trimmed
     .split(',')
     .map((seg) => seg.trim())
@@ -128,6 +145,7 @@ function parseAddress(rawAddress) {
   const provinceSegment = segments[segments.length - 1];
   const middleSegments = segments.slice(1, -1);
 
+  const isRural = /^(?:ấp|ap|thôn|thon|xóm|xom|bản|ban|tổ|to|đội|doi|khu\s+dân\s+cư|kdc)\b/i.test(streetSegment);
   const provinceStem = normalizeProvinceStem(provinceSegment);
   const streetTokens = extractStreetTokens(streetSegment);
 
@@ -138,10 +156,10 @@ function parseAddress(rawAddress) {
     };
   }
 
-  if (streetTokens.length === 0) {
+  if (streetTokens.length === 0 && !isRural) {
     return {
       validFormat: false,
-      reason: 'Vui lòng nhập rõ tên đường/phố trong phần đầu địa chỉ.',
+      reason: 'Vui lòng nhập rõ tên đường/phố hoặc ấp/thôn trong phần đầu địa chỉ.',
     };
   }
 
@@ -155,6 +173,7 @@ function parseAddress(rawAddress) {
 
   return {
     validFormat: true,
+    isRural,
     trimmed,
     segments,
     streetSegment,
@@ -201,6 +220,82 @@ function adminMatchesCandidate(declaredRaw, declaredStem, adminTexts, fullAddres
   return false;
 }
 
+async function queryGoong(query, apiKey, fetchFn) {
+  if (!apiKey) return null;
+  const url = `https://rsapi.goong.io/v2/geocode?address=${encodeURIComponent(query)}&api_key=${apiKey}`;
+  const res = await fetchFn(url, { signal: AbortSignal.timeout(5500) });
+  if (!res.ok) throw new Error(`Goong HTTP ${res.status}`);
+  const data = await res.json();
+  if (data.status === 'OK' && Array.isArray(data.results) && data.results.length > 0) {
+    const first = data.results[0];
+    const loc = first.geometry?.location;
+    if (loc && Number.isFinite(loc.lat) && Number.isFinite(loc.lng)) {
+      return {
+        verified: true,
+        status: 'success',
+        lat: Number(loc.lat),
+        lon: Number(loc.lng),
+        displayName: first.formatted_address || query,
+        source: 'goong',
+        message: 'Đã xác minh địa chỉ thành công qua Goong Maps.',
+      };
+    }
+  }
+  return null;
+}
+
+async function queryGoogleMaps(query, apiKey, fetchFn) {
+  if (!apiKey) return null;
+  const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(query)}&key=${apiKey}&language=vi&region=vn`;
+  const res = await fetchFn(url, { signal: AbortSignal.timeout(5500) });
+  if (!res.ok) throw new Error(`Google Maps HTTP ${res.status}`);
+  const data = await res.json();
+  if (data.status === 'OK' && Array.isArray(data.results) && data.results.length > 0) {
+    const first = data.results[0];
+    const loc = first.geometry?.location;
+    if (loc && Number.isFinite(loc.lat) && Number.isFinite(loc.lng)) {
+      return {
+        verified: true,
+        status: 'success',
+        lat: Number(loc.lat),
+        lon: Number(loc.lng),
+        displayName: first.formatted_address || query,
+        source: 'google',
+        message: 'Đã xác minh địa chỉ thành công qua Google Maps.',
+      };
+    }
+  }
+  return null;
+}
+
+async function queryGeoapify(query, apiKey, fetchFn) {
+  if (!apiKey) return null;
+  const url = `https://api.geoapify.com/v1/geocode/search?text=${encodeURIComponent(query)}&apiKey=${apiKey}&filter=countrycode:vn&lang=vi`;
+  const res = await fetchFn(url, { signal: AbortSignal.timeout(5500) });
+  if (!res.ok) throw new Error(`Geoapify HTTP ${res.status}`);
+  const data = await res.json();
+  if (Array.isArray(data.features) && data.features.length > 0) {
+    const first = data.features[0];
+    const props = first.properties || {};
+    const geom = first.geometry || {};
+    const coords = Array.isArray(geom.coordinates) ? geom.coordinates : [];
+    const lat = Number(props.lat !== undefined ? props.lat : coords[1]);
+    const lon = Number(props.lon !== undefined ? props.lon : coords[0]);
+    if (Number.isFinite(lat) && Number.isFinite(lon)) {
+      return {
+        verified: true,
+        status: 'success',
+        lat,
+        lon,
+        displayName: props.formatted || query,
+        source: 'geoapify',
+        message: 'Đã xác minh địa chỉ thành công qua Geoapify.',
+      };
+    }
+  }
+  return null;
+}
+
 async function queryArcGis(query, fetchFn) {
   const url =
     'https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates' +
@@ -223,12 +318,12 @@ async function queryArcGis(query, fetchFn) {
       displayName: c.address || query,
       score: Number(c.score || 0),
       addrType: a.Addr_type || '',
-      isStreetLevel: ['PointAddress', 'StreetAddress', 'StreetName', 'StreetInt', 'Subaddress', 'POI'].includes(
+      isStreetLevel: ['PointAddress', 'StreetAddress', 'StreetName', 'StreetInt', 'Subaddress', 'POI', 'Locality'].includes(
         a.Addr_type || ''
       ),
-      streetTexts: [a.StName, addressParts[0], c.address].filter(Boolean),
+      streetTexts: [a.StName, addressParts[0], c.address, a.PlaceName].filter(Boolean),
       provinceTexts: [a.Region, fallbackProvince].filter(Boolean),
-      adminTexts: [a.City, a.District, a.Subregion, a.Neighborhood].filter(Boolean),
+      adminTexts: [a.City, a.District, a.Subregion, a.Neighborhood, a.Nbrhd, a.PlaceName].filter(Boolean),
       cityValue: a.City || '',
     };
   });
@@ -259,8 +354,8 @@ async function queryPhoton(query, fetchFn) {
         score: 85,
         addrType: p.type || p.osm_key || '',
         isStreetLevel:
-          ['street', 'house'].includes(p.type || '') ||
-          ['highway', 'building', 'amenity', 'shop', 'office'].includes(p.osm_key || ''),
+          ['street', 'house', 'hamlet', 'village', 'locality'].includes(p.type || '') ||
+          ['highway', 'building', 'amenity', 'shop', 'office', 'place'].includes(p.osm_key || ''),
         streetTexts: [p.street, p.name].filter(Boolean),
         provinceTexts: [p.state, p.city, p.county].filter(Boolean),
         adminTexts: [p.district, p.locality, p.county, p.city].filter(Boolean),
@@ -292,6 +387,39 @@ async function verifyAddressOnline(rawAddress, options = {}) {
       displayName: null,
       message: parsed.reason,
     };
+  }
+
+  // 1. Try Geoapify API if API key is provided
+  const geoapifyApiKey = (options.geoapifyApiKey || process.env.GEOAPIFY_API_KEY || '').trim();
+  if (geoapifyApiKey) {
+    try {
+      const geoapifyResult = await queryGeoapify(parsed.trimmed, geoapifyApiKey, fetchFn);
+      if (geoapifyResult) {
+        return geoapifyResult;
+      }
+    } catch {}
+  }
+
+  // 2. Try Google Maps API if API key is provided
+  const googleApiKey = (options.googleApiKey || process.env.GOOGLE_MAPS_API_KEY || '').trim();
+  if (googleApiKey) {
+    try {
+      const googleResult = await queryGoogleMaps(parsed.trimmed, googleApiKey, fetchFn);
+      if (googleResult) {
+        return googleResult;
+      }
+    } catch {}
+  }
+
+  // 3. Try Goong Maps API if API key is provided
+  const goongApiKey = (options.goongApiKey || process.env.GOONG_API_KEY || '').trim();
+  if (goongApiKey) {
+    try {
+      const goongResult = await queryGoong(parsed.trimmed, goongApiKey, fetchFn);
+      if (goongResult) {
+        return goongResult;
+      }
+    } catch {}
   }
 
   // Also try a simplified fallback query if full query adds a house number/ward OSM omits
@@ -334,8 +462,8 @@ async function verifyAddressOnline(rawAddress, options = {}) {
   // Evaluate street + province matches first
   const streetAndProvinceMatches = [];
   for (const c of candidates) {
-    if (!c.isStreetLevel) continue;
-    const streetMatched = c.streetTexts.some((txt) => wordsInText(parsed.streetTokens, txt));
+    if (!c.isStreetLevel && !parsed.isRural) continue;
+    const streetMatched = parsed.isRural || c.streetTexts.some((txt) => wordsInText(parsed.streetTokens, txt));
     if (!streetMatched) continue;
 
     const provinceMatched = c.provinceTexts.some((prov) => normalizeProvinceStem(prov) === parsed.provinceStem);
@@ -360,6 +488,22 @@ async function verifyAddressOnline(rawAddress, options = {}) {
       message:
         rejectionReason ||
         'Không tìm thấy địa chỉ hợp lệ trên bản đồ số. Vui lòng kiểm tra lại số nhà, tên đường, quận/huyện và ghi đầy đủ Tỉnh/Thành phố.',
+    };
+  }
+
+  // If rural address (Ấp/Thôn/Xóm), match against commune/district
+  if (parsed.isRural && streetAndProvinceMatches.length > 0) {
+    const directAdminMatch = streetAndProvinceMatches.find((c) =>
+      adminMatchesCandidate(parsed.districtSegment, parsed.districtStem, c.adminTexts, c.displayName)
+    );
+    const chosen = directAdminMatch || streetAndProvinceMatches[0];
+    return {
+      verified: true,
+      status: 'success',
+      lat: chosen.lat,
+      lon: chosen.lon,
+      displayName: chosen.displayName,
+      message: 'Đã xác minh vị trí địa bàn (Ấp/Xã) trên bản đồ số.',
     };
   }
 
@@ -441,6 +585,8 @@ async function verifyAddressOnline(rawAddress, options = {}) {
 
 module.exports = {
   verifyAddressOnline,
+  queryGeoapify,
+  cleanRawAddress,
   parseAddress,
   normalizeProvinceStem,
   normalizeAdminStem,

@@ -588,26 +588,179 @@ function createWalletService(prisma, qrBank = {}) {
     };
   }
 
-  async function confirmQrDeposit(userId, id) {
+  /**
+   * Confirms a QR deposit: disabled for regular users to prevent client-side assertion of funds.
+   * Can only be called by Admin or internal test suite with explicit administrative authority.
+   */
+  async function confirmQrDeposit(userId, id, body = {}, isAdmin = false) {
+    if (!isAdmin) {
+      throw problem(403, 'Chức năng tự xác nhận đã bị vô hiệu hóa vì lý do an toàn. Hệ thống sẽ tự động cập nhật số dư khi nhận được thông báo từ ngân hàng qua SePay Webhook.');
+    }
+    const reference = text(body.reference, 100);
     return prisma.$transaction(async tx => {
-      const request = await tx.depositRequest.findUnique({
-        where: { id },
-        include: { user: { select: { id: true, name: true, username: true } } },
-      });
-      if (!request || request.method !== 'VIET_QR') throw problem(404, 'Không tìm thấy phiếu nạp QR.');
-      if (request.userId !== userId) throw problem(403, 'Bạn không có quyền xác nhận phiếu này.');
-      if (request.status === 'PENDING' && !request.isSandbox) return serializeDeposit(request);
-      const legacyDraft = request.status === 'PENDING' && request.isSandbox;
-      if (request.status !== 'AWAITING_TRANSFER' && !legacyDraft) throw problem(409, 'Phiếu nạp QR đã được xử lý.');
+      const request = await tx.depositRequest.findUnique({ where: { id } });
+      if (!request) throw problem(404, 'Không tìm thấy phiếu nạp QR.');
+      if (request.status !== 'PENDING') {
+        throw problem(409, 'Phiếu nạp QR đã được xử lý. Tải lại danh sách.');
+      }
       const changed = await tx.depositRequest.updateMany({
         where: { id, status: request.status, isSandbox: request.isSandbox },
         data: { status: 'PENDING', isSandbox: false },
       });
-      if (!changed.count) throw problem(409, 'Phiếu nạp QR vừa được cập nhật. Vui lòng thử lại.');
-      await audit(tx, userId, 'QR_DEPOSIT_REPORTED', 'DEPOSIT_REQUEST', id, {
+      if (!changed.count) throw problem(409, 'Phiếu nạp QR vừa được xử lý.');
+      const wallet = await ensureWallet(tx, request.userId);
+      await applyBalance(tx, {
+        wallet,
+        userId: request.userId,
+        type: TRANSACTION_TYPES.QR_DEPOSIT,
+        direction: 'CREDIT',
+        amount: request.amount,
+        reference: `QR-DEP-${request.id}`,
+        method: METHODS.REAL,
+        note: request.note || 'Nạp tiền vào hệ thống SupplyMind AI',
+      });
+      await audit(tx, userId, 'QR_DEPOSIT_CONFIRMED', 'DEPOSIT_REQUEST', request.id, {
         amount: request.amount.toString(),
       });
-      return serializeDeposit({ ...request, status: 'PENDING', isSandbox: false });
+      const saved = await tx.depositRequest.findUniqueOrThrow({
+        where: { id },
+        include: { user: { select: { id: true, name: true, username: true } } },
+      });
+      return serializeDeposit(saved);
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
+
+  /**
+   * Retrieves the current status of a QR deposit ticket for polling.
+   */
+  async function getQrDepositTicket(userId, id) {
+    const request = await prisma.depositRequest.findUnique({
+      where: { id },
+      include: { user: { select: { id: true, name: true, username: true } } },
+    });
+    if (!request) throw problem(404, 'Không tìm thấy phiếu nạp QR.');
+    if (request.userId !== userId) throw problem(403, 'Bạn không có quyền xem phiếu này.');
+    return serializeDeposit(request);
+  }
+
+  /**
+   * Processes incoming bank transfer webhooks from SePay.
+   * Validates API token, matches ticket ID, checks amount, updates status to APPROVED,
+   * and credits the recipient wallet in an idempotent transaction.
+   */
+  async function processSepayWebhook(payload, authHeader, expectedApiKey) {
+    if (!expectedApiKey) {
+      throw problem(500, 'Hệ thống chưa cấu hình SePay API Key.');
+    }
+    const token = (authHeader || '').replace(/^(?:Apikey|Bearer)\s+/i, '').trim();
+    if (!token || token !== expectedApiKey) {
+      throw problem(401, 'Khóa xác thực SePay không hợp lệ.');
+    }
+
+    const transferType = (payload.transferType || '').toLowerCase();
+    if (transferType && transferType !== 'in') {
+      return { success: true, message: 'Bỏ qua giao dịch không phải tiền vào.' };
+    }
+
+    const fullContent = [payload.content, payload.code, payload.description]
+      .filter(Boolean)
+      .join(' ');
+
+    const match = fullContent.match(/(?:NAP\s*TIEN\s*VI|NAPTIENVI|QR-?DEP)\s*(\d+)/i)
+      || fullContent.match(/(?:^|\b)VI\s*(\d+)/i)
+      || fullContent.match(/(?:^|\b)DEP\s*(\d+)/i);
+
+    let ticketId = match ? Number(match[1]) : null;
+
+    return prisma.$transaction(async tx => {
+      let request = null;
+      if (ticketId) {
+        request = await tx.depositRequest.findUnique({
+          where: { id: ticketId },
+          include: { user: true },
+        });
+      }
+
+      if (!request && payload.code) {
+        request = await tx.depositRequest.findFirst({
+          where: { reference: String(payload.code).trim() },
+          include: { user: true },
+        });
+      }
+
+      if (!request) {
+        return {
+          success: false,
+          message: `Không tìm thấy phiếu nạp tương ứng với nội dung: "${fullContent}"`,
+        };
+      }
+
+      if (request.status === 'APPROVED') {
+        return {
+          success: true,
+          message: 'Phiếu nạp này đã được xử lý trước đó.',
+          requestId: request.id,
+        };
+      }
+
+      if (request.status !== 'PENDING') {
+        return {
+          success: false,
+          message: `Phiếu nạp #${request.id} đang ở trạng thái ${request.status}, không thể xử lý.`,
+          requestId: request.id,
+        };
+      }
+
+      const transferAmount = Number(payload.transferAmount || payload.amountIn || payload.amount || 0);
+      if (transferAmount < Number(request.amount)) {
+        return {
+          success: false,
+          message: `Số tiền chuyển (${transferAmount} ₫) nhỏ hơn số tiền yêu cầu (${request.amount} ₫). Cần đối soát thủ công.`,
+          requestId: request.id,
+        };
+      }
+
+      const reference = text(payload.referenceCode || payload.reference || `SEPAY-${payload.id || Date.now()}`, 100);
+      const changed = await tx.depositRequest.updateMany({
+        where: { id: request.id, status: 'PENDING' },
+        data: {
+          status: 'APPROVED',
+          reviewedAt: new Date(),
+          reference,
+          adminNote: `Tự động duyệt qua SePay Webhook (Mã GD SePay: #${payload.id || 'N/A'}, Ngân hàng: ${payload.gateway || 'N/A'})`,
+        },
+      });
+
+      if (!changed.count) {
+        return { success: true, message: 'Phiếu nạp vừa được xử lý bởi tiến trình khác.', requestId: request.id };
+      }
+
+      const wallet = await ensureWallet(tx, request.userId);
+      await applyBalance(tx, {
+        wallet,
+        userId: request.userId,
+        type: TRANSACTION_TYPES.QR_DEPOSIT,
+        direction: 'CREDIT',
+        amount: request.amount,
+        reference: `QR-DEP-${request.id}`,
+        method: METHODS.REAL,
+        note: 'Nạp tiền vào hệ thống SupplyMind AI',
+      });
+
+      await audit(tx, request.userId, 'SEPAY_WEBHOOK_DEPOSIT_CONFIRMED', 'DEPOSIT_REQUEST', request.id, {
+        amount: request.amount.toString(),
+        gateway: payload.gateway,
+        sepayId: payload.id,
+        reference,
+      });
+
+      return {
+        success: true,
+        message: 'Xác nhận nạp tiền thành công và đã cộng tiền vào ví.',
+        requestId: request.id,
+        userId: request.userId,
+        amount: Number(request.amount),
+      };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
@@ -1163,6 +1316,8 @@ function createWalletService(prisma, qrBank = {}) {
     createSandboxDepositRequest,
     createQrDepositRequest,
     confirmQrDeposit,
+    getQrDepositTicket,
+    processSepayWebhook,
     listDepositRequests,
     approveDeposit,
     rejectDeposit,
