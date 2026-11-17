@@ -7,6 +7,9 @@ const { settleOrderToSupplier, refundPaidOrder, walletService } = require('./wal
 const { importBlockReason } = require('./inventorySyncService');
 const { paymentDue } = require('./orderPaymentPolicy');
 const { getComplaintWorkflow, evaluateAndApplyExpiredTimeouts } = require('./complaintWorkflowService');
+const { reportPeriod } = require('./storeRevenueService');
+const DAY = 86400000;
+const vnDay = date => new Date(date.getTime() + 7 * 3600000).toISOString().slice(0, 10);
 const ORDER_STATUSES = Object.freeze([
   'PENDING', 'APPROVED', 'REJECTED', 'CANCELLED', 'PREPARING', 'SHIPPING', 'ISSUE_HANDLING', 'DELIVERED', 'COMPLETED',
 ]);
@@ -930,10 +933,117 @@ function createSupplierService(prisma) {
     return { drivers };
   }
 
+  async function revenue(userId, query) {
+    const profile = await requireProfile(userId);
+    const dates = reportPeriod(query);
+    const orders = await prisma.wholesaleOrder.findMany({
+      where: {
+        supplierId: profile.id,
+        status: { notIn: ['REJECTED', 'CANCELLED', 'CANCELED'] },
+        createdAt: { gte: dates.start, lt: dates.end },
+      },
+      include: {
+        buyer: { select: { id: true, name: true, phone: true } },
+        items: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const orderDaysMap = new Map();
+    for (const o of orders) {
+      const day = vnDay(new Date(o.createdAt));
+      const cur = orderDaysMap.get(day) || { revenue: 0n, count: 0 };
+      cur.revenue += BigInt(Math.round(Number(o.total || 0)));
+      cur.count += 1;
+      orderDaysMap.set(day, cur);
+    }
+
+    const daily = [];
+    let totalRevenue = 0n;
+    const distinctProductIds = new Set();
+
+    for (let time = dates.start.getTime(); time < dates.end.getTime(); time += DAY) {
+      const day = vnDay(new Date(time));
+      const info = orderDaysMap.get(day) || { revenue: 0n, count: 0 };
+      totalRevenue += info.revenue;
+      daily.push({
+        day,
+        revenue: info.revenue.toString(),
+        purchaseCost: '0',
+        profit: info.revenue.toString(),
+        salesCount: info.count,
+        unpricedSalesCount: 0,
+      });
+    }
+
+    const productMap = new Map();
+    const sales = [];
+
+    for (const o of orders) {
+      for (const it of o.items) {
+        distinctProductIds.add(it.productId);
+        const key = it.productId;
+        const cur = productMap.get(key) || {
+          itemId: it.productId,
+          productName: it.productName,
+          unit: it.packaging || 'thùng',
+          revenue: 0n,
+          quantity: 0n,
+          unpricedSalesCount: 0,
+        };
+        const itemLineTotal = BigInt(Math.round(Number(it.lineTotal || 0)));
+        cur.revenue += itemLineTotal;
+        cur.quantity += BigInt(it.quantity || 0);
+        productMap.set(key, cur);
+
+        sales.push({
+          id: it.id.toString(),
+          itemId: it.productId,
+          productName: it.productName,
+          unit: it.packaging || 'thùng',
+          quantity: it.quantity,
+          unitSalePrice: Math.round(Number(it.unitPrice)),
+          revenue: itemLineTotal.toString(),
+          note: `Đơn #${o.id} · ${o.buyer?.name || 'Tiệm tạp hóa'}`,
+          createdAt: o.createdAt.toISOString(),
+        });
+      }
+    }
+
+    const topProducts = Array.from(productMap.values())
+      .sort((a, b) => (b.revenue > a.revenue ? 1 : b.revenue < a.revenue ? -1 : 0))
+      .slice(0, 10)
+      .map(p => ({
+        ...p,
+        revenue: p.revenue.toString(),
+        quantity: p.quantity.toString(),
+      }));
+
+    return {
+      from: dates.from,
+      to: dates.to,
+      timezone: 'Asia/Ho_Chi_Minh',
+      summary: {
+        revenue: totalRevenue.toString(),
+        purchaseCost: '0',
+        netProfit: totalRevenue.toString(),
+        salesCount: orders.length,
+        pricedSalesCount: orders.length,
+        unpricedSalesCount: 0,
+        productCount: distinctProductIds.size,
+      },
+      daily,
+      topProducts,
+      sales,
+      page: 1,
+      hasMore: false,
+    };
+  }
+
   return {
     getProfile, upsertProfile, submitVerification, quickVerify, listProducts, createProduct, updateProduct, deactivateProduct,
     listOrders, updateOrderStatus, updateDriverInfo, updateDeposit, dashboard,
-    reportIncident, confirmPayment, savePacking, getSavedDrivers,
+    reportIncident, confirmPayment, savePacking, getSavedDrivers, revenue,
   };
 }
 

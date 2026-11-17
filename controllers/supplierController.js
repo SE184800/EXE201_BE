@@ -10,6 +10,9 @@ function createSupplierController(service) {
     async dashboard(req, res, next) {
       try { return res.json({ success: true, ...(await service.dashboard(req.auth.user.id)) }); } catch (error) { return next(error); }
     },
+    async revenue(req, res, next) {
+      try { return res.json(await service.revenue(req.auth.user.id, req.query)); } catch (error) { return next(error); }
+    },
     async getProfile(req, res, next) {
       try {
         const profile = await service.getProfile(req.auth.user.id);

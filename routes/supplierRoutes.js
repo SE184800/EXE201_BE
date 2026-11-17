@@ -45,6 +45,7 @@ function createSupplierRoutes(prisma, requireAuth) {
   const controller = createSupplierController(createSupplierService(prisma));
   router.use(requireAuth, requireRole(ROLES.SUPPLIER));
   router.get('/dashboard', controller.dashboard);
+  router.get('/revenue', controller.revenue);
   router.route('/profile').get(controller.getProfile).put(controller.saveProfile);
   router.post('/verification', controller.submitVerification);
   router.post('/quick-verify', controller.quickVerify);
