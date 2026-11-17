@@ -38,7 +38,8 @@ function pagination(query) {
 }
 function period(query) {
   const today = vnDate(new Date());
-  const from = textFilter(query.from || today.slice(0, 8) + '01', 10);
+  const defaultFrom = vnDate(new Date(Date.now() - 6 * 86400000));
+  const from = textFilter(query.from || defaultFrom, 10);
   const to = textFilter(query.to || today, 10);
   const valid = value => /^\d{4}-\d{2}-\d{2}$/.test(value) && value >= '1900-01-01' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
   if (!valid(from) || !valid(to) || from > to) throw problem(400, 'Chọn khoảng ngày có thật, ngày bắt đầu không sau ngày kết thúc.');
@@ -609,21 +610,67 @@ const DEFAULT_ADMIN_REASON = 'Giải quyết vấn đề phát sinh';
   }
   async function analytics(query) {
     const dates = period(query), region = textFilter(query.region, 100);
-    const where = { status: 'DELIVERED', deliveredAt: dates.range, ...(region ? { supplierRegion: region } : {}) };
+    const where = { status: { in: ['DELIVERED', 'COMPLETED'] }, deliveredAt: dates.range, ...(region ? { supplierRegion: region } : {}) };
     const regionSql = region ? Prisma.sql`AND o.supplierRegion = ${region}` : Prisma.empty;
-    const [totals, paid, unpaid, users, pending, legacyOrders, daily, topProducts, regions] = await Promise.all([
+    const [totals, paid, unpaid, users, pending, legacyOrders, daily, topProducts, regions, recentOrders] = await Promise.all([
       prisma.wholesaleOrder.aggregate({ where, _count: true, _sum: { subtotal: true, commissionAmount: true } }),
-      prisma.wholesaleOrder.aggregate({ where: { status: 'DELIVERED', commissionPaidAt: dates.range, ...(region ? { supplierRegion: region } : {}) }, _sum: { commissionAmount: true } }),
+      prisma.wholesaleOrder.aggregate({ where: { status: { in: ['DELIVERED', 'COMPLETED'] }, commissionPaidAt: dates.range, ...(region ? { supplierRegion: region } : {}) }, _sum: { commissionAmount: true } }),
       prisma.wholesaleOrder.aggregate({ where: { ...where, commissionPaidAt: null }, _sum: { commissionAmount: true } }),
       prisma.user.groupBy({ by: ['roleId'], where: { role: { code: { in: ['STORE_OWNER', 'SUPPLIER'] } } }, _count: true }),
       prisma.supplierProfile.count({ where: { verificationStatus: 'PENDING' } }),
-      prisma.wholesaleOrder.count({ where: { status: 'DELIVERED', deliveredAt: null } }),
-      prisma.$queryRaw(Prisma.sql`SELECT CONVERT(varchar(10), DATEADD(hour, 7, o.deliveredAt), 23) AS day, SUM(o.subtotal) AS gmv, COUNT(*) AS orders FROM dbo.wholesale_orders o WHERE o.status = 'DELIVERED' AND o.deliveredAt >= ${dates.start} AND o.deliveredAt < ${dates.end} ${regionSql} GROUP BY CONVERT(varchar(10), DATEADD(hour, 7, o.deliveredAt), 23) ORDER BY day`),
+      prisma.wholesaleOrder.count({ where: { status: { in: ['DELIVERED', 'COMPLETED'] }, deliveredAt: null } }),
+      prisma.$queryRaw(Prisma.sql`SELECT CONVERT(varchar(10), DATEADD(hour, 7, COALESCE(o.deliveredAt, o.createdAt)), 23) AS day, SUM(o.subtotal) AS gmv, COUNT(*) AS orders FROM dbo.wholesale_orders o WHERE o.status NOT IN ('CANCELLED', 'REJECTED') AND COALESCE(o.deliveredAt, o.createdAt) >= ${dates.start} AND COALESCE(o.deliveredAt, o.createdAt) < ${dates.end} ${regionSql} GROUP BY CONVERT(varchar(10), DATEADD(hour, 7, COALESCE(o.deliveredAt, o.createdAt)), 23) ORDER BY day`),
       prisma.$queryRaw(Prisma.sql`SELECT TOP (10) i.productId, i.productName, i.packaging, o.supplierRegion AS region, SUM(CAST(i.quantity AS BIGINT)) AS quantity, SUM(i.lineTotal) AS revenue FROM dbo.wholesale_order_items i JOIN dbo.wholesale_orders o ON o.id = i.orderId WHERE o.status = 'DELIVERED' AND o.deliveredAt >= ${dates.start} AND o.deliveredAt < ${dates.end} ${regionSql} GROUP BY i.productId, i.productName, i.packaging, o.supplierRegion ORDER BY revenue DESC, i.productId ASC`),
-      prisma.wholesaleOrder.findMany({ where: { status: 'DELIVERED', deliveredAt: dates.range, supplierRegion: { not: null } }, distinct: ['supplierRegion'], select: { supplierRegion: true } }),
+      prisma.wholesaleOrder.findMany({ where: { status: { in: ['DELIVERED', 'COMPLETED'] }, deliveredAt: dates.range, supplierRegion: { not: null } }, distinct: ['supplierRegion'], select: { supplierRegion: true } }),
+      prisma.wholesaleOrder.findMany({
+        where: {
+          status: { notIn: ['CANCELLED', 'REJECTED'] },
+          OR: [
+            { deliveredAt: dates.range },
+            { createdAt: dates.range }
+          ],
+          ...(region ? { supplierRegion: region } : {})
+        },
+        include: {
+          buyer: { select: { id: true, name: true, phone: true } },
+          supplier: { select: { id: true, businessName: true } },
+          _count: { select: { items: true } }
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: 50
+      })
     ]);
     const counts = await prisma.role.findMany({ where: { id: { in: users.map(u => u.roleId) } } });
-    return { from: dates.from, to: dates.to, gmv: number(totals._sum.subtotal), completedOrders: totals._count, commissionAccrued: number(totals._sum.commissionAmount), commissionReceived: number(paid._sum.commissionAmount), commissionUnpaid: number(unpaid._sum.commissionAmount), pendingVerifications: pending, legacyOrders, users: Object.fromEntries(users.map(u => [counts.find(r => r.id === u.roleId).code, u._count])), daily: daily.map(d => ({ ...d, gmv: number(d.gmv) })), topProducts: topProducts.map(p => ({ ...p, quantity: number(p.quantity), revenue: number(p.revenue) })), regions: regions.map(r => r.supplierRegion) };
+    return {
+      from: dates.from,
+      to: dates.to,
+      gmv: number(totals._sum.subtotal),
+      completedOrders: totals._count,
+      commissionAccrued: number(totals._sum.commissionAmount),
+      commissionReceived: number(paid._sum.commissionAmount),
+      commissionUnpaid: number(unpaid._sum.commissionAmount),
+      pendingVerifications: pending,
+      legacyOrders,
+      users: Object.fromEntries(users.map(u => [counts.find(r => r.id === u.roleId).code, u._count])),
+      daily: daily.map(d => ({ ...d, gmv: number(d.gmv) })),
+      topProducts: topProducts.map(p => ({ ...p, quantity: number(p.quantity), revenue: number(p.revenue) })),
+      regions: regions.map(r => r.supplierRegion),
+      transactions: recentOrders.map(o => ({
+        id: o.id,
+        orderCode: `#DH-${String(o.id).padStart(4, '0')}`,
+        status: o.status,
+        subtotal: number(o.subtotal),
+        deliveryFee: number(o.deliveryFee),
+        total: number(o.total),
+        createdAt: o.createdAt,
+        deliveredAt: o.deliveredAt,
+        region: o.supplierRegion || '—',
+        buyerName: o.buyer?.name || `#${o.buyerId}`,
+        buyerPhone: o.buyer?.phone || null,
+        supplierName: o.supplier?.businessName || `#${o.supplierId}`,
+        itemCount: o._count?.items || 0
+      }))
+    };
   }
   async function aiMetrics(query) {
     const dates = period(query), where = { createdAt: dates.range };
