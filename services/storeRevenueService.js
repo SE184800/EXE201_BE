@@ -20,21 +20,27 @@ function reportPeriod(query, now = new Date()) {
 function createStoreRevenueService(prisma) {
   async function report(ownerId, query) {
     const dates = reportPeriod(query);
+    const pageText = query.page ?? '1';
+    if (typeof pageText !== 'string' || !/^[1-9]\d*$/.test(pageText) || Number(pageText) > 100000) {
+      throw problem(400, 'Trang không hợp lệ.');
+    }
+    const page = Number(pageText);
+    const pageSize = query.detail === 'daily' ? 1000 : PAGE_SIZE;
     const where = { item: { ownerId }, type: 'SALE', quantityChange: { lt: 0 }, createdAt: { gte: dates.start, lt: dates.end } };
     // Cast before multiplication and sum in SQL so large VND totals stay exact.
-    const totalSql = Prisma.sql`SUM(-CAST(m.quantityChange AS DECIMAL(38,0)) * COALESCE(m.unitSalePrice, i.sellingPrice, 0))`;
+    const totalSql = Prisma.sql`SUM(-CAST(m.quantityChange AS DECIMAL(38,0)) * m.unitSalePrice)`;
     const scope = Prisma.sql`FROM dbo.stock_movements m JOIN dbo.inventory_items i ON i.id = m.itemId
       WHERE i.ownerId = ${ownerId} AND m.type = 'SALE' AND m.quantityChange < 0
       AND m.createdAt >= ${dates.start} AND m.createdAt < ${dates.end}`;
     const result = await prisma.$transaction(async tx => {
       const [summary] = await tx.$queryRaw(Prisma.sql`SELECT ${totalSql} AS revenue, COUNT(*) AS salesCount,
-        COUNT(COALESCE(m.unitSalePrice, i.sellingPrice)) AS pricedSalesCount, COUNT(DISTINCT m.itemId) AS productCount ${scope}`);
+        COUNT(m.unitSalePrice) AS pricedSalesCount, COUNT(DISTINCT m.itemId) AS productCount ${scope}`);
       const daily = await tx.$queryRaw(Prisma.sql`SELECT CONVERT(VARCHAR(10), DATEADD(HOUR, 7, m.createdAt), 23) AS day,
-        ${totalSql} AS revenue, COUNT(*) AS salesCount, COUNT(*) - COUNT(COALESCE(m.unitSalePrice, i.sellingPrice)) AS unpricedSalesCount
+        ${totalSql} AS revenue, COUNT(*) AS salesCount, COUNT(*) - COUNT(m.unitSalePrice) AS unpricedSalesCount
         ${scope} GROUP BY CONVERT(VARCHAR(10), DATEADD(HOUR, 7, m.createdAt), 23) ORDER BY day`);
       const products = await tx.$queryRaw(Prisma.sql`SELECT TOP (10) m.itemId, m.productName, m.unit,
         ${totalSql} AS revenue, SUM(-CAST(m.quantityChange AS BIGINT)) AS quantity,
-        COUNT(*) - COUNT(COALESCE(m.unitSalePrice, i.sellingPrice)) AS unpricedSalesCount
+        COUNT(*) - COUNT(m.unitSalePrice) AS unpricedSalesCount
         ${scope} GROUP BY m.itemId, m.productName, m.unit ORDER BY revenue DESC, m.itemId, m.productName, m.unit`);
       
       // Chi phí nhập hàng từ đơn sỉ wholesale_orders
@@ -68,11 +74,11 @@ function createStoreRevenueService(prisma) {
           quantityChange: true, 
           unitSalePrice: true, 
           note: true, 
-          createdAt: true,
-          item: { select: { sellingPrice: true, purchasePrice: true } }
+          createdAt: true
         }, 
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], 
-        take: 1000 
+        skip: (page - 1) * pageSize,
+        take: pageSize + 1
       });
 
       return { summary, daily, products, wholesalePurchases, manualPurchases, rows };
@@ -83,7 +89,7 @@ function createStoreRevenueService(prisma) {
     for (const row of [...(result.wholesalePurchases || []), ...(result.manualPurchases || [])]) {
       if (!row.day) continue;
       const current = purchaseByDay.get(row.day) || 0n;
-      const val = BigInt(Math.round(Number(row.purchaseCost || 0)));
+      const val = BigInt(amount(row.purchaseCost));
       purchaseByDay.set(row.day, current + val);
       totalPurchaseCost += val;
     }
@@ -119,9 +125,9 @@ function createStoreRevenueService(prisma) {
       },
       daily,
       topProducts: result.products.map(row => ({ ...row, revenue: amount(row.revenue), quantity: row.quantity.toString() })),
-      sales: result.rows.map(row => {
+      sales: result.rows.slice(0, pageSize).map(row => {
         const qty = -row.quantityChange;
-        const price = row.unitSalePrice != null ? row.unitSalePrice : (row.item?.sellingPrice != null ? row.item.sellingPrice : null);
+        const price = row.unitSalePrice;
         const revenue = price == null ? null : (BigInt(qty) * BigInt(price)).toString();
         return {
           id: row.id,
@@ -132,12 +138,12 @@ function createStoreRevenueService(prisma) {
           createdAt: row.createdAt,
           quantity: qty,
           unitSalePrice: price,
-          isEstimatedPrice: row.unitSalePrice == null && row.item?.sellingPrice != null,
+          isEstimatedPrice: false,
           revenue,
         };
       }),
-      page: 1, 
-      hasMore: false,
+      page,
+      hasMore: result.rows.length > pageSize,
     };
   }
   return { report };
