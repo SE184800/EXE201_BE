@@ -244,21 +244,25 @@ test('a paid deposit is subtracted, wallet payments cannot be collected again, a
   await cashPayment(missingBank.id, { method: 'QR' }).expect(409);
 });
 
-test('store proposes a delivery time; only the supplier confirms it; a later proposal remains pending', async () => {
+test('store proposes a delivery time; only the supplier confirms it; each order can only request once', async () => {
   const purchase = await order('reschedule', { unpaid: true, status: 'PREPARING' });
   const date = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10).split('-').reverse().join('/');
-  const propose = time => request(app).post(`/api/orders/${purchase.id}/reschedule`).set(csrf).set('Cookie', cookies.get(buyer.id)).send({ rescheduleTime: `${time} ngày ${date}`, reason: 'Store closed in the morning' });
-  const respond = (action, user = supplier) => request(app).post(`/api/orders/${purchase.id}/reschedule-response`).set(csrf).set('Cookie', cookies.get(user.id)).send({ action });
+
+
+  const propose = (time, id = purchase.id) => request(app).post(`/api/orders/${id}/reschedule`).set(csrf).set('Cookie', cookies.get(buyer.id)).send({ rescheduleTime: `${time} ngày ${date}`, reason: 'Store closed in the morning' });
+  const respond = (action, user = supplier, id = purchase.id) => request(app).post(`/api/orders/${id}/reschedule-response`).set(csrf).set('Cookie', cookies.get(user.id)).send({ action });
   const proposed = await propose('10:00').expect(200);
   assert.equal(proposed.body.order.driverInfo?.estimatedDeliveryTime, undefined);
   await propose('11:00').expect(409);
   await respond('ACCEPT', buyer).expect(403);
   const accepted = await respond('ACCEPT').expect(200);
   assert.equal(accepted.body.order.driverInfo.estimatedDeliveryTime, `10:00 ngày ${date}`);
-  const later = await propose('12:00').expect(200);
-  assert.equal(later.body.order.driverInfo.rescheduleRequest.status, 'PENDING');
-  const rejected = await respond('REJECT').expect(200);
-  assert.equal(rejected.body.order.driverInfo.estimatedDeliveryTime, `10:00 ngày ${date}`);
+  await propose('12:00').expect(409);
+  const other = await order('reschedule rejected', { unpaid: true, status: 'PREPARING' });
+  await propose('12:00', other.id).expect(200);
+  const rejected = await respond('REJECT', supplier, other.id).expect(200);
+  assert.equal(rejected.body.order.driverInfo.rescheduleRequest.status, 'REJECTED');
+  await propose('13:00', other.id).expect(409);
   await prisma.wholesaleOrder.update({ where: { id: purchase.id }, data: { status: 'DELIVERED' } });
   await propose('13:00').expect(409);
 });
