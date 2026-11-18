@@ -288,12 +288,32 @@ function createOrderRoutes(prisma, requireAuth) {
       if (!['PREPARING', 'SHIPPING'].includes(current.status)) throw problem(409, 'Đơn đã nhận hoặc kết thúc, không thể đổi giờ.');
       const request = pendingRequest(current, deliveryService.getDriverInfo(id));
       if (!request) throw problem(409, 'Không có đề nghị đổi giờ đang chờ trả lời.');
+      const driverInfo = deliveryService.getDriverInfo(id);
+      const oldEstimatedTime = driverInfo?.estimatedDeliveryTime || 'Theo lịch trình cũ';
       if (action === 'ACCEPT') {
         validateDeliveryTime(request.requestedTime);
         deliveryService.updateEstimatedDeliveryTime(id, request.requestedTime);
       }
       deliveryService.saveRescheduleRequest(id, { ...request, status: action === 'ACCEPT' ? 'ACCEPTED' : 'REJECTED', responseNote: note.trim(), respondedAt: new Date().toISOString(), respondedBy: req.auth.user.id });
       await audit(prisma, req.auth.user.id, 'DELIVERY_TIME_RESPONDED', 'ORDER', id, { action, requestedTime: request.requestedTime });
+
+      // Gửi Gmail xác nhận kết quả đổi giờ giao cho cửa hàng
+      try {
+        const { sendDeliveryRescheduleEmail } = require('../services/orderDeliveryMailService');
+        void sendDeliveryRescheduleEmail({
+          order: current,
+          buyer: current.buyer,
+          recipientEmail: current.buyer?.email,
+          supplierProfile: profile,
+          action,
+          requestedTime: request.requestedTime,
+          oldTime: oldEstimatedTime,
+          note: note.trim(),
+        });
+      } catch (mailErr) {
+        console.error('[RESCHEDULE EMAIL ERROR] Lỗi gửi mail đổi giờ:', mailErr.message);
+      }
+
       res.json({ order: serialize(current), message: action === 'ACCEPT' ? 'Đã xác nhận giờ giao.' : 'Đã từ chối đổi giờ. Giữ lịch giao cũ.' });
     } catch (error) { next(error); }
   });

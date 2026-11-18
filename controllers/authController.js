@@ -30,6 +30,21 @@ function createAuthController(authService, config) {
               success: false,
               message: 'Username hoặc mật khẩu không chính xác.',
             });
+
+        // Kiểm tra xem hệ thống có đang trong thời gian bảo trì hay không
+        try {
+          const { getConfig } = require('../services/systemConfigService');
+          const notice = getConfig()?.systemNotice;
+          if (notice?.maintenanceMode && result.user?.role !== 'ADMIN') {
+            res.clearCookie(COOKIE_NAME, cookieOptions(config));
+            return res.status(503).json({
+              success: false,
+              code: 'MAINTENANCE_MODE',
+              message: 'Hệ thống đang bảo trì, vui lòng thử lại sau.',
+            });
+          }
+        } catch {}
+
         if (result.blocked) {
           res.clearCookie(COOKIE_NAME, cookieOptions(config));
           return res.status(403).json({
@@ -59,6 +74,18 @@ function createAuthController(authService, config) {
       }
     },
     me(req, res) {
+      try {
+        const { getConfig } = require('../services/systemConfigService');
+        const notice = getConfig()?.systemNotice;
+        if (notice?.maintenanceMode && req.auth?.user?.role !== 'ADMIN') {
+          res.clearCookie(COOKIE_NAME, cookieOptions(config));
+          return res.status(401).json({
+            success: false,
+            code: 'MAINTENANCE_MODE',
+            message: 'Hệ thống đang bảo trì. Phiên làm việc đã tự động kết thúc để đảm bảo an toàn.',
+          });
+        }
+      } catch {}
       res.json({ success: true, user: req.auth.user });
     },
     async logout(req, res, next) {

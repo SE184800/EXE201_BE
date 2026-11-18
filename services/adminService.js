@@ -172,8 +172,10 @@ function holidayInput(body, requireVersion = false) {
   const preparationDays = body.preparationDays;
   const demandMultiplier = body.demandMultiplier;
   if (name.length < 2 || name.length > 150) throw problem(400, 'Tên ngày lễ cần từ 2–150 ký tự.');
-  if (!dateOnly(body.startDate) || !dateOnly(body.endDate) || body.startDate > body.endDate) throw problem(400, 'Chọn ngày bắt đầu, kết thúc hợp lệ và đúng thứ tự.');
-  if (new Date(body.endDate) - new Date(body.startDate) > 31 * 86400000) throw problem(400, 'Một đợt ngày lễ tối đa 32 ngày.');
+  const startDateStr = body.startDate || body.endDate;
+  const endDateStr = body.endDate || body.startDate;
+  if (!dateOnly(startDateStr) || !dateOnly(endDateStr) || startDateStr > endDateStr) throw problem(400, 'Chọn ngày lễ hợp lệ.');
+  if (new Date(endDateStr) - new Date(startDateStr) > 31 * 86400000) throw problem(400, 'Một đợt ngày lễ tối đa 32 ngày.');
   if (!Number.isInteger(preparationDays) || preparationDays < 0 || preparationDays > 60) throw problem(400, 'Số ngày chuẩn bị cần là số nguyên từ 0–60.');
   if (typeof demandMultiplier !== 'number' || !Number.isFinite(demandMultiplier) || demandMultiplier < 1 || demandMultiplier > 5 || Math.abs(demandMultiplier * 100 - Math.round(demandMultiplier * 100)) > 0.000001) throw problem(400, 'Hệ số nhu cầu từ 1–5, tối đa 2 số thập phân.');
   if (!keywords || keywords.length > 1000) throw problem(400, 'Nhập nhóm hàng áp dụng, ngăn cách bằng dấu phẩy và tối đa 1.000 ký tự.');
@@ -183,8 +185,8 @@ function holidayInput(body, requireVersion = false) {
   return {
     data: {
       name,
-      startDate: new Date(body.startDate + 'T00:00:00.000Z'),
-      endDate: new Date(body.endDate + 'T00:00:00.000Z'),
+      startDate: new Date(startDateStr + 'T00:00:00.000Z'),
+      endDate: new Date(endDateStr + 'T00:00:00.000Z'),
       preparationDays,
       demandMultiplier,
       categoryKeywords: keywords,

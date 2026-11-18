@@ -74,10 +74,7 @@ const DEFAULT_CONFIG = {
   systemNotice: {
     maintenanceMode: false,
     maintenanceMessage: 'Hệ thống SupplyMind đang bảo trì nâng cấp hệ thống định kỳ. Quý khách vui lòng quay lại sau.',
-    announcementEnabled: false,
-    announcementTitle: 'Thông báo từ Ban Quản Trị Sàn SupplyMind',
-    announcementContent: '',
-    announcementType: 'INFO', // 'INFO' | 'WARNING' | 'ALERT'
+    maintenanceUntil: null, // ISO string thời điểm kết thúc bảo trì
   },
   updatedAt: new Date().toISOString(),
   updatedBy: null,
@@ -151,11 +148,26 @@ function saveConfig(config) {
 }
 
 function getConfig() {
-  if (documents.active()) return loadConfig();
-  if (!cachedConfig) {
-    return loadConfig();
+  const cfg = documents.active() ? loadConfig() : (cachedConfig || loadConfig());
+  // Quản lý chế độ bảo trì: tự động gán mốc giờ mặc định nếu thiếu hoặc tự kết thúc khi hết hạn
+  if (cfg?.systemNotice?.maintenanceMode) {
+    if (!cfg.systemNotice.maintenanceUntil) {
+      cfg.systemNotice.maintenanceUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      try {
+        saveConfig(cfg);
+      } catch {}
+    } else {
+      const until = new Date(cfg.systemNotice.maintenanceUntil).getTime();
+      if (!isNaN(until) && until <= Date.now()) {
+        cfg.systemNotice.maintenanceMode = false;
+        cfg.systemNotice.maintenanceUntil = null;
+        try {
+          saveConfig(cfg);
+        } catch {}
+      }
+    }
   }
-  return cachedConfig;
+  return cfg;
 }
 
 function updateConfig(actorId, updates = {}) {
@@ -295,21 +307,18 @@ function updateConfig(actorId, updates = {}) {
     const n = updates.systemNotice;
     if (typeof n.maintenanceMode === 'boolean') {
       nextNotice.maintenanceMode = n.maintenanceMode;
+      if (!nextNotice.maintenanceMode) {
+        nextNotice.maintenanceUntil = null;
+      }
     }
     if (typeof n.maintenanceMessage === 'string') {
       nextNotice.maintenanceMessage = n.maintenanceMessage.slice(0, 500);
     }
-    if (typeof n.announcementEnabled === 'boolean') {
-      nextNotice.announcementEnabled = n.announcementEnabled;
+    if (typeof n.maintenanceUntil === 'string' || n.maintenanceUntil === null) {
+      nextNotice.maintenanceUntil = n.maintenanceUntil ? new Date(n.maintenanceUntil).toISOString() : null;
     }
-    if (typeof n.announcementTitle === 'string') {
-      nextNotice.announcementTitle = n.announcementTitle.slice(0, 150);
-    }
-    if (typeof n.announcementContent === 'string') {
-      nextNotice.announcementContent = n.announcementContent.slice(0, 1000);
-    }
-    if (['INFO', 'WARNING', 'ALERT'].includes(n.announcementType)) {
-      nextNotice.announcementType = n.announcementType;
+    if (nextNotice.maintenanceMode && !nextNotice.maintenanceUntil) {
+      nextNotice.maintenanceUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     }
   }
 

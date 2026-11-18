@@ -4,7 +4,7 @@ const cookieParser = require('cookie-parser');
 const path = require('node:path');
 const fs = require('node:fs');
 
-const { createAuthService } = require('./services/authService');
+const { createAuthService, COOKIE_NAME, cookieOptions } = require('./services/authService');
 
 const {
   createRequireAuth,
@@ -117,6 +117,67 @@ function createApp(prisma, config) {
       apiContractVersion: 1,
       capabilities: ['inventory.sales.batch', 'wallet.qr.status', 'orders.inventory.preview'],
     });
+  });
+
+  // Public endpoint đọc chế độ bảo trì sàn
+  app.get('/api/system-notice', (req, res) => {
+    try {
+      const { getConfig } = require('./services/systemConfigService');
+      const cfg = getConfig();
+      res.json(cfg.systemNotice || {
+        maintenanceMode: false,
+        maintenanceMessage: '',
+        maintenanceUntil: null,
+      });
+    } catch {
+      res.json({ maintenanceMode: false, maintenanceUntil: null });
+    }
+  });
+
+  // Middleware bảo vệ chế độ bảo trì hệ thống toàn sàn (Maintenance Mode)
+  app.use('/api', async (req, res, next) => {
+    try {
+      const { getConfig } = require('./services/systemConfigService');
+      const notice = getConfig()?.systemNotice;
+      if (notice?.maintenanceMode) {
+        // Cho phép các endpoint hoàn toàn công khai
+        const allowed = [
+          '/system-notice',
+          '/health',
+          '/auth/login',
+          '/auth/logout',
+        ];
+        if (allowed.some((p) => req.path === p || req.path.startsWith(`${p}/`))) {
+          return next();
+        }
+
+        // Xác thực token chính xác từ DB
+        const token =
+          (req.cookies && req.cookies[COOKIE_NAME]) ||
+          (req.headers.authorization && req.headers.authorization.split(' ')[1]);
+
+        if (token) {
+          try {
+            const auth = await authService.authenticate(token);
+            if (auth && auth.user && auth.user.role === 'ADMIN') {
+              req.auth = auth;
+              return next();
+            }
+          } catch {}
+        }
+
+        // Nếu không phải ADMIN: xóa cookie của người dùng thường và trả về 503
+        res.clearCookie(COOKIE_NAME, cookieOptions(config));
+        return res.status(503).json({
+          success: false,
+          error: 'MAINTENANCE_MODE',
+          message:
+            notice.maintenanceMessage ||
+            'Hệ thống đang bảo trì kỹ thuật định kỳ. Quý khách vui lòng quay lại sau.',
+        });
+      }
+    } catch {}
+    next();
   });
 
   // API root

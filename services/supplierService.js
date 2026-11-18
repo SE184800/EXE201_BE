@@ -877,6 +877,21 @@ function createSupplierService(prisma) {
       });
     } catch {}
 
+    // Gửi Gmail thông báo sự cố chuẩn bị / vận chuyển cho cửa hàng
+    try {
+      const { sendDeliveryIncidentEmail } = require('./orderDeliveryMailService');
+      void sendDeliveryIncidentEmail({
+        order,
+        buyer: order.buyer,
+        recipientEmail: order.buyer?.email,
+        supplierProfile: profile,
+        incidentData,
+        supplementaryOrder,
+      });
+    } catch (mailErr) {
+      console.error('[INCIDENT EMAIL ERROR] Lỗi gửi mail sự cố:', mailErr.message);
+    }
+
 
     return {
       success: true,
