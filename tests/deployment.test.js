@@ -23,13 +23,17 @@ test('separate Vercel frontend origins are explicit and local origins stay out o
 test('single origin deployment serves SPA and static assets without swallowing API or secret paths',async()=>{
  const config=readConfig({JWT_SECRET:secret,NODE_ENV:'production',FRONTEND_URL:'https://test.onrender.com',SERVE_WEB:'true',TRUST_PROXY_HOPS:'1'});
  const app=createApp({},config);
- await request(app).get('/api/health').expect(200,{status:'ok'});
+ const health=await request(app).get('/api/health').expect(200);
+ assert.equal(health.body.status,'ok');
+ assert.equal(health.body.apiContractVersion,1);
+ assert.deepEqual(health.body.capabilities,['inventory.sales.batch','wallet.qr.status','orders.inventory.preview']);
  await request(app).get('/login').set('Accept','text/html').expect(200).expect('Content-Type',/html/);
  const home=await request(app).get('/').expect(200);
  assert.match(home.text,/SupplyMind/);
  const asset=home.text.match(/src="([^"]+\.js)"/)[1];
  await request(app).get(asset).expect(200).expect('Content-Type',/javascript/);
- await request(app).get('/api/not-a-route').set('Accept','text/html').expect(404).expect('Content-Type',/json/);
+ const missing=await request(app).get('/api/not-a-route').set('Accept','text/html').expect(404).expect('Content-Type',/json/);
+ assert.equal(missing.body.code,'API_ROUTE_NOT_FOUND');
  await request(app).get('/.env').expect(404);
  await request(app).get('/missing.js').expect(404);
  await request(app).post('/api/auth/logout').set('Origin','http://localhost:5173').set('X-CSRF-Protection','sg-restock-web').expect(403);

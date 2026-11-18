@@ -74,6 +74,25 @@ test('voice sale batch rolls back on insufficient stock and retries only once', 
   await prisma.inventoryItem.deleteMany({ where: { id: { in: [first.id, second.id] } } });
 });
 
+test('voice sale retries across legacy and batch endpoints do not decrement twice', async () => {
+  const item = await prisma.inventoryItem.create({ data: { ownerId: buyer.id, name: prefix + ' legacy', unit: 'lon', quantity: 5 } });
+  try {
+    for (const legacyFirst of [true, false]) {
+      const row = { itemId: item.id, unit: 'lon', quantity: 1, unitSalePrice: 12000, requestId: randomUUID() };
+      const batch = () => request(app).post('/api/inventory/sales/batch').set(csrf).set('Cookie', cookies.get(buyer.id)).send({ rows: [row] }).expect(200);
+      const legacy = () => request(app).post(`/api/inventory/${item.id}/movements`).set(csrf).set('Cookie', cookies.get(buyer.id)).send({ type: 'SALE', quantity: row.quantity, unitSalePrice: row.unitSalePrice, requestId: row.requestId, note: 'Bán nhanh bằng giọng nói' }).expect(200);
+      if (legacyFirst) { await legacy(); await batch(); await legacy(); }
+      else { await batch(); await legacy(); await batch(); }
+      assert.equal(await prisma.stockMovement.count({ where: { id: row.requestId } }), 1);
+    }
+    assert.equal((await prisma.inventoryItem.findUniqueOrThrow({ where: { id: item.id } })).quantity, 3);
+  } finally {
+    await prisma.stockMovement.deleteMany({ where: { itemId: item.id } });
+    await prisma.inventoryLot.deleteMany({ where: { itemId: item.id } });
+    await prisma.inventoryItem.delete({ where: { id: item.id } });
+  }
+});
+
 test('only the owning store can import an order after receipt', async () => {
   const ready = await order('authorization');
   await request(app).post(`/api/orders/${ready.id}/import-inventory`).set(csrf).send({}).expect(401);
