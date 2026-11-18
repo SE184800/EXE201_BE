@@ -139,7 +139,9 @@ function createWalletRoutes(prisma, requireAuth, config = {}) {
   }));
 
   router.post('/withdrawals', run(async (req, res) => {
-    res.status(201).json({ request: await service.createWithdrawalRequest(req.auth.user.id, req.body || {}) });
+    const request = await service.createWithdrawalRequest(req.auth.user.id, req.body || {});
+    console.log(`[WITHDRAWAL CREATED] Đơn rút tiền #${request.id} · Số tiền: ${request.amount} đ · Ngân hàng: ${request.bankName} (${request.bankAccountNumber} - ${request.bankAccountHolder}) · Người dùng #${req.auth.user.id}`);
+    res.status(201).json({ request });
   }));
 
   // Sandbox withdrawal: simulated money, paid out instantly without admin review.
@@ -292,7 +294,9 @@ function createAdminWalletRoutes(prisma, requireAuth) {
   router.post('/withdrawals/:id/approve', run(async (req, res) => {
     const id = idParam(req.params.id);
     if (!id) return res.status(400).json({ message: 'Mã yêu cầu không hợp lệ.' });
-    res.json({ request: await service.approveWithdrawal(req.auth.user.id, id, req.body || {}) });
+    const request = await service.approveWithdrawal(req.auth.user.id, id, req.body || {});
+    console.log(`[WITHDRAWAL APPROVED] Admin đã duyệt đơn rút #${id} · Mã chuyển tiền: RUT ${id}`);
+    res.json({ request: request });
   }));
 
   router.post('/withdrawals/:id/reject', run(async (req, res) => {

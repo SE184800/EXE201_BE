@@ -895,6 +895,21 @@ function createWalletService(prisma, qrBank = {}) {
         }
       }
 
+      if (!request && transferAmount > 0) {
+        const pendingDeps = await tx.depositRequest.findMany({
+          where: {
+            status: { in: ['PENDING', 'AWAITING_TRANSFER'] },
+            amount: transferAmount,
+          },
+          include: { user: true },
+          orderBy: { createdAt: 'desc' },
+          take: 2,
+        });
+        if (pendingDeps.length === 1) {
+          request = pendingDeps[0];
+        }
+      }
+
       if (!request) {
         return {
           success: false,

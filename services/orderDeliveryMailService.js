@@ -167,7 +167,7 @@ async function sendOrderPackingCompletedEmail({
               <span class="label">Phương tiện vận chuyển:</span>
               <span class="value">${vehicleType}${licensePlate}</span>
             </div>
-            ${driverNotes ? `
+            ${deliveryNotes ? `
             <div class="card-row" style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed #bfdbfe;">
               <span class="label">Dặn dò của chủ vựa:</span>
               <span class="value" style="color: #475569; font-weight: 500;">${deliveryNotes}</span>
