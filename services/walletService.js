@@ -40,6 +40,17 @@ const STATUS_LABELS = Object.freeze({
   PAID: 'Đã thanh toán',
 });
 
+const TRANSACTION_TYPE_LABELS = Object.freeze({
+  DEPOSIT: 'Nạp tiền',
+  WITHDRAWAL_HOLD: 'Đang rút tiền',
+  WITHDRAWAL_RELEASE: 'Hoàn lại tiền rút',
+  WITHDRAWAL_PAYOUT: 'Rút tiền thành công',
+  ORDER_PAYMENT: 'Thanh toán đơn hàng',
+  ORDER_RECEIVE: 'Nhận tiền đơn hàng',
+  REFUND: 'Hoàn tiền',
+  QR_DEPOSIT: 'Nạp tiền qua QR',
+});
+
 function number(value) {
   return typeof value === 'object' && value !== null && typeof value.toNumber === 'function'
     ? value.toNumber()
@@ -196,7 +207,7 @@ function serializeTransaction(transaction) {
   return {
     id: transaction.id,
     type: transaction.type,
-    typeLabel: STATUS_LABELS[transaction.type] || transaction.type,
+    typeLabel: TRANSACTION_TYPE_LABELS[transaction.type] || STATUS_LABELS[transaction.type] || transaction.type,
     direction: transaction.direction,
     amount: money(transaction.amount),
     balanceAfter: money(transaction.balanceAfter),
@@ -661,19 +672,202 @@ function createWalletService(prisma, qrBank = {}) {
     }
 
     const transferType = (payload.transferType || '').toLowerCase();
+    const fullContent = [payload.content, payload.code, payload.description]
+      .filter(Boolean)
+      .join(' ');
+    const transferAmount = Number(payload.transferAmount || payload.amountOut || payload.amountIn || payload.amount || 0);
+
+    // 1. Phân loại biến động TIỀN RA (Payout / Tự động hoàn tất yêu cầu rút tiền qua SePay Webhook)
+    const wdMatch = fullContent.match(/(?:RUT\s*TIEN\s*VI|RUT\s*TIEN|RUTTIEN|RUT|WD)\s*(\d+)/i);
+    let withdrawalId = wdMatch ? Number(wdMatch[1]) : null;
+
+    // 2. Phân loại biến động TIỀN VÀO (Nạp tiền ví)
+    const depMatch = fullContent.match(/(?:NAP\s*TIEN\s*VI|NAPTIENVI|QR-?DEP)\s*(\d+)/i)
+      || fullContent.match(/(?:^|\b)VI\s*(\d+)/i)
+      || fullContent.match(/(?:^|\b)DEP\s*(\d+)/i);
+    let ticketId = depMatch ? Number(depMatch[1]) : null;
+
+    // 3. Fallback Smart Match nếu nội dung giao dịch ngân hàng bị cắt mất tiền tố hoặc tự sinh
+    // (VD: "tien GD 6322IBT1d1K977ZK...", "NGUYEN NAM MINH TRI chuyen tien GD 6322TPBVI2RC3XNT...")
+    if (!withdrawalId && !ticketId && transferAmount > 0) {
+      // Tìm xem có đơn rút tiền nào đang PENDING/APPROVED khớp số tiền không
+      const pendingWds = await prisma.withdrawalRequest.findMany({
+        where: {
+          status: { in: ['PENDING', 'APPROVED'] },
+          amount: transferAmount,
+        },
+        include: { user: { select: { id: true, name: true, username: true } } },
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+      });
+
+      if (pendingWds.length > 0) {
+        const normContent = fullContent
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/đ/g, 'd');
+
+        // Tìm đơn rút tiền khớp tên chủ tài khoản hoặc STK
+        const matchedWd = pendingWds.find((wd) => {
+          const normHolder = (wd.bankAccountHolder || '')
+            .toLowerCase()
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/đ/g, 'd')
+            .trim();
+          const accClean = (wd.bankAccountNumber || '').trim().replace(/[\s.-]/g, '');
+          return (
+            (normHolder && normHolder.length >= 3 && normContent.includes(normHolder)) ||
+            (accClean && accClean.length >= 6 && normContent.includes(accClean))
+          );
+        });
+
+        if (matchedWd) {
+          withdrawalId = matchedWd.id;
+        } else if (pendingWds.length === 1 && (transferType === 'out' || transferType === 'debit' || !transferType)) {
+          withdrawalId = pendingWds[0].id;
+        } else if (pendingWds.length === 1 && transferType === 'in') {
+          // Kiểm tra xem có đơn nạp tiền nào đang chờ đúng số tiền này không
+          const pendingDeps = await prisma.depositRequest.count({
+            where: {
+              status: { in: ['PENDING', 'AWAITING_TRANSFER'] },
+              amount: transferAmount,
+            },
+          });
+          if (pendingDeps === 0) {
+            withdrawalId = pendingWds[0].id;
+          }
+        }
+      }
+    }
+
+    if (withdrawalId) {
+      return prisma.$transaction(async tx => {
+        const request = await tx.withdrawalRequest.findUnique({
+          where: { id: withdrawalId },
+          include: { user: { select: { id: true, name: true, username: true } } },
+        });
+
+        if (!request) {
+          return {
+            success: false,
+            message: `Không tìm thấy yêu cầu rút tiền #${withdrawalId} từ nội dung: "${fullContent}"`,
+            withdrawalId,
+          };
+        }
+
+        if (request.status === 'COMPLETED') {
+          return {
+            success: true,
+            message: `Yêu cầu rút tiền #${withdrawalId} đã được hoàn tất trước đó.`,
+            withdrawalId,
+          };
+        }
+
+        if (!['PENDING', 'APPROVED'].includes(request.status)) {
+          return {
+            success: false,
+            message: `Yêu cầu rút tiền #${withdrawalId} đang ở trạng thái ${request.status}, không thể hoàn tất tự động.`,
+            withdrawalId,
+          };
+        }
+
+        const transferAmount = Number(payload.transferAmount || payload.amountOut || payload.amountIn || payload.amount || 0);
+        if (transferAmount > 0 && transferAmount < Number(request.amount)) {
+          return {
+            success: false,
+            message: `Số tiền chi ra (${transferAmount}) nhỏ hơn số tiền yêu cầu (${request.amount}).`,
+            withdrawalId,
+          };
+        }
+
+        const reference = String(payload.referenceCode || payload.id || `SEPAY-OUT-${Date.now()}`).trim();
+        const changed = await tx.withdrawalRequest.updateMany({
+          where: { id: withdrawalId, status: request.status },
+          data: {
+            status: 'COMPLETED',
+            reference,
+            adminNote: 'Tự động hoàn tất qua SePay Webhook (giao dịch tiền ra ngân hàng)',
+            completedAt: new Date(),
+          },
+        });
+
+        if (!changed.count) {
+          return {
+            success: true,
+            message: `Yêu cầu rút tiền #${withdrawalId} vừa được xử lý bởi tiến trình khác.`,
+            withdrawalId,
+          };
+        }
+
+        const wallet = await ensureWallet(tx, request.userId);
+        const held = wallet.heldBalance;
+        const newHeld = held.gte(request.amount) ? held.sub(request.amount) : new Prisma.Decimal(0);
+
+        await tx.wallet.update({
+          where: { id: wallet.id },
+          data: { heldBalance: newHeld },
+        });
+
+        const holdTx = await tx.walletTransaction.findFirst({
+          where: {
+            walletId: wallet.id,
+            reference: `WD-HOLD-${request.id}`,
+          },
+        });
+        if (holdTx) {
+          await tx.walletTransaction.update({
+            where: { id: holdTx.id },
+            data: {
+              type: TRANSACTION_TYPES.WITHDRAWAL_PAYOUT,
+              status: 'COMPLETED',
+              note: `Rút tiền về tài khoản ngân hàng qua SePay · mã GD ${reference}`,
+            },
+          });
+        } else {
+          await tx.walletTransaction.create({
+            data: {
+              walletId: wallet.id,
+              userId: request.userId,
+              type: TRANSACTION_TYPES.WITHDRAWAL_PAYOUT,
+              direction: 'DEBIT',
+              amount: request.amount,
+              balanceAfter: wallet.balance,
+              reference: `WD-${request.id}`,
+              status: 'COMPLETED',
+              note: `Rút tiền về tài khoản ngân hàng qua SePay · mã GD ${reference}`,
+            },
+          });
+        }
+
+        await audit(tx, request.userId, 'WITHDRAWAL_COMPLETED_VIA_SEPAY', 'WITHDRAWAL_REQUEST', withdrawalId, {
+          userId: request.userId,
+          amount: request.amount.toString(),
+          reference,
+          gateway: payload.gateway || 'Bank',
+        });
+
+        return {
+          success: true,
+          message: `Đã tự động xác nhận và hoàn tất đơn rút tiền #${withdrawalId} thành công qua SePay.`,
+          withdrawalId,
+          request: serializeWithdrawal(request),
+        };
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    }
+
+    // 2. Phân loại biến động TIỀN VÀO (Nạp tiền ví)
     if (transferType && transferType !== 'in') {
       return { success: true, message: 'Bỏ qua giao dịch không phải tiền vào.' };
     }
 
-    const fullContent = [payload.content, payload.code, payload.description]
-      .filter(Boolean)
-      .join(' ');
-
-    const match = fullContent.match(/(?:NAP\s*TIEN\s*VI|NAPTIENVI|QR-?DEP)\s*(\d+)/i)
-      || fullContent.match(/(?:^|\b)VI\s*(\d+)/i)
-      || fullContent.match(/(?:^|\b)DEP\s*(\d+)/i);
-
-    let ticketId = match ? Number(match[1]) : null;
+    if (!ticketId) {
+      const match = fullContent.match(/(?:NAP\s*TIEN\s*VI|NAPTIENVI|QR-?DEP)\s*(\d+)/i)
+        || fullContent.match(/(?:^|\b)VI\s*(\d+)/i)
+        || fullContent.match(/(?:^|\b)DEP\s*(\d+)/i);
+      ticketId = match ? Number(match[1]) : null;
+    }
 
     return prisma.$transaction(async tx => {
       let request = null;
@@ -1084,9 +1278,11 @@ function createWalletService(prisma, qrBank = {}) {
 
   /** Admin confirms the bank transfer actually happened. */
   async function completeWithdrawal(actorId, id, body = {}) {
-    const reference = text(body.reference, 100);
+    let reference = text(body.reference, 100);
+    if (!reference || reference.length < 3) {
+      reference = `CK-PAYOUT-${Date.now()}`;
+    }
     const adminNote = text(body.adminNote, 500);
-    if (reference.length < 3) throw problem(400, 'Cần nhập mã giao dịch chuyển khoản từ 3–100 ký tự.');
     return prisma.$transaction(async tx => {
       const request = await tx.withdrawalRequest.findUnique({ where: { id } });
       if (!request) throw problem(404, 'Không tìm thấy yêu cầu rút tiền.');
@@ -1115,19 +1311,36 @@ function createWalletService(prisma, qrBank = {}) {
         where: { id: wallet.id },
         data: { heldBalance: held.sub(request.amount) },
       });
-      await tx.walletTransaction.create({
-        data: {
+      const holdTx = await tx.walletTransaction.findFirst({
+        where: {
           walletId: wallet.id,
-          userId: request.userId,
-          type: TRANSACTION_TYPES.WITHDRAWAL_PAYOUT,
-          direction: 'DEBIT',
-          amount: request.amount,
-          balanceAfter: wallet.balance,
-          reference: `WD-PAYOUT-${request.id}`,
-          status: 'COMPLETED',
-          note: `Chuyển khoản rút tiền · mã giao dịch ${reference}`,
+          reference: `WD-HOLD-${request.id}`,
         },
       });
+      if (holdTx) {
+        await tx.walletTransaction.update({
+          where: { id: holdTx.id },
+          data: {
+            type: TRANSACTION_TYPES.WITHDRAWAL_PAYOUT,
+            status: 'COMPLETED',
+            note: `Rút tiền về tài khoản ngân hàng · mã giao dịch ${reference}`,
+          },
+        });
+      } else {
+        await tx.walletTransaction.create({
+          data: {
+            walletId: wallet.id,
+            userId: request.userId,
+            type: TRANSACTION_TYPES.WITHDRAWAL_PAYOUT,
+            direction: 'DEBIT',
+            amount: request.amount,
+            balanceAfter: wallet.balance,
+            reference: `WD-${request.id}`,
+            status: 'COMPLETED',
+            note: `Rút tiền về tài khoản ngân hàng · mã giao dịch ${reference}`,
+          },
+        });
+      }
       await audit(tx, actorId, 'WITHDRAWAL_COMPLETED', 'WITHDRAWAL_REQUEST', id, {
         userId: request.userId, amount: request.amount.toString(), reference,
       });

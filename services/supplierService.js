@@ -590,6 +590,21 @@ function createSupplierService(prisma) {
             orderId: order.id,
             link: '/workspace/store',
           });
+
+          // Gửi Gmail cho tiệm tạp hóa khi hoàn thành trạng thái "Soạn hàng" & bắt đầu giao hàng kèm thời gian dự kiến
+          try {
+            const { sendOrderPackingCompletedEmail } = require('./orderDeliveryMailService');
+            const buyerEmail = order.buyer?.email;
+            void sendOrderPackingCompletedEmail({
+              order,
+              buyer: order.buyer,
+              recipientEmail: buyerEmail,
+              supplierProfile: profile,
+              driverInfo: driver,
+            });
+          } catch (mailErr) {
+            console.error('[ORDER DELIVERY EMAIL ERROR] Lỗi kích hoạt gửi email:', mailErr.message);
+          }
         } else if (status === 'COMPLETED') {
           notificationService.createNotification({
             userId: order.buyerId,

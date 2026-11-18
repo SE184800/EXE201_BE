@@ -90,12 +90,15 @@ function createInventoryRoutes(prisma, requireAuth) {
   router.get('/history', async (req, res, next) => {
     const page = Number(req.query.page || 1);
     if (!Number.isInteger(page) || page < 1 || page > 100000) return res.status(400).json({ message: 'Trang không hợp lệ.' });
-    const { itemId, type, from, to, product } = req.query;
+    const { itemId, type, direction, from, to, product } = req.query;
     const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && value >= '1900-01-01' && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
     if ((itemId !== undefined && (typeof itemId !== 'string' || !/^\d+$/.test(itemId) || Number(itemId) < 1 || Number(itemId) > 2147483647)) ||
       (type !== undefined && !['OPENING', 'SALE', 'RECEIPT', 'ADJUSTMENT'].includes(type)) ||
+      (direction !== undefined && !['IN', 'OUT'].includes(direction)) ||
       (product !== undefined && (typeof product !== 'string' || product.length > 100)) || (from !== undefined && !validDate(from)) || (to !== undefined && !validDate(to)) || (from && to && from > to)) return res.status(400).json({ message: 'Bộ lọc lịch sử hoặc khoảng ngày không hợp lệ.' });
-    const where = { item: { ownerId: req.auth.user.id }, ...(itemId ? { itemId: Number(itemId) } : {}), ...(type ? { type } : {}), ...(product?.trim() ? { productName: { contains: product.trim() } } : {}),
+    const where = { item: { ownerId: req.auth.user.id }, ...(itemId ? { itemId: Number(itemId) } : {}), ...(type ? { type } : {}),
+      ...(direction === 'IN' ? { quantityChange: { gt: 0 } } : direction === 'OUT' ? { quantityChange: { lt: 0 } } : {}),
+      ...(product?.trim() ? { productName: { contains: product.trim() } } : {}),
       ...(from || to ? { createdAt: { ...(from ? { gte: new Date(`${from}T00:00:00+07:00`) } : {}), ...(to ? { lt: new Date(new Date(`${to}T00:00:00+07:00`).getTime() + 86400000) } : {}) } } : {}) };
     const take = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
     try {
