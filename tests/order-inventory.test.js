@@ -74,6 +74,25 @@ test('voice sale batch rolls back on insufficient stock and retries only once', 
   await prisma.inventoryItem.deleteMany({ where: { id: { in: [first.id, second.id] } } });
 });
 
+test('voice sale retries across legacy and batch endpoints do not decrement twice', async () => {
+  const item = await prisma.inventoryItem.create({ data: { ownerId: buyer.id, name: prefix + ' legacy', unit: 'lon', quantity: 5 } });
+  try {
+    for (const legacyFirst of [true, false]) {
+      const row = { itemId: item.id, unit: 'lon', quantity: 1, unitSalePrice: 12000, requestId: randomUUID() };
+      const batch = () => request(app).post('/api/inventory/sales/batch').set(csrf).set('Cookie', cookies.get(buyer.id)).send({ rows: [row] }).expect(200);
+      const legacy = () => request(app).post(`/api/inventory/${item.id}/movements`).set(csrf).set('Cookie', cookies.get(buyer.id)).send({ type: 'SALE', quantity: row.quantity, unitSalePrice: row.unitSalePrice, requestId: row.requestId, note: 'Bán nhanh bằng giọng nói' }).expect(200);
+      if (legacyFirst) { await legacy(); await batch(); await legacy(); }
+      else { await batch(); await legacy(); await batch(); }
+      assert.equal(await prisma.stockMovement.count({ where: { id: row.requestId } }), 1);
+    }
+    assert.equal((await prisma.inventoryItem.findUniqueOrThrow({ where: { id: item.id } })).quantity, 3);
+  } finally {
+    await prisma.stockMovement.deleteMany({ where: { itemId: item.id } });
+    await prisma.inventoryLot.deleteMany({ where: { itemId: item.id } });
+    await prisma.inventoryItem.delete({ where: { id: item.id } });
+  }
+});
+
 test('only the owning store can import an order after receipt', async () => {
   const ready = await order('authorization');
   await request(app).post(`/api/orders/${ready.id}/import-inventory`).set(csrf).send({}).expect(401);
@@ -244,21 +263,25 @@ test('a paid deposit is subtracted, wallet payments cannot be collected again, a
   await cashPayment(missingBank.id, { method: 'QR' }).expect(409);
 });
 
-test('store proposes a delivery time; only the supplier confirms it; a later proposal remains pending', async () => {
+test('store proposes a delivery time; only the supplier confirms it; each order can only request once', async () => {
   const purchase = await order('reschedule', { unpaid: true, status: 'PREPARING' });
   const date = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10).split('-').reverse().join('/');
-  const propose = time => request(app).post(`/api/orders/${purchase.id}/reschedule`).set(csrf).set('Cookie', cookies.get(buyer.id)).send({ rescheduleTime: `${time} ngày ${date}`, reason: 'Store closed in the morning' });
-  const respond = (action, user = supplier) => request(app).post(`/api/orders/${purchase.id}/reschedule-response`).set(csrf).set('Cookie', cookies.get(user.id)).send({ action });
+
+
+  const propose = (time, id = purchase.id) => request(app).post(`/api/orders/${id}/reschedule`).set(csrf).set('Cookie', cookies.get(buyer.id)).send({ rescheduleTime: `${time} ngày ${date}`, reason: 'Store closed in the morning' });
+  const respond = (action, user = supplier, id = purchase.id) => request(app).post(`/api/orders/${id}/reschedule-response`).set(csrf).set('Cookie', cookies.get(user.id)).send({ action });
   const proposed = await propose('10:00').expect(200);
   assert.equal(proposed.body.order.driverInfo?.estimatedDeliveryTime, undefined);
   await propose('11:00').expect(409);
   await respond('ACCEPT', buyer).expect(403);
   const accepted = await respond('ACCEPT').expect(200);
   assert.equal(accepted.body.order.driverInfo.estimatedDeliveryTime, `10:00 ngày ${date}`);
-  const later = await propose('12:00').expect(200);
-  assert.equal(later.body.order.driverInfo.rescheduleRequest.status, 'PENDING');
-  const rejected = await respond('REJECT').expect(200);
-  assert.equal(rejected.body.order.driverInfo.estimatedDeliveryTime, `10:00 ngày ${date}`);
+  await propose('12:00').expect(409);
+  const other = await order('reschedule rejected', { unpaid: true, status: 'PREPARING' });
+  await propose('12:00', other.id).expect(200);
+  const rejected = await respond('REJECT', supplier, other.id).expect(200);
+  assert.equal(rejected.body.order.driverInfo.rescheduleRequest.status, 'REJECTED');
+  await propose('13:00', other.id).expect(409);
   await prisma.wholesaleOrder.update({ where: { id: purchase.id }, data: { status: 'DELIVERED' } });
   await propose('13:00').expect(409);
 });

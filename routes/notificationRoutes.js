@@ -3,9 +3,10 @@ const notificationService = require('../services/notificationService');
 
 function createNotificationRoutes(prisma, requireAuth) {
   const router = express.Router();
+  router.use(requireAuth);
 
   // GET /api/notifications
-  router.get('/', requireAuth(), async (req, res, next) => {
+  router.get('/', async (req, res, next) => {
     try {
       const userId = req.auth.user.id;
       const { page, limit, unreadOnly } = req.query;
@@ -24,7 +25,7 @@ function createNotificationRoutes(prisma, requireAuth) {
   });
 
   // GET /api/notifications/unread-count
-  router.get('/unread-count', requireAuth(), async (req, res, next) => {
+  router.get('/unread-count', async (req, res, next) => {
     try {
       const userId = req.auth.user.id;
       const unreadCount = await notificationService.getUnreadCount(userId);
@@ -38,7 +39,7 @@ function createNotificationRoutes(prisma, requireAuth) {
   });
 
   // PATCH /api/notifications/:id/read
-  router.patch('/:id/read', requireAuth(), async (req, res, next) => {
+  router.patch('/:id/read', async (req, res, next) => {
     try {
       const userId = req.auth.user.id;
       const { id } = req.params;
@@ -56,7 +57,7 @@ function createNotificationRoutes(prisma, requireAuth) {
   });
 
   // POST /api/notifications/mark-all-read
-  router.post('/mark-all-read', requireAuth(), async (req, res, next) => {
+  router.post('/mark-all-read', async (req, res, next) => {
     try {
       const userId = req.auth.user.id;
       const result = await notificationService.markAllAsRead(userId);
@@ -70,7 +71,7 @@ function createNotificationRoutes(prisma, requireAuth) {
   });
 
   // DELETE /api/notifications/:id
-  router.delete('/:id', requireAuth(), async (req, res, next) => {
+  router.delete('/:id', async (req, res, next) => {
     try {
       const userId = req.auth.user.id;
       const { id } = req.params;

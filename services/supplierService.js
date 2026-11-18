@@ -512,6 +512,10 @@ function createSupplierService(prisma) {
       throw error;
     }
     if (driverInfo) {
+      if (!['PENDING', 'APPROVED', 'PREPARING'].includes(order.status)) {
+        throw problem(409, 'Chỉ được sửa thông tin tài xế trước khi bắt đầu giao hàng.');
+      }
+
       deliveryService.saveDriverInfo(order.id, driverInfo, profile.id);
     }
     const normalizedRejectReason = typeof rejectReason === 'string' ? rejectReason.trim() : '';
@@ -692,6 +696,9 @@ function createSupplierService(prisma) {
       include: { buyer: true, items: true, complaint: true },
     });
     if (!order) return null;
+    if (!['PENDING', 'APPROVED', 'PREPARING'].includes(order.status)) {
+      throw problem(409, 'Chỉ được sửa thông tin tài xế trước khi bắt đầu giao hàng.');
+    }
     deliveryService.saveDriverInfo(order.id, driverInfo, profile.id);
     return serializeOrder(order);
   }

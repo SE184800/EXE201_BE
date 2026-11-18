@@ -114,6 +114,8 @@ function createApp(prisma, config) {
   app.get('/api/health', (req, res) => {
     res.json({
       status: 'ok',
+      apiContractVersion: 1,
+      capabilities: ['inventory.sales.batch', 'wallet.qr.status', 'orders.inventory.preview'],
     });
   });
 
@@ -174,6 +176,7 @@ function createApp(prisma, config) {
   });
 
   app.use('/api/admin', createAdminRoutes(prisma, requireAuth, config));
+  app.use('/api/notifications', createNotificationRoutes(prisma, requireAuth));
 
   app.use(
     '/api/users',
@@ -328,6 +331,7 @@ app.get('/api/db-test', async (req, res) => {
     res.status(404).json({
       success: false,
       message: 'Không tìm thấy API.',
+      code: 'API_ROUTE_NOT_FOUND',
     })
   );
 

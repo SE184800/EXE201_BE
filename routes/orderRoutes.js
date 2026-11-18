@@ -266,7 +266,10 @@ function createOrderRoutes(prisma, requireAuth) {
       const current = await prisma.wholesaleOrder.findFirst({ where: { id, buyerId: req.auth.user.id }, include });
       if (!current) throw problem(404, 'Không tìm thấy đơn hàng.');
       if (!['PREPARING', 'SHIPPING'].includes(current.status)) throw problem(409, 'Chỉ đổi giờ trước khi nhận hàng.');
-      if (pendingRequest(current, deliveryService.getDriverInfo(id))) throw problem(409, 'Đã có đề nghị đổi giờ đang chờ chủ vựa trả lời.');
+      const driverInfo = deliveryService.getDriverInfo(id);
+      if (driverInfo?.rescheduleRequest || current.note?.includes('[YÊU CẦU DỜI LỊCH GIAO')) {
+        throw problem(409, 'Mỗi đơn hàng chỉ được đề nghị đổi giờ một lần.');
+      }
       deliveryService.saveRescheduleRequest(id, { requestedTime: rescheduleTime, reason: reason.trim(), requestedAt: new Date().toISOString(), requestedBy: req.auth.user.id, status: 'PENDING' });
       await audit(prisma, req.auth.user.id, 'DELIVERY_TIME_REQUESTED', 'ORDER', id, { rescheduleTime });
       res.json({ order: serialize(current), message: 'Đã gửi giờ muốn nhận. Chờ chủ vựa xác nhận.' });
