@@ -383,7 +383,8 @@ function createComplaintRoutes(prisma, requireAuth) {
 
       await evaluateAndApplyExpiredTimeouts(prisma, { id });
 
-      const decision = String(req.body?.decision || '').trim().toUpperCase();
+      let decision = String(req.body?.decision || '').trim().toUpperCase();
+      if (decision === 'REJECT_PROPOSAL') decision = 'COUNTER';
       const note = typeof req.body?.note === 'string' ? req.body.note.trim() : '';
       if (!['ACCEPT', 'COUNTER', 'CLOSE_UNRESOLVED', 'WITHDRAW'].includes(decision)) {
         return res.status(400).json({ message: 'Hành động xác nhận không hợp lệ.' });
