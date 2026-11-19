@@ -268,34 +268,6 @@ async function queryGoogleMaps(query, apiKey, fetchFn) {
   return null;
 }
 
-async function queryGeoapify(query, apiKey, fetchFn) {
-  if (!apiKey) return null;
-  const url = `https://api.geoapify.com/v1/geocode/search?text=${encodeURIComponent(query)}&apiKey=${apiKey}&filter=countrycode:vn&lang=vi`;
-  const res = await fetchFn(url, { signal: AbortSignal.timeout(5500) });
-  if (!res.ok) throw new Error(`Geoapify HTTP ${res.status}`);
-  const data = await res.json();
-  if (Array.isArray(data.features) && data.features.length > 0) {
-    const first = data.features[0];
-    const props = first.properties || {};
-    const geom = first.geometry || {};
-    const coords = Array.isArray(geom.coordinates) ? geom.coordinates : [];
-    const lat = Number(props.lat !== undefined ? props.lat : coords[1]);
-    const lon = Number(props.lon !== undefined ? props.lon : coords[0]);
-    if (Number.isFinite(lat) && Number.isFinite(lon)) {
-      return {
-        verified: true,
-        status: 'success',
-        lat,
-        lon,
-        displayName: props.formatted || query,
-        source: 'geoapify',
-        message: 'Đã xác minh địa chỉ thành công qua Geoapify.',
-      };
-    }
-  }
-  return null;
-}
-
 async function queryArcGis(query, fetchFn) {
   const url =
     'https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates' +
@@ -389,18 +361,7 @@ async function verifyAddressOnline(rawAddress, options = {}) {
     };
   }
 
-  // 1. Try Geoapify API if API key is provided
-  const geoapifyApiKey = (options.geoapifyApiKey || process.env.GEOAPIFY_API_KEY || '').trim();
-  if (geoapifyApiKey) {
-    try {
-      const geoapifyResult = await queryGeoapify(parsed.trimmed, geoapifyApiKey, fetchFn);
-      if (geoapifyResult) {
-        return geoapifyResult;
-      }
-    } catch {}
-  }
-
-  // 2. Try Google Maps API if API key is provided
+  // 1. Try Google Maps API if API key is provided
   const googleApiKey = (options.googleApiKey || process.env.GOOGLE_MAPS_API_KEY || '').trim();
   if (googleApiKey) {
     try {
@@ -585,7 +546,6 @@ async function verifyAddressOnline(rawAddress, options = {}) {
 
 module.exports = {
   verifyAddressOnline,
-  queryGeoapify,
   cleanRawAddress,
   parseAddress,
   normalizeProvinceStem,

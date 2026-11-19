@@ -218,7 +218,6 @@ async function sendOrderPackingCompletedEmail({
               <span class="label">Số điện thoại liên hệ:</span>
               <span class="value">
                 <strong style="color: #0369a1;">${driverPhone}</strong>
-                ${driverPhone && driverPhone !== 'Đang cập nhật' ? `<a href="tel:${driverPhone}" class="btn-call">Gọi tài xế</a>` : ''}
               </span>
             </div>
             <div class="card-row">
@@ -424,6 +423,102 @@ async function sendDeliveryRescheduleEmail({
 }
 
 /**
+ * 2b. Send an email to the supplier when the store owner requests to reschedule the delivery time.
+ */
+async function sendRescheduleRequestedToSupplierEmail({
+  order,
+  buyer,
+  supplier,
+  recipientEmail,
+  requestedTime,
+  reason = '',
+  currentEstimatedTime = '',
+  config = {},
+}) {
+  const buyerName = buyer?.name || buyer?.username || order?.recipientName || 'Tiệm tạp hóa';
+  const buyerPhone = order?.recipientPhone || buyer?.phone || 'Chưa cập nhật';
+  const supplierName = supplier?.businessName || 'Quý chủ vựa';
+  const targetEmail = recipientEmail || supplier?.user?.email || process.env.GMAIL_USER || '';
+
+  const subject = `[SupplyMind AI] Khách muốn đổi giờ nhận đơn #${order.id} · ${requestedTime}`;
+
+  const text = [
+    `Kính gửi ${supplierName},`,
+    '',
+    `Tiệm tạp hóa "${buyerName}" (SĐT: ${buyerPhone}) vừa gửi yêu cầu đổi thời gian nhận hàng cho đơn #${order.id}.`,
+    '',
+    `THỜI GIAN ĐỀ XUẤT MỚI: ${requestedTime}`,
+    currentEstimatedTime ? `LỊCH GIAO HIỆN TẠI: ${currentEstimatedTime}` : '',
+    reason ? `Lý do từ cửa hàng: ${reason}` : '',
+    '',
+    'Vui lòng đăng nhập vào hệ thống SupplyMind AI (mục Đơn hàng) để Xác nhận hoặc Giữ nguyên lịch cũ.',
+    '',
+    'Trân trọng,',
+    'SupplyMind AI · Hotline: 1900 6868',
+  ].filter(Boolean).join('\n');
+
+  const html = `
+    <!DOCTYPE html>
+    <html lang="vi">
+    <head>
+      <meta charset="utf-8">
+      <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; color: #1e293b; margin: 0; padding: 20px; }
+        .box { max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
+        .header { background: #0284c7; padding: 20px 24px; color: #ffffff; }
+        .header h2 { margin: 0; font-size: 18px; font-weight: 700; }
+        .header p { margin: 4px 0 0; font-size: 13px; opacity: 0.9; }
+        .content { padding: 22px 24px; font-size: 13.5px; line-height: 1.6; }
+        .time-badge { background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px; padding: 13px 16px; margin: 14px 0; }
+        .footer { background: #f8fafc; border-top: 1px solid #e2e8f0; padding: 14px 20px; text-align: center; font-size: 11.5px; color: #64748b; }
+      </style>
+    </head>
+    <body>
+      <div class="box">
+        <div class="header">
+          <h2>⏰ Tiệm tạp hóa đề xuất đổi giờ nhận hàng</h2>
+          <p>Đơn hàng #${order.id} · Cửa hàng: ${buyerName}</p>
+        </div>
+        <div class="content">
+          <p style="margin-top: 0;">Kính gửi <strong>${supplierName}</strong>,</p>
+          <p>
+            Tiệm tạp hóa <strong>${buyerName}</strong> (SĐT liên hệ: <strong>${buyerPhone}</strong>) vừa gửi yêu cầu đổi thời gian nhận hàng cho đơn <strong>#${order.id}</strong>.
+          </p>
+          <div class="time-badge">
+            <div style="font-size: 12px; font-weight: 700; color: #0369a1; text-transform: uppercase;">
+              ⏰ Thời gian tiệm đề xuất nhận hàng
+            </div>
+            <div style="font-size: 17px; font-weight: 800; color: #0284c7; margin: 3px 0;">
+              🚚 ${requestedTime}
+            </div>
+            ${currentEstimatedTime ? `<div style="font-size: 12.5px; color: #64748b; margin-top: 4px;"><strong>Lịch hiện tại:</strong> ${currentEstimatedTime}</div>` : ''}
+            ${reason ? `<div style="font-size: 12.5px; color: #334155; margin-top: 6px;"><strong>Lý do từ tiệm:</strong> ${reason}</div>` : ''}
+          </div>
+          <p style="font-size: 12.5px; color: #475569; margin-bottom: 0;">
+            Quý chủ vựa vui lòng đăng nhập vào nền tảng SupplyMind AI, vào mục <strong>Đơn hàng từ cửa hàng</strong> để phản hồi chấp nhận hoặc giữ nguyên lịch giao cho tiệm.
+          </p>
+        </div>
+        <div class="footer">
+          SupplyMind AI · Hotline: 1900 6868 · Hỗ trợ kết nối Chuỗi cung ứng Tạp hóa
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  return sendDeliveryMailHelper({
+    targetEmail,
+    fromLabel: 'SupplyMind AI - Yêu cầu đổi giờ',
+    subject,
+    text,
+    html,
+    fallbackPrefix: `order-reschedule-req-${order.id}`,
+    logMessage: `[RESCHEDULE REQ EMAIL] Gửi thông báo khách đổi giờ đơn #${order.id} tới chủ vựa: ${targetEmail}`,
+    config,
+  });
+}
+
+/**
  * 3. Send an email to the store owner when the supplier reports a transit incident / damage / issue during delivery preparation.
  */
 async function sendDeliveryIncidentEmail({
@@ -537,5 +632,6 @@ async function sendDeliveryIncidentEmail({
 module.exports = {
   sendOrderPackingCompletedEmail,
   sendDeliveryRescheduleEmail,
+  sendRescheduleRequestedToSupplierEmail,
   sendDeliveryIncidentEmail,
 };

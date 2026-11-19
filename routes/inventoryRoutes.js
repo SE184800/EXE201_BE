@@ -133,6 +133,11 @@ function createInventoryRoutes(prisma, requireAuth) {
   }
   router.post('/import/preview', receiveInventoryWorkbook, async (req, res, next) => {
     try {
+      const { getStoreProfile } = require('../services/storeService');
+      const store = getStoreProfile(req.auth.user.id, req.auth.user.phone);
+      if (!store || store.verificationStatus !== 'APPROVED') {
+        return res.status(403).json({ message: 'Tài khoản chưa được kích hoạt. Vui lòng đợi admin xác minh.' });
+      }
       const result = await readInventoryWorkbook(req);
       const invalidRows = new Set(result.errors.map((error) => error.rowNumber));
       res.json({
@@ -154,6 +159,11 @@ function createInventoryRoutes(prisma, requireAuth) {
   });
   router.post('/import/commit', receiveInventoryWorkbook, async (req, res, next) => {
     try {
+      const { getStoreProfile } = require('../services/storeService');
+      const store = getStoreProfile(req.auth.user.id, req.auth.user.phone);
+      if (!store || store.verificationStatus !== 'APPROVED') {
+        return res.status(403).json({ message: 'Tài khoản chưa được kích hoạt. Vui lòng đợi admin xác minh.' });
+      }
       const result = await readInventoryWorkbook(req);
       if (result.errors.length) {
         return res.status(422).json({
@@ -209,28 +219,113 @@ function createInventoryRoutes(prisma, requireAuth) {
     try { res.json({ movement: await stock.move(req.auth.user.id, id, { type, quantity, requestId, note: note.trim(), unitSalePrice, occurredAt, lotExpiryDate: expiryAt, allowExpiredSale: req.body.allowExpiredSale === true }) }); }
     catch (error) { if (error.status) return res.status(error.status).json({ message: error.message }); next(error); }
   });
-  const list = (ownerId) => prisma.inventoryItem.findMany({ where: { ownerId }, orderBy: { name: 'asc' }, include: { lots: { orderBy: [{ expiryDate: 'asc' }, { receivedAt: 'asc' }] } } });
+  const list = (ownerId) => prisma.inventoryItem.findMany({
+    where: { ownerId },
+    orderBy: { name: 'asc' },
+    include: {
+      lots: {
+        orderBy: [{ expiryDate: 'asc' }, { receivedAt: 'asc' }],
+        include: {
+          sourceOrder: {
+            include: {
+              supplier: true,
+            },
+          },
+        },
+      },
+    },
+  });
   router.get('/', async (req, res, next) => {
     try {
       await purgeExpiredItems(prisma, req.auth.user.id);
       res.json({
         items: (await list(req.auth.user.id)).map((item) => {
           const consignment = consignmentService.getItemConsignment(item.id);
+          // Ưu tiên chọn ngày hết hạn gần nhất trong các lô còn hàng (quantity > 0)
+          const activeLotsWithExpiry = (item.lots || [])
+            .filter((l) => l.quantity > 0 && l.expiryDate)
+            .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime());
+          const nearestExpiryDate = activeLotsWithExpiry.length > 0
+            ? activeLotsWithExpiry[0].expiryDate
+            : item.expiryDate;
+
+          const itemSupplierName = inventorySupplierService.getSupplier(item.id);
+
           return {
             ...item,
-            supplierName: inventorySupplierService.getSupplier(item.id),
+            supplierName: itemSupplierName,
             isConsignment: item.lots?.some((lot) => lot.consignmentSupplierId != null) || false,
             settlementPrice: consignment?.settlementPrice || 0,
             autoRestock: consignment?.autoRestock !== false,
             autoExchangeExpiry: consignment?.autoExchangeExpiry !== false,
             termsNote: consignment?.termsNote || null,
-            ...expiryInfo(item.expiryDate),
-            lots: (item.lots || []).map((lot) => ({
-              ...lot,
-              expiryDate: lot.expiryDate?.toISOString().slice(0, 10) || null,
-            })),
+            expiryDate: nearestExpiryDate ? (typeof nearestExpiryDate === 'string' ? nearestExpiryDate : nearestExpiryDate.toISOString().slice(0, 10)) : null,
+            ...expiryInfo(nearestExpiryDate),
+            lots: (item.lots || []).map((lot) => {
+              const lotSupplier = lot.sourceOrder?.supplier?.businessName || (lot.sourceOrderId ? 'Chủ vựa' : (itemSupplierName || 'Nhập tay / tồn đầu'));
+              return {
+                id: lot.id,
+                itemId: lot.itemId,
+                quantity: lot.quantity,
+                receivedAt: lot.receivedAt,
+                expiryDate: lot.expiryDate ? (typeof lot.expiryDate === 'string' ? lot.expiryDate.slice(0, 10) : lot.expiryDate.toISOString().slice(0, 10)) : null,
+                purchasePrice: lot.purchasePrice,
+                sourceOrderId: lot.sourceOrderId,
+                supplierName: lotSupplier,
+                consignmentSupplierId: lot.consignmentSupplierId,
+              };
+            }),
           };
         }),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Cập nhật hạn sử dụng cho từng lô hàng riêng biệt
+  router.patch('/lots/:lotId/expiry', async (req, res, next) => {
+    const lotId = Number(req.params.lotId);
+    const ownerId = req.auth.user.id;
+    if (!Number.isInteger(lotId) || lotId < 1 || lotId > 2147483647) {
+      return res.status(400).json({ message: 'Mã lô hàng không hợp lệ.' });
+    }
+    const { expiryDate } = req.body || {};
+    if (!expiryDate || typeof expiryDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(expiryDate)) {
+      return res.status(400).json({ message: 'Vui lòng chọn ngày hạn sử dụng hợp lệ (YYYY-MM-DD).' });
+    }
+    const todayStr = new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10);
+    if (expiryDate <= todayStr) {
+      return res.status(400).json({ message: 'Hạn sử dụng phải nằm trong tương lai (từ ngày mai trở đi).' });
+    }
+    try {
+      const lot = await prisma.inventoryLot.findFirst({
+        where: { id: lotId, item: { ownerId } },
+        include: { item: true },
+      });
+      if (!lot) return res.status(404).json({ message: 'Không tìm thấy lô hàng này trong kho.' });
+
+      const newExpiry = new Date(`${expiryDate}T00:00:00.000Z`);
+      await prisma.inventoryLot.update({
+        where: { id: lotId },
+        data: { expiryDate: newExpiry },
+      });
+
+      // Cập nhật lại item.expiryDate bằng lô có hạn sử dụng gần nhất còn hàng
+      const activeLots = await prisma.inventoryLot.findMany({
+        where: { itemId: lot.itemId, quantity: { gt: 0 }, expiryDate: { not: null } },
+        orderBy: { expiryDate: 'asc' },
+      });
+      const nearestExpiry = activeLots[0]?.expiryDate || newExpiry;
+      await prisma.inventoryItem.update({
+        where: { id: lot.itemId },
+        data: { expiryDate: nearestExpiry },
+      });
+
+      res.json({
+        success: true,
+        message: `Đã cập nhật hạn sử dụng cho Lô #${lotId} thành công!`,
+        expiryDate,
       });
     } catch (error) {
       next(error);
@@ -370,6 +465,11 @@ function createInventoryRoutes(prisma, requireAuth) {
     const ownerId = req.auth.user.id;
     try {
       if (req.method === 'POST') {
+        const { getStoreProfile } = require('../services/storeService');
+        const store = getStoreProfile(ownerId, req.auth.user.phone);
+        if (!store || store.verificationStatus !== 'APPROVED') {
+          return res.status(403).json({ message: 'Tài khoản chưa được kích hoạt. Vui lòng đợi admin xác minh.' });
+        }
         const item = await stock.create(ownerId, toRetailStock(data));
         return res.status(201).json({ item });
       }

@@ -180,7 +180,14 @@ function createStockService(prisma) {
       await tx.inventoryLot.create({ data: { itemId: item.id, quantity: input.quantity, receivedAt: input.occurredAt || new Date(), expiryDate: input.lotExpiryDate || item.expiryDate, purchasePrice: item.purchasePrice } });
     } else if (input.type === 'SALE' && tx.inventoryLot) {
       let remaining = input.quantity;
-      const lots = await tx.inventoryLot.findMany({ where: { itemId: item.id, quantity: { gt: 0 } }, orderBy: [{ expiryDate: 'asc' }, { receivedAt: 'asc' }, { id: 'asc' }] });
+      const lots = await tx.inventoryLot.findMany({ where: { itemId: item.id, quantity: { gt: 0 } } });
+      // Ưu tiên FEFO: trừ lô có HSD gần nhất trước; lô chưa có HSD trừ sau (FIFO theo ngày nhập)
+      lots.sort((a, b) => {
+        if (a.expiryDate && b.expiryDate) return a.expiryDate.getTime() - b.expiryDate.getTime();
+        if (a.expiryDate && !b.expiryDate) return -1;
+        if (!a.expiryDate && b.expiryDate) return 1;
+        return a.receivedAt.getTime() - b.receivedAt.getTime();
+      });
       for (const lot of lots) {
         if (!remaining) break;
         const used = Math.min(remaining, lot.quantity);

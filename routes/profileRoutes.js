@@ -108,7 +108,6 @@ function createProfileRoutes(prisma, requireAuth, config = {}) {
       });
     }
     const result = await verifyAddressOnline(q, {
-      geoapifyApiKey: config?.geoapifyApiKey,
       goongApiKey: config?.goongApiKey,
       googleApiKey: config?.googleMapsApiKey,
     });

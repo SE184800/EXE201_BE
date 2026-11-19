@@ -22,24 +22,40 @@ function importLinePlan(line, existing, conversion) {
   if (matches.length > 1) throw problem('Có nhiều mặt hàng cùng tên ' + line.productName + '.');
   const item = matches[0];
   const packaging = parsePackaging(line.packaging);
-  const legacyBulk = Boolean(item && isBulkUnit(item.unit));
-  const canConvert = isBulkUnit(packaging.retailUnit) && !legacyBulk;
-  if (conversion) {
-    if (!canConvert || typeof conversion.unit !== 'string' ||
-        !looseUnits.some(unit => normalize(unit) === normalize(conversion.unit)) ||
-        !Number.isInteger(conversion.unitsPerPack) || conversion.unitsPerPack < 1 ||
-        conversion.unitsPerPack > INT_MAX ||
-        (item && normalize(item.unit) !== normalize(conversion.unit))) {
-      throw problem('Quy đổi không phù hợp với đơn vị trong kho của ' + line.productName + '.');
+
+  let unit = packaging.retailUnit || packaging.container || 'cái';
+  let multiplier = packaging.multiplier || 1;
+
+  if (conversion?.unit && Number(conversion.unitsPerPack) > 0) {
+    unit = String(conversion.unit).trim();
+    multiplier = Number(conversion.unitsPerPack);
+  } else if (item) {
+    const itemUnitNorm = normalize(item.unit);
+    const containerNorm = normalize(packaging.container);
+    const retailNorm = normalize(packaging.retailUnit);
+
+    if (itemUnitNorm === containerNorm) {
+      unit = item.unit;
+      multiplier = 1;
+    } else if (itemUnitNorm === retailNorm) {
+      unit = item.unit;
+      multiplier = packaging.multiplier || 1;
+    } else {
+      unit = item.unit;
+      multiplier = (packaging.multiplier || 1);
     }
-    packaging.retailUnit = conversion.unit;
-    packaging.multiplier = conversion.unitsPerPack;
+  } else {
+    if (packaging.multiplier > 1 && packaging.retailUnit) {
+      unit = packaging.retailUnit;
+      multiplier = packaging.multiplier;
+    } else {
+      unit = packaging.retailUnit || packaging.container || 'cái';
+      multiplier = 1;
+    }
   }
-  const { multiplier } = packaging;
-  const unit = item?.unit ?? (canConvert && !conversion ? '' : packaging.retailUnit);
-  const needsConversion = canConvert && !conversion;
-  const incompatible = legacyBulk || (!needsConversion && normalize(unit) !== normalize(packaging.retailUnit));
-  return { item, canConvert, needsConversion, incompatible, unit, multiplier, quantity: line.quantity * multiplier };
+
+  const quantity = Math.max(1, line.quantity * multiplier);
+  return { item, canConvert: false, needsConversion: false, incompatible: false, unit, multiplier, quantity };
 }
 
 async function syncOrderToStoreInventory(tx, buyerId, order, consignmentPrice, conversions = new Map(), expected = new Map()) {
@@ -87,6 +103,26 @@ async function syncOrderToStoreInventory(tx, buyerId, order, consignmentPrice, c
     if (!item) {
       item = await tx.inventoryItem.create({ data: { ownerId: buyerId, name, unit, quantity: 0, purchasePrice, sellingPrice: null } });
       existing.push(item);
+    } else if (item.unit !== unit && (isBulkUnit(item.unit) || item.quantity === 0)) {
+      const convertedOldQty = item.quantity * multiplier;
+      const convertedOldPrice = item.purchasePrice ? Math.round(item.purchasePrice / multiplier) : purchasePrice;
+      const convertedOldSelling = item.sellingPrice ? Math.round(item.sellingPrice / multiplier) : null;
+      await tx.inventoryItem.update({
+        where: { id: item.id },
+        data: { unit, quantity: convertedOldQty, purchasePrice: convertedOldPrice, sellingPrice: convertedOldSelling },
+      });
+      const oldLots = await tx.inventoryLot.findMany({ where: { itemId: item.id } });
+      for (const oldLot of oldLots) {
+        await tx.inventoryLot.update({
+          where: { id: oldLot.id },
+          data: {
+            quantity: oldLot.quantity * multiplier,
+            purchasePrice: oldLot.purchasePrice ? Math.round(oldLot.purchasePrice / multiplier) : oldLot.purchasePrice,
+          },
+        });
+      }
+      item.unit = unit;
+      item.quantity = convertedOldQty;
     }
     const before = item.quantity;
     if (before + quantity > INT_MAX) throw problem(`Tổng tồn kho của ${name} vượt giới hạn.`);

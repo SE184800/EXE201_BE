@@ -164,23 +164,12 @@ function createComplaintRoutes(prisma, requireAuth) {
         where: {
           id: orderId,
           buyerId: req.auth.user.id,
-          status: { in: ['SHIPPING', 'ISSUE_HANDLING', 'DELIVERED'] },
+          status: { in: ['SHIPPING', 'ISSUE_HANDLING'] },
         },
         include: { items: true },
       });
       if (!order) {
-        return res.status(404).json({ message: 'Chỉ được báo cáo đơn hàng đang vận chuyển, tiếp nhận xử lý hoặc đã giao.' });
-      }
-
-      if (order.status === 'DELIVERED' && order.deliveredAt) {
-        const sysConfig = systemConfigService.getConfig();
-        const maxComplaintHours = sysConfig.orderAndDelivery?.complaintWindowHours ?? 24;
-        const diffHours = (Date.now() - new Date(order.deliveredAt).getTime()) / (1000 * 60 * 60);
-        if (diffHours > maxComplaintHours) {
-          return res.status(400).json({
-            message: `Đơn hàng đã quá thời hạn cho phép khiếu nại (${maxComplaintHours} giờ kể từ khi nhận hàng).`,
-          });
-        }
+        return res.status(404).json({ message: 'Chỉ được báo cáo sự cố khi đơn hàng đang trong quá trình vận chuyển hoặc tiếp nhận xử lý.' });
       }
 
       const existing = await prisma.orderComplaint.findUnique({ where: { orderId } });

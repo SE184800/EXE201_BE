@@ -71,7 +71,6 @@ function readConfig(env = process.env) {
     sepayApiKey: (env.SEPAY_API_KEY || 'spsk_test_DqqUZDQ8JJ8ritBjCAi9fAswp5N9Zc5D').trim(),
     goongApiKey: (env.GOONG_API_KEY || '').trim(),
     googleMapsApiKey: (env.GOOGLE_MAPS_API_KEY || '').trim(),
-    geoapifyApiKey: (env.GEOAPIFY_API_KEY || '').trim(),
   };
 }
 module.exports = { readConfig };

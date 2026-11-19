@@ -71,6 +71,11 @@ function createOrderRoutes(prisma, requireAuth) {
     } catch (error) { next(error); }
   });
   router.post('/', requireRole('STORE_OWNER'), async (req, res, next) => {
+    const { getStoreProfile } = require('../services/storeService');
+    const store = getStoreProfile(req.auth.user.id, req.auth.user.phone);
+    if (!store || store.verificationStatus !== 'APPROVED') {
+      return res.status(403).json({ message: 'Tài khoản chưa được kích hoạt. Vui lòng đợi admin xác minh.' });
+    }
     const body = req.body || {};
     const recipientName = typeof body.recipientName === 'string' ? body.recipientName.trim() : '';
     const recipientPhone = normalizePhone(body.recipientPhone);
@@ -272,6 +277,24 @@ function createOrderRoutes(prisma, requireAuth) {
       }
       deliveryService.saveRescheduleRequest(id, { requestedTime: rescheduleTime, reason: reason.trim(), requestedAt: new Date().toISOString(), requestedBy: req.auth.user.id, status: 'PENDING' });
       await audit(prisma, req.auth.user.id, 'DELIVERY_TIME_REQUESTED', 'ORDER', id, { rescheduleTime });
+
+      // Gửi Gmail thông báo cho chủ vựa rằng tạp hóa muốn thương lượng giờ nhận hàng
+      try {
+        const { sendRescheduleRequestedToSupplierEmail } = require('../services/orderDeliveryMailService');
+        const supplierEmail = current.supplier?.user?.email;
+        void sendRescheduleRequestedToSupplierEmail({
+          order: current,
+          buyer: current.buyer,
+          supplier: current.supplier,
+          recipientEmail: supplierEmail,
+          requestedTime: rescheduleTime,
+          reason: reason.trim(),
+          currentEstimatedTime: driverInfo?.estimatedDeliveryTime || 'Theo lịch trình vựa đã xếp',
+        });
+      } catch (mailErr) {
+        console.error('[RESCHEDULE REQ EMAIL ERROR] Lỗi gửi mail cho chủ vựa:', mailErr.message);
+      }
+
       res.json({ order: serialize(current), message: 'Đã gửi giờ muốn nhận. Chờ chủ vựa xác nhận.' });
     } catch (error) { next(error); }
   });

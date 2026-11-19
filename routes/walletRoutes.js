@@ -99,11 +99,35 @@ function createWalletRoutes(prisma, requireAuth, config = {}) {
     res.status(201).json({ payment: await service.payOrder(req.auth.user.id, orderId) });
   }));
 
+  async function checkUserVerified(req, res) {
+    const user = req.auth?.user;
+    if (!user) return false;
+    const roleCode = user.role?.code || user.role;
+    if (roleCode === 'STORE_OWNER') {
+      const { getStoreProfile } = require('../services/storeService');
+      const store = getStoreProfile(user.id, user.phone);
+      if (!store || store.verificationStatus !== 'APPROVED') {
+        res.status(403).json({ message: 'Tài khoản chưa được kích hoạt. Vui lòng đợi admin xác minh.' });
+        return false;
+      }
+    } else if (roleCode === 'SUPPLIER') {
+      if (prisma && prisma.supplierProfile) {
+        const profile = await prisma.supplierProfile.findUnique({ where: { userId: user.id } });
+        if (!profile || profile.verificationStatus !== 'APPROVED') {
+          res.status(403).json({ message: 'Tài khoản chưa được kích hoạt. Vui lòng đợi admin xác minh.' });
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
   router.get('/deposits', run(async (req, res) => {
     res.json(await service.listDepositRequests(req.auth.user.id, req.query));
   }));
 
   router.post('/deposits', run(async (req, res) => {
+    if (!(await checkUserVerified(req, res))) return;
     res.status(201).json({ request: await service.createDepositRequest(req.auth.user.id, req.body || {}) });
   }));
 
@@ -117,6 +141,7 @@ function createWalletRoutes(prisma, requireAuth, config = {}) {
     if (!config.qrEnabled) {
       return res.status(503).json({ message: 'Tính năng nạp tiền qua QR chưa được bật.' });
     }
+    if (!(await checkUserVerified(req, res))) return;
     res.status(201).json(await service.createQrDepositRequest(req.auth.user.id, req.body || {}));
   }));
 
